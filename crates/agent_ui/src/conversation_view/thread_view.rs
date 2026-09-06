@@ -6430,17 +6430,22 @@ impl ThreadView {
                 if let Some((_, elicitation)) = thread.elicitation(elicitation_id)
                     && should_render_elicitation(elicitation)
                 {
-                    let elicitation = self.render_elicitation(entry_ix, elicitation, window, cx);
-
-                    if let Some(handle) = self
-                        .entry_view_state
-                        .read(cx)
-                        .entry(entry_ix)
-                        .and_then(|entry| entry.focus_handle(cx))
-                    {
-                        elicitation.track_focus(&handle).into_any()
+                    if matches!(elicitation.status, ElicitationStatus::Pending { .. }) {
+                        Empty.into_any()
                     } else {
-                        elicitation.into_any()
+                        let elicitation =
+                            self.render_elicitation(entry_ix, elicitation, window, cx);
+
+                        if let Some(handle) = self
+                            .entry_view_state
+                            .read(cx)
+                            .entry(entry_ix)
+                            .and_then(|entry| entry.focus_handle(cx))
+                        {
+                            elicitation.track_focus(&handle).into_any()
+                        } else {
+                            elicitation.into_any()
+                        }
                     }
                 } else {
                     Empty.into_any()
@@ -6620,6 +6625,40 @@ impl ThreadView {
             self.elicitation_card_handlers(cx),
         )
         .render(cx)
+    }
+
+    fn render_active_elicitation_banner(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let thread = self.thread.read(cx);
+        let entries = thread.entries();
+        let (entry_ix, elicitation) = entries.iter().enumerate().find_map(|(ix, entry)| {
+            if let AgentThreadEntry::Elicitation(elicitation_id) = entry {
+                let (_, elicitation) = thread.elicitation(elicitation_id)?;
+                if matches!(elicitation.status, ElicitationStatus::Pending { .. })
+                    && should_render_elicitation(elicitation)
+                {
+                    return Some((ix, elicitation));
+                }
+            }
+            None
+        })?;
+
+        let card = self.render_elicitation(entry_ix, elicitation, window, cx);
+        Some(
+            v_flex()
+                .w_full()
+                .px_4()
+                .py_2()
+                .bg(cx.theme().colors().elevated_surface_background)
+                .border_b_1()
+                .border_color(cx.theme().colors().border)
+                .shadow_md()
+                .child(card)
+                .into_any_element(),
+        )
     }
 
     fn elicitation_card_handlers(&self, cx: &Context<Self>) -> ElicitationCardHandlers {
@@ -12476,6 +12515,10 @@ impl Render for ThreadView {
                     .then(|| self.thread_search_bar.clone())
                     .flatten(),
                 |this, bar| this.child(bar),
+            )
+            .when_some(
+                self.render_active_elicitation_banner(window, cx),
+                |this, banner| this.child(banner),
             )
             .child(conversation)
             .children(self.render_multi_root_callout(cx))
