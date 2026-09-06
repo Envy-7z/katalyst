@@ -12,7 +12,7 @@ workspace = true
 path = "src/gpui_apple.rs"
 
 [features]
-default = []
+default = ["runtime_shaders"]
 bench-support = ["gpui/bench-support"]
 test-support = ["gpui/test-support"]
 runtime_shaders = []
