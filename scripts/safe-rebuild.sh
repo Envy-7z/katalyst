@@ -10,7 +10,7 @@ APP_BUNDLE="/Applications/Katalyst.app"
 APP_BIN="$APP_BUNDLE/Contents/MacOS/zed"
 JOBS="${ZED_BUILD_JOBS:-2}"
 MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
-
+PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
 cd "$REPO_DIR"
 export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 export CARGO_INCREMENTAL=0
