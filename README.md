@@ -10,9 +10,9 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0" /></a>
-  <a href="https://zed.dev"><img src="https://img.shields.io/badge/editor-Zed_Rust-orange.svg" alt="Zed Editor" /></a>
   <a href="https://github.com/can1357/oh-my-pi"><img src="https://img.shields.io/badge/engine-OMP_ACP-brightgreen.svg" alt="OMP Engine" /></a>
-  <a href="https://apple.com/macos"><img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS" /></a>
+  <a href="https://apple.com/macos"><img src="https://img.shields.io/badge/platform-macOS_%7C_Windows_(soon)-blueviolet.svg" alt="Platform: macOS | Windows (soon)" /></a>
+  <a href="https://github.com/Envy-7z/katalyst/releases"><img src="https://img.shields.io/github/v/release/Envy-7z/katalyst?color=blue&label=release" alt="Release" /></a>
 </p>
 
 <p align="center">
@@ -277,6 +277,14 @@ export default async function (action: { tool: string; params: any }) {
   return { allow: true };
 }
 ```
+---
+
+## 🗺️ Platform Support & Roadmap
+
+* 🍏 **macOS (Apple Silicon & Intel)**: **Full Support (Production Ready)** — Available via 1-line curl installer and pre-built binaries on [GitHub Releases](https://github.com/Envy-7z/katalyst/releases).
+* 🪟 **Windows (x64 / ARM64)**: **In Development (Roadmap)** — GitHub Actions CI compilation pipeline in progress.
+* 🐧 **Linux (x64)**: **Planned** — Native Wayland/X11 build target.
+
 ---
 
 ## 🛠️ Keeping Katalyst Updated
