@@ -1,0 +1,79 @@
+From b4957ee6a0ece79cf8bb3778c28f4c69de1e1ddf Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Mon, 7 Sep 2026 15:23:30 +0700
+Subject: [PATCH 8/8] feat(brand): rename app menus and About modal to Katalyst
+
+---
+ crates/zed/src/zed.rs           | 8 ++++----
+ crates/zed/src/zed/app_menus.rs | 8 ++++----
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 259ea57..09165dc 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1551,16 +1551,16 @@ fn open_about_window(cx: &mut App) {
+     impl AboutWindow {
+         fn new(cx: &mut Context<Self>) -> Self {
+             let release_channel = ReleaseChannel::global(cx);
+-            let release_channel_name = release_channel.display_name();
++            let _release_channel_name = release_channel.display_name();
+             let full_version: SharedString = AppVersion::global(cx).to_string().into();
+             let version = env!("CARGO_PKG_VERSION");
+ 
+-            let debug = if cfg!(debug_assertions) {
++            let _debug = if cfg!(debug_assertions) {
+                 "(debug)"
+             } else {
+                 ""
+             };
+-            let message: SharedString = format!("{release_channel_name} {version} {debug}").into();
++            let message: SharedString = format!("Katalyst {version}").into();
+             let commit = AppCommitSha::try_global(cx)
+                 .map(|sha| sha.full())
+                 .filter(|commit| !commit.is_empty())
+@@ -1714,7 +1714,7 @@ fn open_about_window(cx: &mut App) {
+     cx.open_window(
+         WindowOptions {
+             titlebar: Some(TitlebarOptions {
+-                title: Some("About Zed".into()),
++                title: Some("About Katalyst".into()),
+                 appears_transparent: true,
+                 traffic_light_position: Some(point(px(12.), px(12.))),
+             }),
+diff --git a/crates/zed/src/zed/app_menus.rs b/crates/zed/src/zed/app_menus.rs
+index aff790d..551b02a 100644
+--- a/crates/zed/src/zed/app_menus.rs
++++ b/crates/zed/src/zed/app_menus.rs
+@@ -68,10 +68,10 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
+ 
+     vec![
+         Menu {
+-            name: "Zed".into(),
++            name: "Katalyst".into(),
+             disabled: false,
+             items: vec![
+-                MenuItem::action("About Zed", zed_actions::About),
++                MenuItem::action("About Katalyst", zed_actions::About),
+                 MenuItem::action("Check for Updates", auto_update::Check),
+                 MenuItem::separator(),
+                 MenuItem::submenu(Menu::new("Settings").items([
+@@ -103,13 +103,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
+                 MenuItem::action("Install CLI", install_cli::InstallCliBinary),
+                 MenuItem::separator(),
+                 #[cfg(target_os = "macos")]
+-                MenuItem::action("Hide Zed", super::Hide),
++                MenuItem::action("Hide Katalyst", super::Hide),
+                 #[cfg(target_os = "macos")]
+                 MenuItem::action("Hide Others", super::HideOthers),
+                 #[cfg(target_os = "macos")]
+                 MenuItem::action("Show All", super::ShowAll),
+                 MenuItem::separator(),
+-                MenuItem::action("Quit Zed", Quit),
++                MenuItem::action("Quit Katalyst", Quit),
+             ],
+         },
+         Menu {
+-- 
+2.55.0
+

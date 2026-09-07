@@ -1,0 +1,9 @@
+[
+  {
+    "context": "Workspace",
+    "bindings": {
+      "cmd-shift-a": "agent::ToggleFocus",
+      "cmd-`": "workspace::ToggleBottomDock"
+    }
+  }
+]

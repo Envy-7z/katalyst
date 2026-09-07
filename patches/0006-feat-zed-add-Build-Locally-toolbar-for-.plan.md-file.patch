@@ -1,0 +1,438 @@
+From 087e1a38b91a0cf40a225aa43f549e5879bb8532 Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Mon, 7 Sep 2026 13:43:29 +0700
+Subject: [PATCH 6/8] feat(zed): add Build Locally toolbar for .plan.md files
+
+Auto-open *.plan.md in markdown preview, expose model selector + Build
+Locally on the quick action bar, and submit /go <plan> into the Agent
+Panel. Also treat omp as supporting additional directories.
+---
+ crates/agent_servers/src/acp.rs               |   1 +
+ crates/agent_ui/src/agent_panel.rs            |  71 ++++++++
+ crates/agent_ui/src/config_options.rs         |   9 +
+ .../src/markdown_preview_view.rs              |  25 ++-
+ crates/zed/src/zed/quick_action_bar.rs        |  44 ++++-
+ .../src/zed/quick_action_bar/plan_build.rs    | 163 ++++++++++++++++++
+ 6 files changed, 307 insertions(+), 6 deletions(-)
+ create mode 100644 crates/zed/src/zed/quick_action_bar/plan_build.rs
+
+diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
+index a3b8c87..cb3bc9b 100644
+--- a/crates/agent_servers/src/acp.rs
++++ b/crates/agent_servers/src/acp.rs
+@@ -1759,6 +1759,7 @@ impl AgentConnection for AcpConnection {
+             .session_capabilities
+             .additional_directories
+             .is_some()
++            || self.id.0.eq_ignore_ascii_case("omp")
+     }
+ 
+     fn load_session(
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index 998c1fd..fec1321 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -4134,6 +4134,77 @@ impl AgentPanel {
+         server_view.read(cx).root_thread_view()
+     }
+ 
++    /// Focuses the active thread composer, sets its text, and submits — used by
++    /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
++    pub fn submit_slash_command(
++        &mut self,
++        text: &str,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> bool {
++        let Some(thread_view) = self.active_thread_view(cx) else {
++            return false;
++        };
++        let text = text.to_string();
++        thread_view.update(cx, |view, cx| {
++            let message_editor = view.message_editor.clone();
++            message_editor.update(cx, |editor, cx| {
++                editor.clear(window, cx);
++                editor.insert_text(&text, window, cx);
++            });
++            view.send(window, cx);
++        });
++        true
++    }
++    pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
++        let thread_view = self.active_thread_view(cx)?;
++        let thread = thread_view.read(cx);
++
++        if let Some(config_view) = &thread.config_options_view {
++            if let Some(name) = config_view.read(cx).current_model_name(cx) {
++                return Some(name);
++            }
++        }
++
++        if let Some(model_selector) = &thread.model_selector {
++            if let Some(model) = model_selector.read(cx).active_model(cx) {
++                return Some(model.name.clone());
++            }
++        }
++
++        None
++    }
++
++    pub fn toggle_model_selector(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
++        let Some(thread_view) = self.active_thread_view(cx) else {
++            return false;
++        };
++        thread_view.update(cx, |thread_view, cx| {
++            if let Some(config_options_view) = thread_view.config_options_view.clone() {
++                let handled = config_options_view.update(cx, |view, cx| {
++                    view.toggle_category_picker(
++                        acp::SessionConfigOptionCategory::Model,
++                        window,
++                        cx,
++                    )
++                });
++                if handled {
++                    return true;
++                }
++            }
++
++            if let Some(model_selector) = thread_view.model_selector.clone() {
++                model_selector.update(cx, |model_selector, cx| {
++                    model_selector.toggle(window, cx);
++                });
++                return true;
++            }
++
++            false
++        })
++    }
++
++
+     pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
+         match &self.base_view {
+             BaseView::AgentThread { conversation_view } => {
+diff --git a/crates/agent_ui/src/config_options.rs b/crates/agent_ui/src/config_options.rs
+index cbefa71..82c9c1b 100644
+--- a/crates/agent_ui/src/config_options.rs
++++ b/crates/agent_ui/src/config_options.rs
+@@ -91,6 +91,15 @@ impl ConfigOptionsView {
+ 
+         selector.update(cx, |selector, cx| selector.toggle_picker(window, cx))
+     }
++    pub fn current_model_name(&self, cx: &App) -> Option<SharedString> {
++        let config_id = self
++            .first_config_option_id_matching(acp::SessionConfigOptionCategory::Model, |option| {
++                matches!(&option.kind, acp::SessionConfigKind::Select(_))
++            })?;
++        let selector = self.selector_for_config_id(&config_id, cx)?;
++        let value_name = selector.read(cx).current_value_name();
++        Some(value_name.into())
++    }
+ 
+     pub fn cycle_category_option(
+         &mut self,
+diff --git a/crates/markdown_preview/src/markdown_preview_view.rs b/crates/markdown_preview/src/markdown_preview_view.rs
+index 0dcc130..ad14083 100644
+--- a/crates/markdown_preview/src/markdown_preview_view.rs
++++ b/crates/markdown_preview/src/markdown_preview_view.rs
+@@ -144,7 +144,13 @@ impl MarkdownPreviewView {
+                 {
+                     return;
+                 }
+-                if !MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
++                let is_plan = item
++                    .downcast::<Editor>()
++                    .map(|editor| Self::is_plan_editor(&editor, cx))
++                    .unwrap_or(false);
++
++                if (!MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
++                    && !is_plan)
+                     || workspace.is_restoring()
+                 {
+                     return;
+@@ -537,6 +543,23 @@ impl MarkdownPreviewView {
+         };
+         languages.language_for_file(file, None, cx) == Some(markdown.id())
+     }
++    fn is_plan_editor(editor: &Entity<Editor>, cx: &App) -> bool {
++        let Some(buffer) = editor.read(cx).buffer().read(cx).as_singleton() else {
++            return false;
++        };
++        let buffer = buffer.read(cx);
++        let Some(file) = buffer.file() else {
++            return false;
++        };
++        let Some(local_file) = file.as_local() else {
++            return false;
++        };
++        let abs_path = local_file.abs_path(cx);
++        abs_path
++            .file_name()
++            .and_then(|n| n.to_str())
++            .is_some_and(|n| n.ends_with(".plan.md"))
++    }
+ 
+     fn set_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
+         if let Some(active) = &self.active_editor
+diff --git a/crates/zed/src/zed/quick_action_bar.rs b/crates/zed/src/zed/quick_action_bar.rs
+index 42e3d7e..a3593c8 100644
+--- a/crates/zed/src/zed/quick_action_bar.rs
++++ b/crates/zed/src/zed/quick_action_bar.rs
+@@ -1,3 +1,4 @@
++mod plan_build;
+ mod preview;
+ mod repl_menu;
+ 
+@@ -87,29 +88,61 @@ impl QuickActionBar {
+             .and_then(|item| item.downcast::<Editor>())
+     }
+ 
++    /// Returns an Editor even when the active item is a MarkdownPreviewView
++    /// (which exposes its source editor via `act_as`). Used so plan_build
++    /// and the toolbar location can work in preview mode.
++    fn active_editor_or_preview(&self, cx: &App) -> Option<Entity<Editor>> {
++        self.active_editor().or_else(|| {
++            self.active_item
++                .as_ref()
++                .and_then(|item| item.act_as::<Editor>(cx))
++        })
++    }
++
+     fn apply_settings(&mut self, cx: &mut Context<Self>) {
+         let new_show = EditorSettings::get_global(cx).toolbar.quick_actions;
+         if new_show != self.show {
+             self.show = new_show;
+             cx.emit(ToolbarItemEvent::ChangeLocation(
+-                self.get_toolbar_item_location(),
++                self.get_toolbar_item_location(cx),
+             ));
+         }
+     }
+ 
+-    fn get_toolbar_item_location(&self) -> ToolbarItemLocation {
+-        if self.show && self.active_editor().is_some() {
++    fn get_toolbar_item_location(&self, cx: &App) -> ToolbarItemLocation {
++        if self.show && (self.active_editor().is_some() || self.has_plan_preview(cx)) {
+             ToolbarItemLocation::PrimaryRight
+         } else {
+             ToolbarItemLocation::Hidden
+         }
+     }
++
++    fn has_plan_preview(&self, cx: &App) -> bool {
++        self.active_editor_or_preview(cx)
++            .and_then(|editor| {
++                let editor = editor.read(cx);
++                let file = editor.file_at(editor::MultiBufferOffset(0), cx)?;
++                let path = file.as_local().map(|f| f.abs_path(cx))?;
++                let name = path.file_name()?.to_string_lossy();
++                Some(name.ends_with(".plan.md"))
++            })
++            .unwrap_or(false)
++    }
+ }
+ 
+ impl Render for QuickActionBar {
+     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++        // If we're in a plan preview (not a real Editor), render only the
++        // Build Locally button — skip code actions, inlay hints, etc.
++        if self.active_editor().is_none() && self.has_plan_preview(cx) {
++            return h_flex()
++                .id("quick action bar")
++                .gap(DynamicSpacing::Base01.rems(cx))
++                .children(self.render_plan_build_button(cx));
++        }
++
+         let Some(editor) = self.active_editor() else {
+-            return div().id("empty quick action bar");
++            return h_flex().id("empty quick action bar");
+         };
+ 
+         let supports_inlay_hints = editor.update(cx, |editor, cx| editor.supports_inlay_hints(cx));
+@@ -708,6 +741,7 @@ impl Render for QuickActionBar {
+             .gap(DynamicSpacing::Base01.rems(cx))
+             .children(self.render_repl_menu(cx))
+             .children(self.render_preview_button(cx))
++            .children(self.render_plan_build_button(cx))
+             .children(search_button)
+             .when(
+                 AgentSettings::get_global(cx).enabled(cx) && AgentSettings::get_global(cx).button,
+@@ -818,6 +852,6 @@ impl ToolbarItemView for QuickActionBar {
+                     }));
+             }
+         }
+-        self.get_toolbar_item_location()
++        self.get_toolbar_item_location(cx)
+     }
+ }
+diff --git a/crates/zed/src/zed/quick_action_bar/plan_build.rs b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+new file mode 100644
+index 0000000..42ae75f
+--- /dev/null
++++ b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+@@ -0,0 +1,163 @@
++use std::path::PathBuf;
++
++use agent_ui::AgentPanel;
++use editor::{Editor, MultiBufferOffset};
++use gpui::{Anchor, AnyElement, ClipboardItem, Entity};
++use project::ProjectPath;
++use ui::{ButtonSize, ContextMenu, LabelSize, PopoverMenu, Tooltip, prelude::*};
++use workspace::Toast;
++use workspace::notifications::NotificationId;
++
++use super::QuickActionBar;
++
++struct PlanBuildToast;
++
++impl QuickActionBar {
++    pub fn render_plan_build_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
++        let active_item = self.active_item.as_ref()?;
++        let editor = active_item.act_as::<Editor>(cx)?;
++        let plan_path = plan_path_for_editor(&editor, cx)?;
++
++        let workspace_handle = self.workspace.clone();
++
++        // Model Selector Button (Katalyst-style "[ Auto ˅ ]")
++        let active_model_name = workspace_handle
++            .upgrade()
++            .and_then(|ws| ws.read(cx).panel::<AgentPanel>(cx))
++            .and_then(|panel| panel.read(cx).active_model_name(cx));
++        let model_label = active_model_name.unwrap_or_else(|| "Auto".into());
++
++        let model_button = {
++            let workspace_handle = workspace_handle.clone();
++            Button::new("plan-select-model", model_label)
++                .label_size(LabelSize::Small)
++                .size(ButtonSize::Compact)
++                .style(ButtonStyle::Subtle)
++                .end_icon(
++                    Icon::new(IconName::ChevronDown)
++                        .size(IconSize::XSmall)
++                        .color(Color::Muted),
++                )
++                .tooltip(Tooltip::text("Select execution model in Agent Panel"))
++                .on_click(move |_, window, cx| {
++                    let Some(workspace) = workspace_handle.upgrade() else {
++                        return;
++                    };
++                    workspace.update(cx, |workspace, cx| {
++                        if let Some(panel) = workspace.focus_panel::<AgentPanel>(window, cx) {
++                            panel.update(cx, |panel, cx| {
++                                panel.toggle_model_selector(window, cx);
++                            });
++                        }
++                    });
++                })
++        };
++
++        let build_plan_path = plan_path.clone();
++        let build_button = Button::new("plan-build-locally", "Build Locally")
++            .label_size(LabelSize::Small)
++            .size(ButtonSize::Compact)
++            .style(ButtonStyle::Subtle)
++            .start_icon(
++                Icon::new(IconName::PlayOutlined)
++                    .size(IconSize::Small)
++                    .color(Color::Accent),
++            )
++            .tooltip(Tooltip::text("Run /go on this plan in the Agent Panel"))
++            .on_click(move |_, window, cx| {
++                let Some(workspace) = workspace_handle.upgrade() else {
++                    return;
++                };
++                let command = format!("/go {}", build_plan_path.display());
++                workspace.update(cx, |workspace, cx| {
++                    if let Some(panel) = workspace.focus_panel::<AgentPanel>(window, cx) {
++                        let submitted = panel.update(cx, |panel, cx| {
++                            panel.submit_slash_command(&command, window, cx)
++                        });
++                        if submitted {
++                            workspace.show_toast(
++                                Toast::new(
++                                    NotificationId::unique::<PlanBuildToast>(),
++                                    "Building plan via /go…",
++                                )
++                                .autohide(),
++                                cx,
++                            );
++                            return;
++                        }
++                    }
++
++                    cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
++                    workspace.show_toast(
++                        Toast::new(
++                            NotificationId::unique::<PlanBuildToast>(),
++                            "Open an OMP agent thread first — /go command copied to clipboard",
++                        )
++                        .autohide(),
++                        cx,
++                    );
++                });
++            });
++
++        let overflow_menu = {
++            let plan_path = plan_path.clone();
++            PopoverMenu::new("plan-more-actions")
++                .anchor(Anchor::TopRight)
++                .menu(move |window, cx| {
++                    let plan_path = plan_path.clone();
++                    let menu = ContextMenu::build(window, cx, move |menu, _, _| {
++                        let plan_path = plan_path.clone();
++                        menu.entry("Copy as Markdown", None, {
++                            let plan_path = plan_path.clone();
++                            move |_window, cx| {
++                                if let Ok(text) = std::fs::read_to_string(&plan_path) {
++                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
++                                }
++                            }
++                        })
++                        .entry("Copy Plan Path", None, {
++                            let plan_path = plan_path.clone();
++                            move |_window, cx| {
++                                cx.write_to_clipboard(ClipboardItem::new_string(
++                                    plan_path.display().to_string(),
++                                ));
++                            }
++                        })
++                    });
++                    Some(menu)
++                })
++                .trigger_with_tooltip(
++                    IconButton::new("plan-more-options", IconName::Ellipsis)
++                        .icon_size(IconSize::Small)
++                        .style(ButtonStyle::Subtle),
++                    Tooltip::text("More Plan Actions"),
++                )
++        };
++
++        Some(
++            h_flex()
++                .gap(DynamicSpacing::Base01.rems(cx))
++                .child(model_button)
++                .child(build_button)
++                .child(overflow_menu)
++                .into_any_element(),
++        )
++    }
++}
++
++fn plan_path_for_editor(editor: &Entity<Editor>, cx: &App) -> Option<PathBuf> {
++    let editor = editor.read(cx);
++    let file = editor.file_at(MultiBufferOffset(0), cx)?;
++    let project_path = ProjectPath::from_file(file.as_ref(), cx);
++    let absolute_path = editor
++        .project()
++        .and_then(|project| project.read(cx).absolute_path(&project_path, cx))
++        .or_else(|| file.as_local().map(|file| file.abs_path(cx)))?;
++
++    let name = absolute_path.file_name()?.to_string_lossy();
++    if name.ends_with(".plan.md") {
++        Some(absolute_path)
++    } else {
++        None
++    }
++}
+-- 
+2.55.0
+

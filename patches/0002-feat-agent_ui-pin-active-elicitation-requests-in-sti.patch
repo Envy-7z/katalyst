@@ -1,0 +1,105 @@
+From cbba7b588d1feca851c7234a63eb10772879674c Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Sun, 6 Sep 2026 15:52:38 +0700
+Subject: [PATCH 2/8] feat(agent_ui): pin active elicitation requests in sticky
+ top banner
+
+Detach pending elicitation requests from the scrolling message list and
+render them in a sticky top banner above the conversation. Answered
+elicitations remain in the conversation history as compact badges.
+---
+ .../src/conversation_view/thread_view.rs      | 63 ++++++++++++++++---
+ 1 file changed, 53 insertions(+), 10 deletions(-)
+
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index dfff305..eb116d7 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -6430,17 +6430,22 @@ impl ThreadView {
+                 if let Some((_, elicitation)) = thread.elicitation(elicitation_id)
+                     && should_render_elicitation(elicitation)
+                 {
+-                    let elicitation = self.render_elicitation(entry_ix, elicitation, window, cx);
+-
+-                    if let Some(handle) = self
+-                        .entry_view_state
+-                        .read(cx)
+-                        .entry(entry_ix)
+-                        .and_then(|entry| entry.focus_handle(cx))
+-                    {
+-                        elicitation.track_focus(&handle).into_any()
++                    if matches!(elicitation.status, ElicitationStatus::Pending { .. }) {
++                        Empty.into_any()
+                     } else {
+-                        elicitation.into_any()
++                        let elicitation =
++                            self.render_elicitation(entry_ix, elicitation, window, cx);
++
++                        if let Some(handle) = self
++                            .entry_view_state
++                            .read(cx)
++                            .entry(entry_ix)
++                            .and_then(|entry| entry.focus_handle(cx))
++                        {
++                            elicitation.track_focus(&handle).into_any()
++                        } else {
++                            elicitation.into_any()
++                        }
+                     }
+                 } else {
+                     Empty.into_any()
+@@ -6622,6 +6627,40 @@ impl ThreadView {
+         .render(cx)
+     }
+ 
++    fn render_active_elicitation_banner(
++        &self,
++        window: &Window,
++        cx: &Context<Self>,
++    ) -> Option<AnyElement> {
++        let thread = self.thread.read(cx);
++        let entries = thread.entries();
++        let (entry_ix, elicitation) = entries.iter().enumerate().find_map(|(ix, entry)| {
++            if let AgentThreadEntry::Elicitation(elicitation_id) = entry {
++                let (_, elicitation) = thread.elicitation(elicitation_id)?;
++                if matches!(elicitation.status, ElicitationStatus::Pending { .. })
++                    && should_render_elicitation(elicitation)
++                {
++                    return Some((ix, elicitation));
++                }
++            }
++            None
++        })?;
++
++        let card = self.render_elicitation(entry_ix, elicitation, window, cx);
++        Some(
++            v_flex()
++                .w_full()
++                .px_4()
++                .py_2()
++                .bg(cx.theme().colors().elevated_surface_background)
++                .border_b_1()
++                .border_color(cx.theme().colors().border)
++                .shadow_md()
++                .child(card)
++                .into_any_element(),
++        )
++    }
++
+     fn elicitation_card_handlers(&self, cx: &Context<Self>) -> ElicitationCardHandlers {
+         let view = cx.entity().downgrade();
+ 
+@@ -12457,6 +12496,10 @@ impl Render for ThreadView {
+                     .flatten(),
+                 |this, bar| this.child(bar),
+             )
++            .when_some(
++                self.render_active_elicitation_banner(window, cx),
++                |this, banner| this.child(banner),
++            )
+             .child(conversation)
+             .children(self.render_multi_root_callout(cx))
+             .children(self.render_activity_bar(window, cx))
+-- 
+2.55.0
+

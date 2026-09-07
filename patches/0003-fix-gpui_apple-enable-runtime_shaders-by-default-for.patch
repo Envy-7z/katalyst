@@ -1,0 +1,28 @@
+From e32dc005ad83649d73d4ad4f66a34b4377466b17 Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Sun, 6 Sep 2026 16:06:39 +0700
+Subject: [PATCH 3/8] fix(gpui_apple): enable runtime_shaders by default for
+ CLI toolchain
+
+Allow building on macOS systems with only Command Line Tools by using
+Apple runtime Metal shader compilation instead of xcrun metal.
+---
+ crates/gpui_apple/Cargo.toml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/crates/gpui_apple/Cargo.toml b/crates/gpui_apple/Cargo.toml
+index fc04bcc..db5ddea 100644
+--- a/crates/gpui_apple/Cargo.toml
++++ b/crates/gpui_apple/Cargo.toml
+@@ -12,7 +12,7 @@ workspace = true
+ path = "src/gpui_apple.rs"
+ 
+ [features]
+-default = []
++default = ["runtime_shaders"]
+ bench-support = ["gpui/bench-support"]
+ test-support = ["gpui/test-support"]
+ runtime_shaders = []
+-- 
+2.55.0
+

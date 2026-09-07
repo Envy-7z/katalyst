@@ -1,0 +1,34 @@
+symbolPreset: nerd
+theme:
+  dark: titanium
+colorBlindMode: false
+defaultThinkingLevel: auto
+statusLine:
+  preset: default
+  sessionAccent: true
+  transparent: true
+  compactThinkingLevel: false
+  showHookStatus: true
+terminal:
+  showProgress: false
+tools:
+  approvalMode: always-ask
+error:
+  notify: "off"
+memory:
+  backend: local
+edit:
+  mode: hashline
+vault:
+  enabled: true
+github:
+  enabled: true
+bash:
+  direnv: auto
+skills:
+  enabled: true
+  enablePiUser: true
+  enablePiProject: true
+  paths:
+    - ~/.katalyst/skills
+autoResume: true

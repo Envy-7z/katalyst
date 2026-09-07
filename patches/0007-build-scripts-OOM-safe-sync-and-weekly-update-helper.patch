@@ -1,0 +1,324 @@
+From 4e1ae7fb01d70d5b9a23ac1e398e0f24aebf57c7 Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Mon, 7 Sep 2026 14:23:08 +0700
+Subject: [PATCH 7/8] build(scripts): OOM-safe sync and weekly update helpers
+
+Prefer release-fast builds with disk/Zed-running guards, add
+update-all.sh for OMP+Zed updates, and notify-updates.sh for Monday
+LaunchAgent checks.
+---
+ scripts/notify-updates.sh   | 40 +++++++++++++++
+ scripts/safe-rebuild.sh     | 73 +++++++++++++++++++++++++++
+ scripts/sync-and-rebuild.sh | 98 +++++++++++++++++++++++++------------
+ scripts/update-all.sh       | 44 +++++++++++++++++
+ 4 files changed, 223 insertions(+), 32 deletions(-)
+ create mode 100755 scripts/notify-updates.sh
+ create mode 100755 scripts/safe-rebuild.sh
+ create mode 100755 scripts/update-all.sh
+
+diff --git a/scripts/notify-updates.sh b/scripts/notify-updates.sh
+new file mode 100755
+index 0000000..29e7c29
+--- /dev/null
++++ b/scripts/notify-updates.sh
+@@ -0,0 +1,40 @@
++#!/usr/bin/env bash
++# Check OMP + Zed upstream; macOS-notify only when updates exist (or --test to preview).
++set -euo pipefail
++
++export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
++REPO_DIR="$HOME/zed-custom"
++
++NEED_OMP=0
++NEED_ZED=0
++MSG_PARTS=()
++
++if [[ "${1:-}" == "--test" || "${1:-}" == "-t" ]]; then
++  MSG="Zed custom behind upstream by 2 commit(s); OMP: New version available: 18.2.0"
++  echo "[TEST] $MSG"
++  osascript -e "display notification \"$MSG\" with title \"Zed / OMP Update Available\" subtitle \"Run update-all.sh to update\" sound name \"Glass\"" >/dev/null
++  exit 0
++fi
++
++OMP_OUT="$(omp update --check 2>&1 || true)"
++if echo "$OMP_OUT" | grep -q "New version available"; then
++  NEED_OMP=1
++  OMP_LINE="$(echo "$OMP_OUT" | grep -E "Current version:|New version available:" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
++  MSG_PARTS+=("OMP: ${OMP_LINE}")
++fi
++
++cd "$REPO_DIR"
++git fetch upstream main >/dev/null 2>&1
++BEHIND="$(git rev-list --count HEAD..upstream/main)"
++if [[ "$BEHIND" -gt 0 ]]; then
++  NEED_ZED=1
++  MSG_PARTS+=("Zed custom behind upstream by ${BEHIND} commit(s)")
++fi
++
++if [[ "$NEED_OMP" -eq 0 && "$NEED_ZED" -eq 0 ]]; then
++  exit 0
++fi
++
++MSG="$(IFS='; '; echo "${MSG_PARTS[*]}")"
++echo "$MSG"
++osascript -e "display notification \"$MSG\" with title \"Zed / OMP Update Available\" subtitle \"Run update-all.sh to update\" sound name \"Glass\"" >/dev/null
+diff --git a/scripts/safe-rebuild.sh b/scripts/safe-rebuild.sh
+new file mode 100755
+index 0000000..b0677ff
+--- /dev/null
++++ b/scripts/safe-rebuild.sh
+@@ -0,0 +1,73 @@
++#!/usr/bin/env bash
++# OOM-safe local rebuild + install for custom Zed on 16GB Macs.
++# NEVER run cargo release thinLTO while the Zed GUI is open — that ballooned
++# to ~50GB swap and Force Quit. Prefer release-fast (lto=false) + -j2.
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO_DIR="$(dirname "$SCRIPT_DIR")"
++APP_BIN="/Applications/Zed.app/Contents/MacOS/zed"
++PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
++JOBS="${ZED_BUILD_JOBS:-2}"
++MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
++
++cd "$REPO_DIR"
++export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
++export CARGO_INCREMENTAL=0
++export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
++
++if [[ "$PROFILE" == "release" ]]; then
++  export CARGO_PROFILE_RELEASE_LTO=false
++fi
++
++echo "=== Zed Custom: safe-rebuild (profile=$PROFILE, -j$JOBS) ==="
++
++if pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
++  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run:"
++  echo "  bash $SCRIPT_DIR/safe-rebuild.sh"
++  exit 1
++fi
++
++FREE_GB="$(df -g "$HOME" | awk 'NR==2 {print $4}')"
++if [[ -z "$FREE_GB" || "$FREE_GB" -lt "$MIN_FREE_GB" ]]; then
++  echo "Error: free disk ${FREE_GB:-?}GB < ${MIN_FREE_GB}GB. Free space or lower ZED_MIN_FREE_GB."
++  exit 1
++fi
++echo "Disk free: ${FREE_GB}GB (ok)"
++
++echo "Clearing incremental caches (keeping deps)..."
++rm -rf target/release/incremental target/release-fast/incremental target/*/incremental 2>/dev/null || true
++
++echo "Building zed with --profile $PROFILE -j $JOBS ..."
++cargo build --profile "$PROFILE" -p zed -j "$JOBS"
++
++PROFILE_DIR="$PROFILE"
++SRC="$REPO_DIR/target/$PROFILE_DIR/zed"
++if [[ ! -x "$SRC" ]]; then
++  echo "Error: missing binary at $SRC"
++  exit 1
++fi
++
++if [[ -d "/Applications/Zed.app" ]]; then
++  if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
++    echo "Backing up official app once -> /Applications/Zed.official-backup.app"
++    cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
++  fi
++  echo "Installing $SRC -> $APP_BIN"
++  cp "$SRC" "$APP_BIN"
++  # Preserve Katalyst branding (name and icon)
++  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
++    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Katalyst.icns 2>/dev/null || true
++    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Zed.icns 2>/dev/null || true
++  fi
++  echo "Re-signing /Applications/Zed.app (ad-hoc)..."
++  codesign --force --deep --sign - /Applications/Zed.app
++  echo "Installed and signed. Safe to reopen Zed now."
++else
++  echo "Warning: /Applications/Zed.app missing; binary at $SRC"
++fi
++
++echo "=== safe-rebuild complete ==="
+diff --git a/scripts/sync-and-rebuild.sh b/scripts/sync-and-rebuild.sh
+index e0ef1b0..52cc6df 100755
+--- a/scripts/sync-and-rebuild.sh
++++ b/scripts/sync-and-rebuild.sh
+@@ -1,57 +1,91 @@
+ #!/usr/bin/env bash
++# Sync upstream main (optional rebase) then OOM-safe rebuild/install.
++# On 16GB Macs: never thinLTO release while Zed GUI is open.
++# Default build profile is release-fast (lto=false). Override: ZED_BUILD_PROFILE=release
+ set -euo pipefail
+ 
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ REPO_DIR="$(dirname "$SCRIPT_DIR")"
++PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
++JOBS="${ZED_BUILD_JOBS:-2}"
++MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
+ 
+ cd "$REPO_DIR"
+-
+ export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+ export CARGO_INCREMENTAL=0
+-export RUSTFLAGS="-C debuginfo=0"
++export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
++
++if [[ "$PROFILE" == "release" ]]; then
++  export CARGO_PROFILE_RELEASE_LTO=false
++fi
++
++echo "=== Zed Custom: Sync Upstream & OOM-safe Rebuild ==="
+ 
+-echo "=== Zed Custom: Sync Upstream & Rebuild ==="
++if pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
++  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run this script."
++  exit 1
++fi
++
++FREE_GB="$(df -g "$HOME" | awk 'NR==2 {print $4}')"
++if [[ -z "$FREE_GB" || "$FREE_GB" -lt "$MIN_FREE_GB" ]]; then
++  echo "Error: free disk ${FREE_GB:-?}GB < ${MIN_FREE_GB}GB."
++  exit 1
++fi
+ 
+-# Check git status
+ if ! git diff-index --quiet HEAD --; then
+-    echo "Error: Working directory has uncommitted changes. Please commit or stash them first."
+-    exit 1
++  echo "Error: Working directory has uncommitted changes. Commit or stash first."
++  exit 1
+ fi
+ 
+ echo "1. Fetching upstream main..."
+ git fetch upstream main
+ 
+-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
++CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+ echo "Current branch: $CURRENT_BRANCH"
+ 
+-BEHIND=$(git rev-list --count HEAD..FETCH_HEAD)
+-if [ "$BEHIND" -eq 0 ]; then
+-    echo "Already up to date with upstream main (0 commits behind)."
++BEHIND="$(git rev-list --count HEAD..FETCH_HEAD)"
++if [[ "$BEHIND" -eq 0 ]]; then
++  echo "Already up to date with upstream main (0 commits behind)."
+ else
+-    echo "2. Rebasing $CURRENT_BRANCH onto upstream main ($BEHIND new commits)..."
+-    if ! git rebase FETCH_HEAD; then
+-        echo ""
+-        echo "Rebase conflict detected!"
+-        echo "Aborting rebase to preserve branch state..."
+-        git rebase --abort
+-        echo "Rebase aborted cleanly. Please resolve conflicts manually in $REPO_DIR."
+-        exit 1
+-    fi
++  echo "2. Rebasing $CURRENT_BRANCH onto upstream main ($BEHIND new commits)..."
++  if ! git rebase FETCH_HEAD; then
++    echo ""
++    echo "Rebase conflict detected — aborting to preserve branch state."
++    git rebase --abort
++    echo "Rebase aborted. Resolve conflicts manually in $REPO_DIR."
++    exit 1
++  fi
+ fi
+ 
+ echo "3. Verifying agent_ui compilation..."
+-cargo check -p agent_ui
+-
+-echo "4. Building release binary..."
+-cargo build --release -p zed
+-
+-echo "5. Installing into /Applications/Zed.app..."
+-if [ -d "/Applications/Zed.app" ]; then
+-    if [ ! -d "/Applications/Zed.official-backup.app" ]; then
+-        cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
+-    fi
+-    cp "$REPO_DIR/target/release/zed" "/Applications/Zed.app/Contents/MacOS/zed"
+-    echo "Installed successfully to /Applications/Zed.app/Contents/MacOS/zed!"
++cargo check -p agent_ui -j "$JOBS"
++
++echo "4. Clearing incremental caches..."
++rm -rf target/release/incremental target/release-fast/incremental target/*/incremental 2>/dev/null || true
++
++echo "5. Building with --profile $PROFILE -j $JOBS ..."
++cargo build --profile "$PROFILE" -p zed -j "$JOBS"
++
++SRC="$REPO_DIR/target/$PROFILE/zed"
++echo "6. Installing into /Applications/Zed.app..."
++if [[ -d "/Applications/Zed.app" ]]; then
++  if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
++    cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
++  fi
++  cp "$SRC" "/Applications/Zed.app/Contents/MacOS/zed"
++  # Preserve Katalyst branding (name and icon)
++  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
++    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Katalyst.icns 2>/dev/null || true
++    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Zed.icns 2>/dev/null || true
++  fi
++  echo "Re-signing /Applications/Zed.app (ad-hoc)..."
++  codesign --force --deep --sign - /Applications/Zed.app
++  echo "Installed and signed successfully to /Applications/Zed.app/Contents/MacOS/zed"
++else
++  echo "Warning: /Applications/Zed.app missing; binary at $SRC"
+ fi
+ 
+-echo "=== Sync and rebuild complete! ==="
++echo "=== Sync and rebuild complete! Do not reopen Zed until this finished. ==="
+diff --git a/scripts/update-all.sh b/scripts/update-all.sh
+new file mode 100755
+index 0000000..13892fd
+--- /dev/null
++++ b/scripts/update-all.sh
+@@ -0,0 +1,44 @@
++#!/usr/bin/env bash
++# One-command OMP + Zed custom update.
++# Non-interactive (no TTY): updates OMP + prints Zed delta, never rebuilds.
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO_DIR="$(dirname "$SCRIPT_DIR")"
++export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
++
++echo "=== OMP before ==="
++omp --version
++
++echo "=== Updating OMP ==="
++omp update
++
++echo "=== OMP after ==="
++omp --version
++
++echo ""
++bash "$SCRIPT_DIR/check-upstream.sh"
++
++cd "$REPO_DIR"
++# check-upstream.sh already fetched; recompute from upstream/main for safety
++git fetch upstream main >/dev/null 2>&1 || true
++BEHIND="$(git rev-list --count HEAD..upstream/main)"
++
++if [[ "$BEHIND" -eq 0 ]]; then
++  echo "Zed already up to date with upstream/main."
++  exit 0
++fi
++
++if [[ ! -t 0 ]]; then
++  echo "Non-interactive shell: skipping Zed sync+rebuild ($BEHIND commits behind)."
++  echo "Re-run in a terminal and confirm, or:"
++  echo "  ZED_MIN_FREE_GB=8 bash $SCRIPT_DIR/sync-and-rebuild.sh"
++  exit 0
++fi
++
++read -r -p "Sync+rebuild Zed now? [y/N] " ans
++if [[ "$ans" =~ ^[yY]$ ]]; then
++  ZED_MIN_FREE_GB="${ZED_MIN_FREE_GB:-8}" bash "$SCRIPT_DIR/sync-and-rebuild.sh"
++else
++  echo "Skipped Zed sync+rebuild."
++fi
+-- 
+2.55.0
+

@@ -1,0 +1,276 @@
+From 4cdbf6c51b8eb2c1a9d6e3137fb825d560ebc7ef Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Mon, 7 Sep 2026 13:43:29 +0700
+Subject: [PATCH 5/8] feat(agent_ui): scroll tall elicitation cards and restore
+ canceled prompts
+
+Cap pending elicitation forms at 420px with an internal body scroll so
+Submit/Decline stay reachable, and cap the sticky banner at 480px.
+On stop/cancel, restore the in-flight prompt into an empty composer.
+---
+ crates/agent_ui/src/conversation_view.rs      |  5 +-
+ .../src/conversation_view/elicitation.rs      | 24 ++++++--
+ .../src/conversation_view/thread_view.rs      | 55 +++++++++++++++----
+ 3 files changed, 66 insertions(+), 18 deletions(-)
+
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index 87fa65d..2325cc3 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -2403,6 +2403,7 @@ impl ConversationView {
+         &self,
+         connection: &Rc<dyn AgentConnection>,
+         view: WeakEntity<Self>,
++        window: &Window,
+         cx: &App,
+     ) -> Vec<AnyElement> {
+         let Some(store) = connection.request_elicitations() else {
+@@ -2430,7 +2431,7 @@ impl ConversationView {
+                     self.request_elicitation_form_states.get(&elicitation.id),
+                     handlers.clone(),
+                 )
+-                .render(cx)
++                .render(window, cx)
+                 .into_any_element()
+             })
+             .collect()
+@@ -3465,7 +3466,7 @@ impl Render for ConversationView {
+                 this.children(request_elicitation_connection.as_ref().map_or_else(
+                     Vec::new,
+                     |connection| {
+-                        self.render_request_elicitations(connection, cx.entity().downgrade(), cx)
++                        self.render_request_elicitations(connection, cx.entity().downgrade(), window, cx)
+                     },
+                 ))
+             })
+diff --git a/crates/agent_ui/src/conversation_view/elicitation.rs b/crates/agent_ui/src/conversation_view/elicitation.rs
+index 2da7b4c..e7d5d0b 100644
+--- a/crates/agent_ui/src/conversation_view/elicitation.rs
++++ b/crates/agent_ui/src/conversation_view/elicitation.rs
+@@ -923,7 +923,7 @@ fn render_form_preview(
+         }
+     }
+ 
+-    render_preview_card(entry_ix, request, status, form_state.as_ref(), cx)
++    render_preview_card(entry_ix, request, status, form_state.as_ref(), window, cx)
+ }
+ 
+ fn preview_url() -> &'static str {
+@@ -933,7 +933,7 @@ fn preview_url() -> &'static str {
+ fn render_url_preview(
+     entry_ix: usize,
+     status: ElicitationStatus,
+-    _window: &mut Window,
++    window: &mut Window,
+     cx: &mut App,
+ ) -> AnyElement {
+     let request = acp::CreateElicitationRequest::new(
+@@ -945,7 +945,7 @@ fn render_url_preview(
+         "Authorize Zed in your browser to finish signing in.",
+     );
+ 
+-    render_preview_card(entry_ix, request, status, None, cx)
++    render_preview_card(entry_ix, request, status, None, window, cx)
+ }
+ 
+ fn render_preview_card(
+@@ -953,6 +953,7 @@ fn render_preview_card(
+     request: acp::CreateElicitationRequest,
+     status: ElicitationStatus,
+     form_state: Option<&ElicitationFormState>,
++    window: &mut Window,
+     cx: &App,
+ ) -> AnyElement {
+     let elicitation = Elicitation {
+@@ -972,7 +973,7 @@ fn render_preview_card(
+                 form_state,
+                 ElicitationCardHandlers::noop(),
+             )
+-            .render(cx),
++            .render(window, cx),
+         )
+         .into_any_element()
+ }
+@@ -1450,7 +1451,7 @@ impl<'a> ElicitationCard<'a> {
+         }
+     }
+ 
+-    pub(crate) fn render(self, cx: &App) -> Div {
++    pub(crate) fn render(self, _window: &Window, cx: &App) -> Div {
+         let border_color = cx.theme().colors().border.opacity(0.8);
+         let header_background = cx
+             .theme()
+@@ -1498,6 +1499,8 @@ impl<'a> ElicitationCard<'a> {
+             _ => body,
+         };
+ 
++        // Cap height and scroll the form body so Submit/Decline/Cancel stay reachable
++        // on tall multi-question OMP ask forms.
+         v_flex()
+             .mx_5()
+             .my_1p5()
+@@ -1505,6 +1508,7 @@ impl<'a> ElicitationCard<'a> {
+             .border_1()
+             .border_color(border_color)
+             .overflow_hidden()
++            .max_h(rems_from_px(420_f32))
+             .child(
+                 h_flex()
+                     .h_8()
+@@ -1534,7 +1538,15 @@ impl<'a> ElicitationCard<'a> {
+                             .color(Color::Muted),
+                     ),
+             )
+-            .child(body)
++            .child(
++                v_flex()
++                    .id(("elicitation-body-scroll", self.entry_ix))
++                    .min_h_0()
++                    .flex_1()
++                    .w_full()
++                    .overflow_y_scroll()
++                    .child(body),
++            )
+             .when(is_pending || is_accepted_url, |this| {
+                 this.child(self.render_actions(cx))
+             })
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index eb116d7..8231181 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -1133,7 +1133,7 @@ impl ThreadView {
+             MessageEditorEvent::SendImmediately => self.interrupt_and_send(window, cx),
+             MessageEditorEvent::Cancel => {
+                 if !self.close_thread_search(window, cx) {
+-                    self.cancel_generation(cx);
++                    self.cancel_generation_and_restore_prompt(window, cx);
+                 }
+             }
+             MessageEditorEvent::Focus => {
+@@ -1978,6 +1978,27 @@ impl ThreadView {
+         cx.notify();
+     }
+ 
++    /// Stop generation and, when the composer is empty, restore the in-flight
++    /// prompt so the user can refine it (Katalyst-style stop/cancel recovery).
++    pub fn cancel_generation_and_restore_prompt(
++        &mut self,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.cancel_generation(cx);
++
++        if !self.message_editor.read(cx).is_empty(cx) {
++            return;
++        }
++
++        if let Some(message) = self.in_flight_prompt.take() {
++            self.message_editor.update(cx, |editor, cx| {
++                editor.set_message(message, window, cx);
++            });
++            self.message_editor.focus_handle(cx).focus(window, cx);
++        }
++    }
++
+     pub fn retry_generation(&mut self, cx: &mut Context<Self>) {
+         self.thread_error.take();
+ 
+@@ -5413,7 +5434,9 @@ impl ThreadView {
+                 .tooltip(move |_window, cx| {
+                     Tooltip::for_action("Stop Generation", &editor::actions::Cancel, cx)
+                 })
+-                .on_click(cx.listener(|this, _event, _, cx| this.cancel_generation(cx)))
++                .on_click(cx.listener(|this, _event, window, cx| {
++                    this.cancel_generation_and_restore_prompt(window, cx)
++                }))
+                 .into_any_element()
+         } else {
+             let send_icon = if is_generating {
+@@ -6614,7 +6637,7 @@ impl ThreadView {
+         &self,
+         entry_ix: usize,
+         elicitation: &Elicitation,
+-        _window: &Window,
++        window: &Window,
+         cx: &Context<Self>,
+     ) -> Div {
+         ElicitationCard::new(
+@@ -6624,7 +6647,7 @@ impl ThreadView {
+             self.elicitation_form_states.get(&elicitation.id),
+             self.elicitation_card_handlers(cx),
+         )
+-        .render(cx)
++        .render(window, cx)
+     }
+ 
+     fn render_active_elicitation_banner(
+@@ -6650,6 +6673,8 @@ impl ThreadView {
+         Some(
+             v_flex()
+                 .w_full()
++                .min_h_0()
++                .max_h(rems_from_px(480_f32))
+                 .px_4()
+                 .py_2()
+                 .bg(cx.theme().colors().elevated_surface_background)
+@@ -7016,7 +7041,11 @@ impl ThreadView {
+         self.message_editor.read(cx).set_local_commands(commands);
+     }
+ 
+-    fn render_request_elicitations(&self, cx: &Context<Self>) -> Vec<AnyElement> {
++    fn render_request_elicitations(
++        &self,
++        window: &mut Window,
++        cx: &Context<Self>,
++    ) -> Vec<AnyElement> {
+         let server_view = self.server_view.clone();
+         let handlers_view = server_view.clone();
+         server_view
+@@ -7024,7 +7053,7 @@ impl ThreadView {
+                 let Some(connection) = server_view.request_elicitation_connection() else {
+                     return Vec::new();
+                 };
+-                server_view.render_request_elicitations(&connection, handlers_view, cx)
++                server_view.render_request_elicitations(&connection, handlers_view, window, cx)
+             })
+             .unwrap_or_default()
+     }
+@@ -12191,9 +12220,9 @@ impl Render for ThreadView {
+         v_flex()
+             .key_context("AcpThread")
+             .track_focus(&self.focus_handle)
+-            .on_action(cx.listener(|this, _: &menu::Cancel, _, cx| {
++            .on_action(cx.listener(|this, _: &menu::Cancel, window, cx| {
+                 if this.parent_session_id.is_none() {
+-                    this.cancel_generation(cx);
++                    this.cancel_generation_and_restore_prompt(window, cx);
+                 }
+             }))
+             .on_action(cx.listener(
+@@ -12205,7 +12234,13 @@ impl Render for ThreadView {
+             .on_action(
+                 cx.listener(|this, _: &editor::actions::Cancel, window, cx| {
+                     if !this.close_thread_search(window, cx) {
+-                        cx.propagate();
++                        let is_generating =
++                            this.thread.read(cx).status() != ThreadStatus::Idle;
++                        if is_generating {
++                            this.cancel_generation_and_restore_prompt(window, cx);
++                        } else {
++                            cx.propagate();
++                        }
+                     }
+                 }),
+             )
+@@ -12520,7 +12555,7 @@ impl Render for ThreadView {
+                 |this, version| this.child(self.render_new_version_callout(&version, cx)),
+             )
+             .children(self.render_token_limit_callout(cx))
+-            .children(self.render_request_elicitations(cx))
++            .children(self.render_request_elicitations(window, cx))
+             .child(self.render_message_editor(window, cx))
+     }
+ }
+-- 
+2.55.0
+

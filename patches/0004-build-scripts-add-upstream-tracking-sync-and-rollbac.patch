@@ -1,0 +1,148 @@
+From bca2f81f1a60c384269131068adf443fd6dd493e Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Sun, 6 Sep 2026 16:49:52 +0700
+Subject: [PATCH 4/8] build(scripts): add upstream tracking, sync, and rollback
+ helpers
+
+Add check-upstream.sh, sync-and-rebuild.sh, and rollback.sh scripts to
+manage upstream Zed updates and safe binary installation.
+---
+ scripts/check-upstream.sh   | 40 ++++++++++++++++++++++++++
+ scripts/rollback.sh         | 13 +++++++++
+ scripts/sync-and-rebuild.sh | 57 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 110 insertions(+)
+ create mode 100755 scripts/check-upstream.sh
+ create mode 100755 scripts/rollback.sh
+ create mode 100755 scripts/sync-and-rebuild.sh
+
+diff --git a/scripts/check-upstream.sh b/scripts/check-upstream.sh
+new file mode 100755
+index 0000000..9dd48dd
+--- /dev/null
++++ b/scripts/check-upstream.sh
+@@ -0,0 +1,40 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO_DIR="$(dirname "$SCRIPT_DIR")"
++
++cd "$REPO_DIR"
++
++echo "=== Checking Zed Upstream Updates ==="
++echo "Fetching upstream main..."
++git fetch upstream main
++
++BEHIND=$(git rev-list --count HEAD..FETCH_HEAD)
++AHEAD=$(git rev-list --count FETCH_HEAD..HEAD)
++
++echo "Local branch: $(git rev-parse --abbrev-ref HEAD)"
++echo "Commits ahead of upstream: $AHEAD (our custom patches)"
++echo "Commits behind upstream:  $BEHIND"
++
++if [ "$BEHIND" -eq 0 ]; then
++    echo "Up to date with upstream/main! No new updates from Zed developers."
++else
++    echo ""
++    git log HEAD..FETCH_HEAD --oneline -n 10
++
++    AGENT_COMMITS=$(git log HEAD..FETCH_HEAD --oneline crates/agent_ui crates/acp crates/acp_thread crates/agent 2>/dev/null || true)
++    if [ -n "$AGENT_COMMITS" ]; then
++        echo ""
++        echo "=== WARNING: Upstream changes touch Agent UI / ACP crates ==="
++        echo "$AGENT_COMMITS"
++        echo "=============================================================="
++    else
++        echo ""
++        echo "No recent upstream changes in agent_ui / acp modules."
++    fi
++
++    echo ""
++    echo "To pull upstream changes and rebuild custom Zed, run:"
++    echo "  bash $REPO_DIR/scripts/sync-and-rebuild.sh"
++fi
+diff --git a/scripts/rollback.sh b/scripts/rollback.sh
+new file mode 100755
+index 0000000..3a92ca9
+--- /dev/null
++++ b/scripts/rollback.sh
+@@ -0,0 +1,13 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++echo "Rolling back to official Zed.app..."
++if [ -d "/Applications/Zed.official-backup.app" ]; then
++    pkill -x zed || true
++    rm -rf "/Applications/Zed.app"
++    cp -R "/Applications/Zed.official-backup.app" "/Applications/Zed.app"
++    echo "Rollback complete: /Applications/Zed.app restored from official backup."
++else
++    echo "Error: /Applications/Zed.official-backup.app not found!"
++    exit 1
++fi
+diff --git a/scripts/sync-and-rebuild.sh b/scripts/sync-and-rebuild.sh
+new file mode 100755
+index 0000000..e0ef1b0
+--- /dev/null
++++ b/scripts/sync-and-rebuild.sh
+@@ -0,0 +1,57 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO_DIR="$(dirname "$SCRIPT_DIR")"
++
++cd "$REPO_DIR"
++
++export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
++export CARGO_INCREMENTAL=0
++export RUSTFLAGS="-C debuginfo=0"
++
++echo "=== Zed Custom: Sync Upstream & Rebuild ==="
++
++# Check git status
++if ! git diff-index --quiet HEAD --; then
++    echo "Error: Working directory has uncommitted changes. Please commit or stash them first."
++    exit 1
++fi
++
++echo "1. Fetching upstream main..."
++git fetch upstream main
++
++CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
++echo "Current branch: $CURRENT_BRANCH"
++
++BEHIND=$(git rev-list --count HEAD..FETCH_HEAD)
++if [ "$BEHIND" -eq 0 ]; then
++    echo "Already up to date with upstream main (0 commits behind)."
++else
++    echo "2. Rebasing $CURRENT_BRANCH onto upstream main ($BEHIND new commits)..."
++    if ! git rebase FETCH_HEAD; then
++        echo ""
++        echo "Rebase conflict detected!"
++        echo "Aborting rebase to preserve branch state..."
++        git rebase --abort
++        echo "Rebase aborted cleanly. Please resolve conflicts manually in $REPO_DIR."
++        exit 1
++    fi
++fi
++
++echo "3. Verifying agent_ui compilation..."
++cargo check -p agent_ui
++
++echo "4. Building release binary..."
++cargo build --release -p zed
++
++echo "5. Installing into /Applications/Zed.app..."
++if [ -d "/Applications/Zed.app" ]; then
++    if [ ! -d "/Applications/Zed.official-backup.app" ]; then
++        cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
++    fi
++    cp "$REPO_DIR/target/release/zed" "/Applications/Zed.app/Contents/MacOS/zed"
++    echo "Installed successfully to /Applications/Zed.app/Contents/MacOS/zed!"
++fi
++
++echo "=== Sync and rebuild complete! ==="
+-- 
+2.55.0
+
