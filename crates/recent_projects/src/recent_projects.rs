@@ -193,7 +193,10 @@ pub async fn delete_recent_project(workspace_id: WorkspaceId, db: &WorkspaceDb) 
 fn get_open_folders(workspace: &Workspace, cx: &App) -> Vec<OpenFolderEntry> {
     let project = workspace.project().read(cx);
     let connection_options = project.remote_connection_options(cx);
-    let visible_worktrees: Vec<_> = project.visible_worktrees(cx).collect();
+    let visible_worktrees: Vec<_> = project
+        .visible_worktrees(cx)
+        .filter(|wt| !wt.read(cx).is_single_file())
+        .collect();
 
     if visible_worktrees.len() <= 1 {
         return Vec::new();
@@ -202,16 +205,13 @@ fn get_open_folders(workspace: &Workspace, cx: &App) -> Vec<OpenFolderEntry> {
     let active_worktree_id = if let Some(repo) = project.active_repository(cx) {
         let repo = repo.read(cx);
         let repo_path = &repo.work_directory_abs_path;
-        project.visible_worktrees(cx).find_map(|worktree| {
+        visible_worktrees.iter().find_map(|worktree| {
             let worktree_path = worktree.read(cx).abs_path();
             (worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()))
                 .then(|| worktree.read(cx).id())
         })
     } else {
-        project
-            .visible_worktrees(cx)
-            .next()
-            .map(|wt| wt.read(cx).id())
+        visible_worktrees.first().map(|wt| wt.read(cx).id())
     };
 
     let mut all_paths: Vec<PathBuf> = visible_worktrees

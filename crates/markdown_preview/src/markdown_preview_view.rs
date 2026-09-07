@@ -710,7 +710,7 @@ impl MarkdownPreviewView {
                         .as_rope()
                         .to_string()
                         .into();
-                    let selection_start = Self::selected_source_index(editor, cx)?;
+                    let selection_start = Self::selected_source_index(editor, cx);
                     Some((contents, selection_start))
                 })
             })?;
@@ -722,7 +722,13 @@ impl MarkdownPreviewView {
                         markdown.reset(contents, cx);
                     });
                     view.markdown_parse_pending = view.markdown.read(cx).is_parsing();
-                    view.sync_preview_to_source_index(selection_start, should_reveal_selection, cx);
+                    if let Some(selection_start) = selection_start {
+                        view.sync_preview_to_source_index(
+                            selection_start,
+                            should_reveal_selection,
+                            cx,
+                        );
+                    }
                     cx.emit(SearchEvent::MatchesInvalidated);
                 }
                 view.pending_update_task = None;

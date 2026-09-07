@@ -21,8 +21,9 @@ fi
 
 echo "=== Zed Custom: Sync Upstream & OOM-safe Rebuild ==="
 
-if pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
-  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run this script."
+if pgrep -f '/Applications/Katalyst.app/Contents/MacOS/zed' >/dev/null 2>&1 \
+  || pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
+  echo "Error: Katalyst is running. Quit Katalyst first (Cmd+Q), then re-run this script."
   exit 1
 fi
 
@@ -67,25 +68,32 @@ echo "5. Building with --profile $PROFILE -j $JOBS ..."
 cargo build --profile "$PROFILE" -p zed -j "$JOBS"
 
 SRC="$REPO_DIR/target/$PROFILE/zed"
-echo "6. Installing into /Applications/Zed.app..."
-if [[ -d "/Applications/Zed.app" ]]; then
-  if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
+APP_BUNDLE="/Applications/Katalyst.app"
+if [[ ! -d "$APP_BUNDLE" && -d "/Applications/Zed.app" ]]; then
+  APP_BUNDLE="/Applications/Zed.app"
+fi
+APP_BIN="$APP_BUNDLE/Contents/MacOS/zed"
+echo "6. Installing into $APP_BUNDLE..."
+if [[ -d "$APP_BUNDLE" ]]; then
+  if [[ ! -d "/Applications/Zed.official-backup.app" && -d "/Applications/Zed.app" ]]; then
     cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
   fi
-  cp "$SRC" "/Applications/Zed.app/Contents/MacOS/zed"
-  # Preserve Katalyst branding (name and icon)
-  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
-  plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
-  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
+  cp "$SRC" "$APP_BIN"
+  # Preserve Katalyst branding (name, icon, App Switcher id)
+  plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleIconFile -string "Katalyst.icns" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleIdentifier -string "dev.katalyst.Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Katalyst.icns 2>/dev/null || true
-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Zed.icns 2>/dev/null || true
+    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Katalyst.icns" 2>/dev/null || true
+    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Zed.icns" 2>/dev/null || true
   fi
-  echo "Re-signing /Applications/Zed.app (ad-hoc)..."
-  codesign --force --deep --sign - /Applications/Zed.app
-  echo "Installed and signed successfully to /Applications/Zed.app/Contents/MacOS/zed"
+  echo "Re-signing $APP_BUNDLE (ad-hoc)..."
+  codesign --force --deep --sign - "$APP_BUNDLE"
+  ln -sfn "$APP_BUNDLE" "/Applications/Zed.app" 2>/dev/null || true
+  echo "Installed and signed successfully to $APP_BIN"
 else
-  echo "Warning: /Applications/Zed.app missing; binary at $SRC"
+  echo "Warning: $APP_BUNDLE missing; binary at $SRC"
 fi
 
-echo "=== Sync and rebuild complete! Do not reopen Zed until this finished. ==="
+echo "=== Sync and rebuild complete! Do not reopen Katalyst until this finished. ==="

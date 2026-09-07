@@ -22,8 +22,9 @@ fi
 
 echo "=== Zed Custom: safe-rebuild (profile=$PROFILE, -j$JOBS) ==="
 
-if pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
-  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run:"
+if pgrep -f '/Applications/Katalyst.app/Contents/MacOS/zed' >/dev/null 2>&1 \
+  || pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
+  echo "Error: Katalyst is running. Quit Katalyst first (Cmd+Q), then re-run:"
   echo "  bash $SCRIPT_DIR/safe-rebuild.sh"
   exit 1
 fi
@@ -51,10 +52,11 @@ fi
 if [[ -d "$APP_BUNDLE" ]]; then
   echo "Installing $SRC -> $APP_BIN"
   cp "$SRC" "$APP_BIN"
-  # Preserve Katalyst branding (name and icon)
+  # Preserve Katalyst branding (name, icon, App Switcher id)
   plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   plutil -replace CFBundleName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   plutil -replace CFBundleIconFile -string "Katalyst.icns" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleIdentifier -string "dev.katalyst.Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
     cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Katalyst.icns" 2>/dev/null || true
     cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Zed.icns" 2>/dev/null || true

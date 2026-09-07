@@ -60,6 +60,7 @@ pub struct ThreadItem {
     worktrees: Vec<ThreadItemWorktreeInfo>,
     is_remote: bool,
     archived: bool,
+    pinned: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>,
     action_slot: Option<AnyElement>,
@@ -95,6 +96,7 @@ impl ThreadItem {
             worktrees: Vec::new(),
             is_remote: false,
             archived: false,
+            pinned: false,
             on_click: None,
             on_hover: Box::new(|_, _, _| {}),
             action_slot: None,
@@ -206,6 +208,11 @@ impl ThreadItem {
 
     pub fn archived(mut self, archived: bool) -> Self {
         self.archived = archived;
+        self
+    }
+
+    pub fn pinned(mut self, pinned: bool) -> Self {
+        self.pinned = pinned;
         self
     }
 
@@ -422,7 +429,9 @@ impl RenderOnce for ThreadItem {
             || has_project_paths
             || has_worktree
             || has_diff_stats
-            || has_timestamp;
+            || has_timestamp
+            || self.archived
+            || self.pinned;
 
         v_flex()
             .id(self.id.clone())
@@ -491,6 +500,13 @@ impl RenderOnce for ThreadItem {
                         .when(self.archived, |this| {
                             this.child(
                                 Icon::new(IconName::Archive).size(IconSize::XSmall).color(
+                                    Color::Custom(cx.theme().colors().icon_muted.opacity(0.5)),
+                                ),
+                            )
+                        })
+                        .when(self.pinned, |this| {
+                            this.child(
+                                Icon::new(IconName::Pin).size(IconSize::XSmall).color(
                                     Color::Custom(cx.theme().colors().icon_muted.opacity(0.5)),
                                 ),
                             )
