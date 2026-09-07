@@ -150,6 +150,35 @@ if [[ ! -f "$HOME/.omp/agent/mcp.json" ]]; then
   run_cmd cp "$SCRIPT_DIR/config/omp/mcp.json.example" "$HOME/.omp/agent/mcp.json"
 fi
 
+# 5b. Plan auto-open hook (hard path — do not rely on prompt rules alone)
+echo "5b. Installing plan auto-open OMP hook..."
+run_cmd mkdir -p "$HOME/.omp/agent/hooks/pre"
+if [[ -f "$SCRIPT_DIR/config/omp/hooks/pre/plan-auto-open.ts" ]]; then
+  run_cmd cp "$SCRIPT_DIR/config/omp/hooks/pre/plan-auto-open.ts" "$HOME/.omp/agent/hooks/pre/plan-auto-open.ts"
+  if [[ -f "$HOME/.omp/agent/config.yml" ]] && ! grep -Fq "plan-auto-open.ts" "$HOME/.omp/agent/config.yml"; then
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "[dry-run] register plan-auto-open.ts in config.yml extensions"
+    else
+      python3 - <<'PY'
+from pathlib import Path
+p = Path.home() / ".omp/agent/config.yml"
+text = p.read_text()
+line = "  - ~/.omp/agent/hooks/pre/plan-auto-open.ts\n"
+if "plan-auto-open.ts" in text:
+    print("   ✓ plan-auto-open already registered")
+elif "extensions:\n" in text:
+    p.write_text(text.replace("extensions:\n", "extensions:\n" + line, 1))
+    print("   ✓ Registered plan-auto-open.ts in config.yml extensions")
+else:
+    p.write_text(text.rstrip() + "\nextensions:\n" + line)
+    print("   ✓ Added extensions block with plan-auto-open.ts")
+PY
+    fi
+  else
+    echo "   ✓ plan-auto-open.ts present"
+  fi
+fi
+
 # 6. Installing Universal Engineering Skills
 echo "6. Installing universal engineering skills to ~/.katalyst/skills/..."
 for skill_dir in "$SCRIPT_DIR/skills"/*; do
