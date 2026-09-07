@@ -42,7 +42,7 @@ if [[ -t 0 ]]; then
       echo "✓ Pushed successfully!"
     else
       echo "Tip: Add your GitHub remote with:"
-      echo "  git remote add origin https://github.com/wisnuandrian325/katalyst.git"
+      echo "  git remote add origin https://github.com/Envy-7z/katalyst.git"
       echo "  git push -u origin main"
     fi
   fi
