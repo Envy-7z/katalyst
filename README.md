@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/katalyst-preview.png" width="920" alt="Katalyst Agentic IDE Preview" />
+  <img src="assets/katalyst-preview.png?v=20260908" width="920" alt="Katalyst Agentic IDE Preview" />
 </p>
 
 ---
