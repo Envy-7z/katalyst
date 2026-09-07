@@ -325,6 +325,16 @@ Yes! Katalyst comes with `"base_keymap": "VSCode"` enabled by default, so all st
 
 All skills are stored in `~/.katalyst/skills/`. You can add custom `.md` skills anytime and the agent will automatically discover them.
 </details>
+---
+
+## 💬 Feedback, Feature Requests & Community
+
+Katalyst is an evolving, community-driven project. We'd love to hear your thoughts, ideas, and feedback!
+
+* 💡 **Feature Requests & Ideas**: Have an idea for a new agent skill, workflow, or tool integration? Open an issue on [GitHub Issues](https://github.com/Envy-7z/katalyst/issues).
+* 🐛 **Bug Reports**: Encountered an issue with installation or UI? Submit a bug report via [GitHub Issues](https://github.com/Envy-7z/katalyst/issues).
+* 🤝 **Direct Contact & Collaboration**: Want to connect, collaborate, or share feedback directly with the creator? Reach out on [LinkedIn: Wisnu Andrian](https://www.linkedin.com/in/wisnuandriaan/).
+* ⭐ **Support the Project**: If Katalyst speeds up your development workflow, consider giving the repository a star on GitHub!
 
 ---
 
@@ -333,4 +343,4 @@ All skills are stored in `~/.katalyst/skills/`. You can add custom `.md` skills 
 * Katalyst modifications and tooling are distributed under the **GNU General Public License v3.0 (GPL-3.0)**.
 * Core editor architecture copyright © [Zed Industries, Inc.](https://zed.dev)
 * Agent runtime powered by [OMP](https://github.com/can1357/oh-my-pi).
-* Created with ❤️ by [Wisnuu](https://github.com/Envy-7z).
+* Designed and crafted with ❤️ by [Wisnuu](https://github.com/Envy-7z).
