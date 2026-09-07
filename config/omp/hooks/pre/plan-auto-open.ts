@@ -1,5 +1,5 @@
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, isAbsolute, join, resolve } from "path";
 import { execFile } from "child_process";
@@ -45,6 +45,19 @@ function primaryWritePlanPath(
   for (const key of ["path", "file_path", "filePath"] as const) {
     const v = input[key];
     if (typeof v === "string") {
+      if (v.startsWith("local://") && v.endsWith(".plan.md")) {
+        const slug = v.slice(8);
+        const mirrorPath = join(HOME, ".cursor/plans", slug);
+        if (typeof input.content === "string") {
+          try {
+            mkdirSync(dirname(mirrorPath), { recursive: true });
+            writeFileSync(mirrorPath, input.content, "utf-8");
+          } catch {
+            // non-fatal
+          }
+        }
+        return mirrorPath;
+      }
       const n = normalizePlanPath(v);
       if (n) return n;
     }
@@ -111,7 +124,7 @@ function openPlan(path: string, force: boolean): void {
       return;
     }
     const bin = cliCandidates[idx];
-    execFile(bin, ["-a", normalized], { timeout: 5000 }, (err) => {
+    execFile(bin, [normalized], { timeout: 5000 }, (err) => {
       if (err) tryOpen(idx + 1);
     });
   };
@@ -144,6 +157,9 @@ export default function planAutoOpen(pi: HookAPI): void {
       path: primary,
       existedBefore: existsSync(primary),
     };
+
+    // Open immediately in background so pane is ready BEFORE xd://propose elicitation appears!
+    openPlan(primary, true);
 
     if (callId) {
       pendingByCall.set(callId, pending);
