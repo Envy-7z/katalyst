@@ -1,7 +1,7 @@
 From e32dc005ad83649d73d4ad4f66a34b4377466b17 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Sun, 6 Sep 2026 16:06:39 +0700
-Subject: [PATCH 3/8] fix(gpui_apple): enable runtime_shaders by default for
+Subject: [PATCH 03/10] fix(gpui_apple): enable runtime_shaders by default for
  CLI toolchain
 
 Allow building on macOS systems with only Command Line Tools by using

@@ -1,8 +1,8 @@
 From 4cdbf6c51b8eb2c1a9d6e3137fb825d560ebc7ef Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 13:43:29 +0700
-Subject: [PATCH 5/8] feat(agent_ui): scroll tall elicitation cards and restore
- canceled prompts
+Subject: [PATCH 05/10] feat(agent_ui): scroll tall elicitation cards and
+ restore canceled prompts
 
 Cap pending elicitation forms at 420px with an internal body scroll so
 Submit/Decline stay reachable, and cap the sticky banner at 480px.
@@ -152,7 +152,7 @@ index eb116d7..8231181 100644
      }
  
 +    /// Stop generation and, when the composer is empty, restore the in-flight
-+    /// prompt so the user can refine it (Katalyst-style stop/cancel recovery).
++    /// prompt so the user can refine it (Cursor-style stop/cancel recovery).
 +    pub fn cancel_generation_and_restore_prompt(
 +        &mut self,
 +        window: &mut Window,

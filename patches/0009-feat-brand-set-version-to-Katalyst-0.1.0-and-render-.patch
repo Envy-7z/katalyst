@@ -1,0 +1,129 @@
+From 7202e03978907b9b21e9c75fc8293c52150cf5ee Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Mon, 7 Sep 2026 15:31:27 +0700
+Subject: [PATCH 09/10] feat(brand): set version to Katalyst 0.1.0 and render
+ custom logo in About modal
+
+---
+ crates/zed/src/zed.rs   | 32 +++++++++-----------------------
+ scripts/safe-rebuild.sh | 29 +++++++++++++----------------
+ 2 files changed, 22 insertions(+), 39 deletions(-)
+
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 09165dc..f20afb4 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -67,7 +67,7 @@ use project::{
+ use project_panel::ProjectPanel;
+ use quick_action_bar::QuickActionBar;
+ use recent_projects::open_remote_project;
+-use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
++use release_channel::{AppCommitSha, ReleaseChannel};
+ use rope::Rope;
+ use search::project_search::ProjectSearchBar;
+ use settings::{
+@@ -1523,18 +1523,8 @@ fn initialize_pane(
+ }
+ 
+ fn open_about_window(cx: &mut App) {
+-    fn about_window_icon(release_channel: ReleaseChannel) -> Arc<Image> {
+-        let bytes = match release_channel {
+-            ReleaseChannel::Dev => include_bytes!("../resources/app-icon-dev.png").as_slice(),
+-            ReleaseChannel::Nightly => {
+-                include_bytes!("../resources/app-icon-nightly.png").as_slice()
+-            }
+-            ReleaseChannel::Preview => {
+-                include_bytes!("../resources/app-icon-preview.png").as_slice()
+-            }
+-            ReleaseChannel::Stable => include_bytes!("../resources/app-icon.png").as_slice(),
+-        };
+-
++    fn about_window_icon(_release_channel: ReleaseChannel) -> Arc<Image> {
++        let bytes = include_bytes!("../../../assets/logo.png").as_slice();
+         Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec()))
+     }
+ 
+@@ -1551,21 +1541,17 @@ fn open_about_window(cx: &mut App) {
+     impl AboutWindow {
+         fn new(cx: &mut Context<Self>) -> Self {
+             let release_channel = ReleaseChannel::global(cx);
+-            let _release_channel_name = release_channel.display_name();
+-            let full_version: SharedString = AppVersion::global(cx).to_string().into();
+-            let version = env!("CARGO_PKG_VERSION");
+-
+-            let _debug = if cfg!(debug_assertions) {
+-                "(debug)"
+-            } else {
+-                ""
+-            };
+-            let message: SharedString = format!("Katalyst {version}").into();
+             let commit = AppCommitSha::try_global(cx)
+                 .map(|sha| sha.full())
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
++            let katalyst_version = "0.1.0";
++            let message: SharedString = format!("Katalyst {katalyst_version}").into();
++            let commit_short = commit.as_deref().unwrap_or("dev");
++            let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };
++            let full_version: SharedString = format!("{katalyst_version} ({commit_prefix})").into();
++
+             Self {
+                 focus_handle: cx.focus_handle(),
+                 ok_entry: NavigableEntry::focusable(cx),
+diff --git a/scripts/safe-rebuild.sh b/scripts/safe-rebuild.sh
+index b0677ff..fc18786 100755
+--- a/scripts/safe-rebuild.sh
++++ b/scripts/safe-rebuild.sh
+@@ -6,8 +6,8 @@ set -euo pipefail
+ 
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ REPO_DIR="$(dirname "$SCRIPT_DIR")"
+-APP_BIN="/Applications/Zed.app/Contents/MacOS/zed"
+-PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
++APP_BUNDLE="/Applications/Katalyst.app"
++APP_BIN="$APP_BUNDLE/Contents/MacOS/zed"
+ JOBS="${ZED_BUILD_JOBS:-2}"
+ MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
+ 
+@@ -48,26 +48,23 @@ if [[ ! -x "$SRC" ]]; then
+   exit 1
+ fi
+ 
+-if [[ -d "/Applications/Zed.app" ]]; then
+-  if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
+-    echo "Backing up official app once -> /Applications/Zed.official-backup.app"
+-    cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
+-  fi
++if [[ -d "$APP_BUNDLE" ]]; then
+   echo "Installing $SRC -> $APP_BIN"
+   cp "$SRC" "$APP_BIN"
+   # Preserve Katalyst branding (name and icon)
+-  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
+-  plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
+-  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
++  plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
++  plutil -replace CFBundleName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
++  plutil -replace CFBundleIconFile -string "Katalyst.icns" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+   if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
+-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Katalyst.icns 2>/dev/null || true
+-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Zed.icns 2>/dev/null || true
++    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Katalyst.icns" 2>/dev/null || true
++    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Zed.icns" 2>/dev/null || true
+   fi
+-  echo "Re-signing /Applications/Zed.app (ad-hoc)..."
+-  codesign --force --deep --sign - /Applications/Zed.app
+-  echo "Installed and signed. Safe to reopen Zed now."
++  echo "Re-signing $APP_BUNDLE (ad-hoc)..."
++  codesign --force --deep --sign - "$APP_BUNDLE"
++  ln -sfn "$APP_BUNDLE" "/Applications/Zed.app" 2>/dev/null || true
++  echo "Installed and signed. Safe to reopen Katalyst now."
+ else
+-  echo "Warning: /Applications/Zed.app missing; binary at $SRC"
++  echo "Warning: $APP_BUNDLE missing; binary at $SRC"
+ fi
+ 
+ echo "=== safe-rebuild complete ==="
+-- 
+2.55.0
+
