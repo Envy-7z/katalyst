@@ -1,7 +1,7 @@
 From 087e1a38b91a0cf40a225aa43f549e5879bb8532 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 13:43:29 +0700
-Subject: [PATCH 06/10] feat(zed): add Build Locally toolbar for .plan.md files
+Subject: [PATCH 06/11] feat(zed): add Build Locally toolbar for .plan.md files
 
 Auto-open *.plan.md in markdown preview, expose model selector + Build
 Locally on the quick action bar, and submit /go <plan> into the Agent
@@ -292,7 +292,7 @@ index 0000000..42ae75f
 +
 +        let workspace_handle = self.workspace.clone();
 +
-+        // Model Selector Button (Katalyst-style "[ Auto ˅ ]")
++        // Model Selector Button (Modern-like "[ Auto ˅ ]")
 +        let active_model_name = workspace_handle
 +            .upgrade()
 +            .and_then(|ws| ws.read(cx).panel::<AgentPanel>(cx))

@@ -1,7 +1,7 @@
 From 4e1ae7fb01d70d5b9a23ac1e398e0f24aebf57c7 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 14:23:08 +0700
-Subject: [PATCH 07/10] build(scripts): OOM-safe sync and weekly update helpers
+Subject: [PATCH 07/11] build(scripts): OOM-safe sync and weekly update helpers
 
 Prefer release-fast builds with disk/Zed-running guards, add
 update-all.sh for OMP+Zed updates, and notify-updates.sh for Monday

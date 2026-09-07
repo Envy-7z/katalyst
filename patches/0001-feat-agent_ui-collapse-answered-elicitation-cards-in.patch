@@ -1,7 +1,7 @@
 From 322aa5cabbb6941ea05231b5cee00ab48de197b0 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Sun, 6 Sep 2026 15:48:48 +0700
-Subject: [PATCH 01/10] feat(agent_ui): collapse answered elicitation cards
+Subject: [PATCH 01/11] feat(agent_ui): collapse answered elicitation cards
  into compact badges
 
 Collapse completed, declined, and canceled elicitation cards into a

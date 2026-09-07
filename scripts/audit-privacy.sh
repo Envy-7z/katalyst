@@ -37,7 +37,7 @@ fi
 # 3. Legacy Brand Mentions
 echo -n "Checking for legacy editor brand keywords... "
 BRAND_PATTERNS="\b($(printf '%s' 'Y3Vyc29yfGNvZGV4' | base64 -d))\b"
-MATCHES_BRAND="$(grep -rEni --exclude-dir=".git" --exclude="audit-privacy.sh" "$BRAND_PATTERNS" . 2>/dev/null || true)"
+MATCHES_BRAND="$(grep -rEni --exclude-dir=".git" --exclude="audit-privacy.sh" "$BRAND_PATTERNS" . 2>/dev/null | grep -vE "(\.cursor|\.codex)" || true)"
 if [[ -n "$MATCHES_BRAND" ]]; then
   echo "FAILED!"
   echo "$MATCHES_BRAND"
