@@ -923,7 +923,7 @@ fn render_form_preview(
         }
     }
 
-    render_preview_card(entry_ix, request, status, form_state.as_ref(), cx)
+    render_preview_card(entry_ix, request, status, form_state.as_ref(), window, cx)
 }
 
 fn preview_url() -> &'static str {
@@ -933,7 +933,7 @@ fn preview_url() -> &'static str {
 fn render_url_preview(
     entry_ix: usize,
     status: ElicitationStatus,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let request = acp::CreateElicitationRequest::new(
@@ -945,7 +945,7 @@ fn render_url_preview(
         "Authorize Zed in your browser to finish signing in.",
     );
 
-    render_preview_card(entry_ix, request, status, None, cx)
+    render_preview_card(entry_ix, request, status, None, window, cx)
 }
 
 fn render_preview_card(
@@ -953,6 +953,7 @@ fn render_preview_card(
     request: acp::CreateElicitationRequest,
     status: ElicitationStatus,
     form_state: Option<&ElicitationFormState>,
+    window: &mut Window,
     cx: &App,
 ) -> AnyElement {
     let elicitation = Elicitation {
@@ -972,7 +973,7 @@ fn render_preview_card(
                 form_state,
                 ElicitationCardHandlers::noop(),
             )
-            .render(cx),
+            .render(window, cx),
         )
         .into_any_element()
 }
@@ -1450,7 +1451,7 @@ impl<'a> ElicitationCard<'a> {
         }
     }
 
-    pub(crate) fn render(self, cx: &App) -> Div {
+    pub(crate) fn render(self, _window: &Window, cx: &App) -> Div {
         let border_color = cx.theme().colors().border.opacity(0.8);
         let header_background = cx
             .theme()
@@ -1498,6 +1499,8 @@ impl<'a> ElicitationCard<'a> {
             _ => body,
         };
 
+        // Cap height and scroll the form body so Submit/Decline/Cancel stay reachable
+        // on tall multi-question OMP ask forms.
         v_flex()
             .mx_5()
             .my_1p5()
@@ -1505,6 +1508,7 @@ impl<'a> ElicitationCard<'a> {
             .border_1()
             .border_color(border_color)
             .overflow_hidden()
+            .max_h(rems_from_px(420_f32))
             .child(
                 h_flex()
                     .h_8()
@@ -1534,7 +1538,15 @@ impl<'a> ElicitationCard<'a> {
                             .color(Color::Muted),
                     ),
             )
-            .child(body)
+            .child(
+                v_flex()
+                    .id(("elicitation-body-scroll", self.entry_ix))
+                    .min_h_0()
+                    .flex_1()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .child(body),
+            )
             .when(is_pending || is_accepted_url, |this| {
                 this.child(self.render_actions(cx))
             })

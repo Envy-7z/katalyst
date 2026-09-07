@@ -2403,6 +2403,7 @@ impl ConversationView {
         &self,
         connection: &Rc<dyn AgentConnection>,
         view: WeakEntity<Self>,
+        window: &Window,
         cx: &App,
     ) -> Vec<AnyElement> {
         let Some(store) = connection.request_elicitations() else {
@@ -2430,7 +2431,7 @@ impl ConversationView {
                     self.request_elicitation_form_states.get(&elicitation.id),
                     handlers.clone(),
                 )
-                .render(cx)
+                .render(window, cx)
                 .into_any_element()
             })
             .collect()
@@ -3465,7 +3466,7 @@ impl Render for ConversationView {
                 this.children(request_elicitation_connection.as_ref().map_or_else(
                     Vec::new,
                     |connection| {
-                        self.render_request_elicitations(connection, cx.entity().downgrade(), cx)
+                        self.render_request_elicitations(connection, cx.entity().downgrade(), window, cx)
                     },
                 ))
             })

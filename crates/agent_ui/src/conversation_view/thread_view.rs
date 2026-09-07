@@ -1133,7 +1133,7 @@ impl ThreadView {
             MessageEditorEvent::SendImmediately => self.interrupt_and_send(window, cx),
             MessageEditorEvent::Cancel => {
                 if !self.close_thread_search(window, cx) {
-                    self.cancel_generation(cx);
+                    self.cancel_generation_and_restore_prompt(window, cx);
                 }
             }
             MessageEditorEvent::Focus => {
@@ -1976,6 +1976,27 @@ impl ThreadView {
         self._cancel_task = Some(self.thread.update(cx, |thread, cx| thread.cancel(cx)));
         self.sync_generating_indicator(cx);
         cx.notify();
+    }
+
+    /// Stop generation and, when the composer is empty, restore the in-flight
+    /// prompt so the user can refine it (Cursor-style stop/cancel recovery).
+    pub fn cancel_generation_and_restore_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_generation(cx);
+
+        if !self.message_editor.read(cx).is_empty(cx) {
+            return;
+        }
+
+        if let Some(message) = self.in_flight_prompt.take() {
+            self.message_editor.update(cx, |editor, cx| {
+                editor.set_message(message, window, cx);
+            });
+            self.message_editor.focus_handle(cx).focus(window, cx);
+        }
     }
 
     pub fn retry_generation(&mut self, cx: &mut Context<Self>) {
@@ -5413,7 +5434,9 @@ impl ThreadView {
                 .tooltip(move |_window, cx| {
                     Tooltip::for_action("Stop Generation", &editor::actions::Cancel, cx)
                 })
-                .on_click(cx.listener(|this, _event, _, cx| this.cancel_generation(cx)))
+                .on_click(cx.listener(|this, _event, window, cx| {
+                    this.cancel_generation_and_restore_prompt(window, cx)
+                }))
                 .into_any_element()
         } else {
             let send_icon = if is_generating {
@@ -6614,7 +6637,7 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         elicitation: &Elicitation,
-        _window: &Window,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         ElicitationCard::new(
@@ -6624,7 +6647,7 @@ impl ThreadView {
             self.elicitation_form_states.get(&elicitation.id),
             self.elicitation_card_handlers(cx),
         )
-        .render(cx)
+        .render(window, cx)
     }
 
     fn render_active_elicitation_banner(
@@ -6650,6 +6673,8 @@ impl ThreadView {
         Some(
             v_flex()
                 .w_full()
+                .min_h_0()
+                .max_h(rems_from_px(480_f32))
                 .px_4()
                 .py_2()
                 .bg(cx.theme().colors().elevated_surface_background)
@@ -7016,7 +7041,11 @@ impl ThreadView {
         self.message_editor.read(cx).set_local_commands(commands);
     }
 
-    fn render_request_elicitations(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn render_request_elicitations(
+        &self,
+        window: &mut Window,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let server_view = self.server_view.clone();
         let handlers_view = server_view.clone();
         server_view
@@ -7024,7 +7053,7 @@ impl ThreadView {
                 let Some(connection) = server_view.request_elicitation_connection() else {
                     return Vec::new();
                 };
-                server_view.render_request_elicitations(&connection, handlers_view, cx)
+                server_view.render_request_elicitations(&connection, handlers_view, window, cx)
             })
             .unwrap_or_default()
     }
@@ -12211,9 +12240,9 @@ impl Render for ThreadView {
         v_flex()
             .key_context("AcpThread")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &menu::Cancel, _, cx| {
+            .on_action(cx.listener(|this, _: &menu::Cancel, window, cx| {
                 if this.parent_session_id.is_none() {
-                    this.cancel_generation(cx);
+                    this.cancel_generation_and_restore_prompt(window, cx);
                 }
             }))
             .on_action(cx.listener(
@@ -12225,7 +12254,13 @@ impl Render for ThreadView {
             .on_action(
                 cx.listener(|this, _: &editor::actions::Cancel, window, cx| {
                     if !this.close_thread_search(window, cx) {
-                        cx.propagate();
+                        let is_generating =
+                            this.thread.read(cx).status() != ThreadStatus::Idle;
+                        if is_generating {
+                            this.cancel_generation_and_restore_prompt(window, cx);
+                        } else {
+                            cx.propagate();
+                        }
                     }
                 }),
             )
@@ -12540,7 +12575,7 @@ impl Render for ThreadView {
                 |this, version| this.child(self.render_new_version_callout(&version, cx)),
             )
             .children(self.render_token_limit_callout(cx))
-            .children(self.render_request_elicitations(cx))
+            .children(self.render_request_elicitations(window, cx))
             .child(self.render_message_editor(window, cx))
     }
 }
