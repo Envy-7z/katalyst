@@ -30,18 +30,25 @@ It gives you the best of both worlds:
 
 ---
 
-## ⚡ 30-Second Quickstart
+## ⚡ 1-Line Quickstart (macOS)
 
-Open your terminal on macOS and run:
+Open your terminal and paste this single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Envy-7z/katalyst/main/install.sh | bash
+```
+
+> [!TIP]
+> **Zero Manual Setup**: The installer automatically detects your Mac, installs OMP and Katalyst/Zed if missing, links optimized configurations, and configures 12 autonomous engineering skills.
+
+<details>
+<summary><strong>Manual Clone Option (for contributors & developers)</strong></summary>
 
 ```bash
 git clone https://github.com/Envy-7z/katalyst.git ~/.katalyst
 cd ~/.katalyst && ./install.sh
 ```
-
-> [!TIP]
-> The installer automatically detects your environment, ensures Homebrew and OMP are ready, links crash-free configurations, and installs 12 universal engineering skills.
-
+</details>
 ---
 
 ## 🧠 Architecture Overview

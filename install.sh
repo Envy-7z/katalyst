@@ -5,18 +5,24 @@
 # ==============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KATALYST_HOME="${KATALYST_HOME:-$HOME/.katalyst}"
 DRY_RUN=0
 
-if [[ "${1:-}" == "--dry-run" || "${1:-}" == "-n" ]]; then
-  DRY_RUN=1
-  echo "[DRY-RUN MODE ENABLED - No changes will be made]"
-fi
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" || "$arg" == "-n" ]]; then
+    DRY_RUN=1
+  fi
+done
 
 echo "================================================="
 echo "  ⚡ KATALYST: Agentic Development Environment"
 echo "================================================="
 echo ""
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[DRY-RUN MODE ENABLED - No changes will be made]"
+  echo ""
+fi
 
 run_cmd() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -25,6 +31,20 @@ run_cmd() {
     "$@"
   fi
 }
+
+# 0. Detect if executed via curl | bash (piped)
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]:-}" == "bash" || "${BASH_SOURCE[0]:-}" == "/bin/bash" || "${BASH_SOURCE[0]:-}" == "/dev/fd/"* ]]; then
+  SCRIPT_DIR="$KATALYST_HOME"
+  if [[ ! -d "$KATALYST_HOME" ]]; then
+    echo "0. Downloading Katalyst into $KATALYST_HOME..."
+    run_cmd git clone https://github.com/Envy-7z/katalyst.git "$KATALYST_HOME"
+  else
+    echo "0. Updating existing Katalyst in $KATALYST_HOME..."
+    run_cmd git -C "$KATALYST_HOME" pull --ff-only 2>/dev/null || true
+  fi
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
 # 1. Prerequisite Checks
 echo "1. Checking prerequisites..."
@@ -43,18 +63,43 @@ else
   echo "   ✓ OMP is installed ($(omp --version 2>/dev/null || echo 'active'))."
 fi
 
-# 3. Directory Structure
-echo "3. Setting up configuration directories..."
+# 3. Editor Installation & Branding
+echo "3. Checking Editor (Katalyst / Zed)..."
+if [[ ! -d "/Applications/Katalyst.app" && ! -d "/Applications/Zed.app" ]]; then
+  echo "   Installing Zed Editor via Homebrew..."
+  run_cmd brew install --cask zed
+fi
+
+if [[ -d "/Applications/Zed.app" && ! -d "/Applications/Katalyst.app" ]]; then
+  echo "   Promoting bundle to /Applications/Katalyst.app..."
+  run_cmd mv "/Applications/Zed.app" "/Applications/Katalyst.app"
+  run_cmd ln -sfn "/Applications/Katalyst.app" "/Applications/Zed.app"
+fi
+
+if [[ -d "/Applications/Katalyst.app" ]]; then
+  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  plutil -replace CFBundleName -string "Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  if [[ -f "$SCRIPT_DIR/assets/Katalyst.icns" ]]; then
+    run_cmd cp "$SCRIPT_DIR/assets/Katalyst.icns" "/Applications/Katalyst.app/Contents/Resources/Katalyst.icns" 2>/dev/null || true
+    run_cmd cp "$SCRIPT_DIR/assets/Katalyst.icns" "/Applications/Katalyst.app/Contents/Resources/Zed.icns" 2>/dev/null || true
+  fi
+  run_cmd codesign --force --sign - /Applications/Katalyst.app 2>/dev/null || true
+  run_cmd touch /Applications/Katalyst.app 2>/dev/null || true
+  echo "   ✓ Katalyst.app is ready in /Applications/."
+fi
+
+# 4. Directory Structure
+echo "4. Setting up configuration directories..."
 run_cmd mkdir -p "$HOME/.config/zed"
 run_cmd mkdir -p "$HOME/.omp/agent"
 run_cmd mkdir -p "$HOME/.katalyst/skills"
 run_cmd mkdir -p "$HOME/.katalyst/plans"
 run_cmd mkdir -p "$HOME/.local/bin"
 
-# 4. Linking Configurations
-echo "4. Linking Katalyst configs..."
+# 5. Linking Configurations
+echo "5. Linking Katalyst configs..."
 
-# Backup existing config if real file and not already pointing to katalyst
 backup_and_link() {
   local src="$1"
   local dest="$2"
@@ -75,8 +120,8 @@ if [[ ! -f "$HOME/.omp/agent/mcp.json" ]]; then
   run_cmd cp "$SCRIPT_DIR/config/omp/mcp.json.example" "$HOME/.omp/agent/mcp.json"
 fi
 
-# 5. Installing Universal Engineering Skills
-echo "5. Installing universal engineering skills to ~/.katalyst/skills/..."
+# 6. Installing Universal Engineering Skills
+echo "6. Installing universal engineering skills to ~/.katalyst/skills/..."
 for skill_dir in "$SCRIPT_DIR/skills"/*; do
   if [[ -d "$skill_dir" ]]; then
     skill_name="$(basename "$skill_dir")"
@@ -84,16 +129,16 @@ for skill_dir in "$SCRIPT_DIR/skills"/*; do
     echo "   ✓ Skill: $skill_name"
   fi
 done
-# Link skills into OMP agent runtime directory
+
 run_cmd ln -sfn "$HOME/.katalyst/skills" "$HOME/.omp/agent/skills"
 
-# 6. Linking Binary Tools
-echo "6. Linking Katalyst binaries into ~/.local/bin/..."
+# 7. Linking Binary Tools
+echo "7. Linking Katalyst binaries into ~/.local/bin/..."
 run_cmd ln -sfn "$SCRIPT_DIR/bin/katalyst-update" "$HOME/.local/bin/katalyst-update"
 run_cmd ln -sfn "$SCRIPT_DIR/bin/notify-updates.sh" "$HOME/.local/bin/katalyst-notify"
 
-# 7. Setup Daily LaunchAgent
-echo "7. Configuring daily update checker..."
+# 8. Setup Daily LaunchAgent
+echo "8. Configuring daily update checker..."
 PLIST_PATH="$HOME/Library/LaunchAgents/com.katalyst.update-check.plist"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] configure LaunchAgent at $PLIST_PATH"
@@ -133,7 +178,7 @@ echo "  ✅ KATALYST INSTALLATION COMPLETE!"
 echo "================================================="
 echo ""
 echo "To get started:"
-echo "  1. Open Katalyst (or Zed):   open -a Katalyst (or zed .)"
+echo "  1. Open Katalyst:            open -a Katalyst (or zed .)"
 echo "  2. Open Agent Panel:         Cmd + Shift + A"
 echo "  3. Open any *.plan.md file:  Review and click [ ▶ Build Locally ]"
 echo "  4. Check for updates:        katalyst-update"
