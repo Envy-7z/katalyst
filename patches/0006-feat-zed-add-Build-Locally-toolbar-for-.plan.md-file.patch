@@ -292,7 +292,7 @@ index 0000000..42ae75f
 +
 +        let workspace_handle = self.workspace.clone();
 +
-+        // Model Selector Button (Cursor-like "[ Auto ˅ ]")
++        // Model Selector Button (Katalyst-style "[ Auto ˅ ]")
 +        let active_model_name = workspace_handle
 +            .upgrade()
 +            .and_then(|ws| ws.read(cx).panel::<AgentPanel>(cx))
