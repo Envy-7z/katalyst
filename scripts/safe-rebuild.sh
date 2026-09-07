@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Sync upstream main (optional rebase) then OOM-safe rebuild/install.
-# On 16GB Macs: never thinLTO release while Zed GUI is open.
-# Default build profile is release-fast (lto=false). Override: ZED_BUILD_PROFILE=release
+# OOM-safe local rebuild + install for custom Zed on 16GB Macs.
+# NEVER run cargo release thinLTO while the Zed GUI is open — that ballooned
+# to ~50GB swap and Force Quit. Prefer release-fast (lto=false) + -j2.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+APP_BIN="/Applications/Zed.app/Contents/MacOS/zed"
 PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
 JOBS="${ZED_BUILD_JOBS:-2}"
 MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
@@ -19,60 +20,41 @@ if [[ "$PROFILE" == "release" ]]; then
   export CARGO_PROFILE_RELEASE_LTO=false
 fi
 
-echo "=== Zed Custom: Sync Upstream & OOM-safe Rebuild ==="
+echo "=== Zed Custom: safe-rebuild (profile=$PROFILE, -j$JOBS) ==="
 
 if pgrep -f '/Applications/Zed.app/Contents/MacOS/zed' >/dev/null 2>&1; then
-  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run this script."
+  echo "Error: Zed is running. Quit Zed first (Cmd+Q), then re-run:"
+  echo "  bash $SCRIPT_DIR/safe-rebuild.sh"
   exit 1
 fi
 
 FREE_GB="$(df -g "$HOME" | awk 'NR==2 {print $4}')"
 if [[ -z "$FREE_GB" || "$FREE_GB" -lt "$MIN_FREE_GB" ]]; then
-  echo "Error: free disk ${FREE_GB:-?}GB < ${MIN_FREE_GB}GB."
+  echo "Error: free disk ${FREE_GB:-?}GB < ${MIN_FREE_GB}GB. Free space or lower ZED_MIN_FREE_GB."
   exit 1
 fi
+echo "Disk free: ${FREE_GB}GB (ok)"
 
-if ! git diff-index --quiet HEAD --; then
-  echo "Error: Working directory has uncommitted changes. Commit or stash first."
-  exit 1
-fi
-
-echo "1. Fetching upstream main..."
-git fetch upstream main
-
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-echo "Current branch: $CURRENT_BRANCH"
-
-BEHIND="$(git rev-list --count HEAD..FETCH_HEAD)"
-if [[ "$BEHIND" -eq 0 ]]; then
-  echo "Already up to date with upstream main (0 commits behind)."
-else
-  echo "2. Rebasing $CURRENT_BRANCH onto upstream main ($BEHIND new commits)..."
-  if ! git rebase FETCH_HEAD; then
-    echo ""
-    echo "Rebase conflict detected — aborting to preserve branch state."
-    git rebase --abort
-    echo "Rebase aborted. Resolve conflicts manually in $REPO_DIR."
-    exit 1
-  fi
-fi
-
-echo "3. Verifying agent_ui compilation..."
-cargo check -p agent_ui -j "$JOBS"
-
-echo "4. Clearing incremental caches..."
+echo "Clearing incremental caches (keeping deps)..."
 rm -rf target/release/incremental target/release-fast/incremental target/*/incremental 2>/dev/null || true
 
-echo "5. Building with --profile $PROFILE -j $JOBS ..."
+echo "Building zed with --profile $PROFILE -j $JOBS ..."
 cargo build --profile "$PROFILE" -p zed -j "$JOBS"
 
-SRC="$REPO_DIR/target/$PROFILE/zed"
-echo "6. Installing into /Applications/Zed.app..."
+PROFILE_DIR="$PROFILE"
+SRC="$REPO_DIR/target/$PROFILE_DIR/zed"
+if [[ ! -x "$SRC" ]]; then
+  echo "Error: missing binary at $SRC"
+  exit 1
+fi
+
 if [[ -d "/Applications/Zed.app" ]]; then
   if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
+    echo "Backing up official app once -> /Applications/Zed.official-backup.app"
     cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
   fi
-  cp "$SRC" "/Applications/Zed.app/Contents/MacOS/zed"
+  echo "Installing $SRC -> $APP_BIN"
+  cp "$SRC" "$APP_BIN"
   # Preserve Katalyst branding (name and icon)
   plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
   plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
@@ -83,9 +65,9 @@ if [[ -d "/Applications/Zed.app" ]]; then
   fi
   echo "Re-signing /Applications/Zed.app (ad-hoc)..."
   codesign --force --deep --sign - /Applications/Zed.app
-  echo "Installed and signed successfully to /Applications/Zed.app/Contents/MacOS/zed"
+  echo "Installed and signed. Safe to reopen Zed now."
 else
   echo "Warning: /Applications/Zed.app missing; binary at $SRC"
 fi
 
-echo "=== Sync and rebuild complete! Do not reopen Zed until this finished. ==="
+echo "=== safe-rebuild complete ==="
