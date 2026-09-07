@@ -91,6 +91,15 @@ impl ConfigOptionsView {
 
         selector.update(cx, |selector, cx| selector.toggle_picker(window, cx))
     }
+    pub fn current_model_name(&self, cx: &App) -> Option<SharedString> {
+        let config_id = self
+            .first_config_option_id_matching(acp::SessionConfigOptionCategory::Model, |option| {
+                matches!(&option.kind, acp::SessionConfigKind::Select(_))
+            })?;
+        let selector = self.selector_for_config_id(&config_id, cx)?;
+        let value_name = selector.read(cx).current_value_name();
+        Some(value_name.into())
+    }
 
     pub fn cycle_category_option(
         &mut self,

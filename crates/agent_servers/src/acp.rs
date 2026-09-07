@@ -1759,6 +1759,7 @@ impl AgentConnection for AcpConnection {
             .session_capabilities
             .additional_directories
             .is_some()
+            || self.id.0.eq_ignore_ascii_case("omp")
     }
 
     fn load_session(

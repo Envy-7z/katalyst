@@ -144,7 +144,13 @@ impl MarkdownPreviewView {
                 {
                     return;
                 }
-                if !MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
+                let is_plan = item
+                    .downcast::<Editor>()
+                    .map(|editor| Self::is_plan_editor(&editor, cx))
+                    .unwrap_or(false);
+
+                if (!MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
+                    && !is_plan)
                     || workspace.is_restoring()
                 {
                     return;
@@ -536,6 +542,23 @@ impl MarkdownPreviewView {
             return false;
         };
         languages.language_for_file(file, None, cx) == Some(markdown.id())
+    }
+    fn is_plan_editor(editor: &Entity<Editor>, cx: &App) -> bool {
+        let Some(buffer) = editor.read(cx).buffer().read(cx).as_singleton() else {
+            return false;
+        };
+        let buffer = buffer.read(cx);
+        let Some(file) = buffer.file() else {
+            return false;
+        };
+        let Some(local_file) = file.as_local() else {
+            return false;
+        };
+        let abs_path = local_file.abs_path(cx);
+        abs_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".plan.md"))
     }
 
     fn set_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {

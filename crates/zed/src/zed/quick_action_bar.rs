@@ -1,3 +1,4 @@
+mod plan_build;
 mod preview;
 mod repl_menu;
 
@@ -87,29 +88,61 @@ impl QuickActionBar {
             .and_then(|item| item.downcast::<Editor>())
     }
 
+    /// Returns an Editor even when the active item is a MarkdownPreviewView
+    /// (which exposes its source editor via `act_as`). Used so plan_build
+    /// and the toolbar location can work in preview mode.
+    fn active_editor_or_preview(&self, cx: &App) -> Option<Entity<Editor>> {
+        self.active_editor().or_else(|| {
+            self.active_item
+                .as_ref()
+                .and_then(|item| item.act_as::<Editor>(cx))
+        })
+    }
+
     fn apply_settings(&mut self, cx: &mut Context<Self>) {
         let new_show = EditorSettings::get_global(cx).toolbar.quick_actions;
         if new_show != self.show {
             self.show = new_show;
             cx.emit(ToolbarItemEvent::ChangeLocation(
-                self.get_toolbar_item_location(),
+                self.get_toolbar_item_location(cx),
             ));
         }
     }
 
-    fn get_toolbar_item_location(&self) -> ToolbarItemLocation {
-        if self.show && self.active_editor().is_some() {
+    fn get_toolbar_item_location(&self, cx: &App) -> ToolbarItemLocation {
+        if self.show && (self.active_editor().is_some() || self.has_plan_preview(cx)) {
             ToolbarItemLocation::PrimaryRight
         } else {
             ToolbarItemLocation::Hidden
         }
     }
+
+    fn has_plan_preview(&self, cx: &App) -> bool {
+        self.active_editor_or_preview(cx)
+            .and_then(|editor| {
+                let editor = editor.read(cx);
+                let file = editor.file_at(editor::MultiBufferOffset(0), cx)?;
+                let path = file.as_local().map(|f| f.abs_path(cx))?;
+                let name = path.file_name()?.to_string_lossy();
+                Some(name.ends_with(".plan.md"))
+            })
+            .unwrap_or(false)
+    }
 }
 
 impl Render for QuickActionBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // If we're in a plan preview (not a real Editor), render only the
+        // Build Locally button — skip code actions, inlay hints, etc.
+        if self.active_editor().is_none() && self.has_plan_preview(cx) {
+            return h_flex()
+                .id("quick action bar")
+                .gap(DynamicSpacing::Base01.rems(cx))
+                .children(self.render_plan_build_button(cx));
+        }
+
         let Some(editor) = self.active_editor() else {
-            return div().id("empty quick action bar");
+            return h_flex().id("empty quick action bar");
         };
 
         let supports_inlay_hints = editor.update(cx, |editor, cx| editor.supports_inlay_hints(cx));
@@ -708,6 +741,7 @@ impl Render for QuickActionBar {
             .gap(DynamicSpacing::Base01.rems(cx))
             .children(self.render_repl_menu(cx))
             .children(self.render_preview_button(cx))
+            .children(self.render_plan_build_button(cx))
             .children(search_button)
             .when(
                 AgentSettings::get_global(cx).enabled(cx) && AgentSettings::get_global(cx).button,
@@ -818,6 +852,6 @@ impl ToolbarItemView for QuickActionBar {
                     }));
             }
         }
-        self.get_toolbar_item_location()
+        self.get_toolbar_item_location(cx)
     }
 }

@@ -4134,6 +4134,77 @@ impl AgentPanel {
         server_view.read(cx).root_thread_view()
     }
 
+    /// Focuses the active thread composer, sets its text, and submits — used by
+    /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
+    pub fn submit_slash_command(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(thread_view) = self.active_thread_view(cx) else {
+            return false;
+        };
+        let text = text.to_string();
+        thread_view.update(cx, |view, cx| {
+            let message_editor = view.message_editor.clone();
+            message_editor.update(cx, |editor, cx| {
+                editor.clear(window, cx);
+                editor.insert_text(&text, window, cx);
+            });
+            view.send(window, cx);
+        });
+        true
+    }
+    pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
+        let thread_view = self.active_thread_view(cx)?;
+        let thread = thread_view.read(cx);
+
+        if let Some(config_view) = &thread.config_options_view {
+            if let Some(name) = config_view.read(cx).current_model_name(cx) {
+                return Some(name);
+            }
+        }
+
+        if let Some(model_selector) = &thread.model_selector {
+            if let Some(model) = model_selector.read(cx).active_model(cx) {
+                return Some(model.name.clone());
+            }
+        }
+
+        None
+    }
+
+    pub fn toggle_model_selector(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(thread_view) = self.active_thread_view(cx) else {
+            return false;
+        };
+        thread_view.update(cx, |thread_view, cx| {
+            if let Some(config_options_view) = thread_view.config_options_view.clone() {
+                let handled = config_options_view.update(cx, |view, cx| {
+                    view.toggle_category_picker(
+                        acp::SessionConfigOptionCategory::Model,
+                        window,
+                        cx,
+                    )
+                });
+                if handled {
+                    return true;
+                }
+            }
+
+            if let Some(model_selector) = thread_view.model_selector.clone() {
+                model_selector.update(cx, |model_selector, cx| {
+                    model_selector.toggle(window, cx);
+                });
+                return true;
+            }
+
+            false
+        })
+    }
+
+
     pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
         match &self.base_view {
             BaseView::AgentThread { conversation_view } => {
