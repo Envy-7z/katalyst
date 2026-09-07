@@ -80,12 +80,42 @@ if [[ -d "/Applications/Katalyst.app" ]]; then
   plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
   plutil -replace CFBundleName -string "Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
   plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  # Bundle id must change or App Switcher/Dock keep caching the app as Zed.
+  plutil -replace CFBundleIdentifier -string "dev.katalyst.Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  # Keep CFBundleExecutable=zed and URL scheme "zed" for binary/deep-link compatibility.
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDocumentTypes:1:CFBundleTypeName Katalyst Text Document" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLName Katalyst" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+  for key in \
+    NSAppleEventsUsageDescription \
+    NSCalendarsUsageDescription \
+    NSCameraUsageDescription \
+    NSContactsUsageDescription \
+    NSLocationUsageDescription \
+    NSLocationAlwaysUsageDescription \
+    NSLocationWhenInUseUsageDescription \
+    NSMicrophoneUsageDescription \
+    NSRemindersUsageDescription \
+    NSBluetoothAlwaysUsageDescription \
+    NSSpeechRecognitionUsageDescription \
+    NSSystemAdministrationUsageDescription
+  do
+    val="$(/usr/libexec/PlistBuddy -c "Print :$key" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true)"
+    if [[ -n "$val" && "$val" == *Zed* ]]; then
+      new_val="${val//Zed/Katalyst}"
+      /usr/libexec/PlistBuddy -c "Set :$key $new_val" /Applications/Katalyst.app/Contents/Info.plist 2>/dev/null || true
+    fi
+  done
   if [[ -f "$SCRIPT_DIR/assets/Katalyst.icns" ]]; then
     run_cmd cp "$SCRIPT_DIR/assets/Katalyst.icns" "/Applications/Katalyst.app/Contents/Resources/Katalyst.icns" 2>/dev/null || true
     run_cmd cp "$SCRIPT_DIR/assets/Katalyst.icns" "/Applications/Katalyst.app/Contents/Resources/Zed.icns" 2>/dev/null || true
   fi
   run_cmd codesign --force --sign - /Applications/Katalyst.app 2>/dev/null || true
   run_cmd touch /Applications/Katalyst.app 2>/dev/null || true
+  LSREG="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [[ -x "$LSREG" ]]; then
+    run_cmd "$LSREG" -f /Applications/Katalyst.app 2>/dev/null || true
+  fi
+  run_cmd killall Dock 2>/dev/null || true
   echo "   ✓ Katalyst.app is ready in /Applications/."
 fi
 
