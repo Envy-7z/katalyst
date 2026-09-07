@@ -6,8 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-APP_BIN="/Applications/Zed.app/Contents/MacOS/zed"
-PROFILE="${ZED_BUILD_PROFILE:-release-fast}"
+APP_BUNDLE="/Applications/Katalyst.app"
+APP_BIN="$APP_BUNDLE/Contents/MacOS/zed"
 JOBS="${ZED_BUILD_JOBS:-2}"
 MIN_FREE_GB="${ZED_MIN_FREE_GB:-12}"
 
@@ -48,26 +48,23 @@ if [[ ! -x "$SRC" ]]; then
   exit 1
 fi
 
-if [[ -d "/Applications/Zed.app" ]]; then
-  if [[ ! -d "/Applications/Zed.official-backup.app" ]]; then
-    echo "Backing up official app once -> /Applications/Zed.official-backup.app"
-    cp -R "/Applications/Zed.app" "/Applications/Zed.official-backup.app"
-  fi
+if [[ -d "$APP_BUNDLE" ]]; then
   echo "Installing $SRC -> $APP_BIN"
   cp "$SRC" "$APP_BIN"
   # Preserve Katalyst branding (name and icon)
-  plutil -replace CFBundleDisplayName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
-  plutil -replace CFBundleName -string "Katalyst" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
-  plutil -replace CFBundleIconFile -string "Katalyst.icns" /Applications/Zed.app/Contents/Info.plist 2>/dev/null || true
+  plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
+  plutil -replace CFBundleIconFile -string "Katalyst.icns" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
   if [[ -f "$REPO_DIR/assets/Katalyst.icns" ]]; then
-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Katalyst.icns 2>/dev/null || true
-    cp "$REPO_DIR/assets/Katalyst.icns" /Applications/Zed.app/Contents/Resources/Zed.icns 2>/dev/null || true
+    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Katalyst.icns" 2>/dev/null || true
+    cp "$REPO_DIR/assets/Katalyst.icns" "$APP_BUNDLE/Contents/Resources/Zed.icns" 2>/dev/null || true
   fi
-  echo "Re-signing /Applications/Zed.app (ad-hoc)..."
-  codesign --force --deep --sign - /Applications/Zed.app
-  echo "Installed and signed. Safe to reopen Zed now."
+  echo "Re-signing $APP_BUNDLE (ad-hoc)..."
+  codesign --force --deep --sign - "$APP_BUNDLE"
+  ln -sfn "$APP_BUNDLE" "/Applications/Zed.app" 2>/dev/null || true
+  echo "Installed and signed. Safe to reopen Katalyst now."
 else
-  echo "Warning: /Applications/Zed.app missing; binary at $SRC"
+  echo "Warning: $APP_BUNDLE missing; binary at $SRC"
 fi
 
 echo "=== safe-rebuild complete ==="

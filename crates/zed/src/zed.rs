@@ -67,7 +67,7 @@ use project::{
 use project_panel::ProjectPanel;
 use quick_action_bar::QuickActionBar;
 use recent_projects::open_remote_project;
-use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, ReleaseChannel};
 use rope::Rope;
 use search::project_search::ProjectSearchBar;
 use settings::{
@@ -1523,18 +1523,8 @@ fn initialize_pane(
 }
 
 fn open_about_window(cx: &mut App) {
-    fn about_window_icon(release_channel: ReleaseChannel) -> Arc<Image> {
-        let bytes = match release_channel {
-            ReleaseChannel::Dev => include_bytes!("../resources/app-icon-dev.png").as_slice(),
-            ReleaseChannel::Nightly => {
-                include_bytes!("../resources/app-icon-nightly.png").as_slice()
-            }
-            ReleaseChannel::Preview => {
-                include_bytes!("../resources/app-icon-preview.png").as_slice()
-            }
-            ReleaseChannel::Stable => include_bytes!("../resources/app-icon.png").as_slice(),
-        };
-
+    fn about_window_icon(_release_channel: ReleaseChannel) -> Arc<Image> {
+        let bytes = include_bytes!("../../../assets/logo.png").as_slice();
         Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec()))
     }
 
@@ -1551,20 +1541,16 @@ fn open_about_window(cx: &mut App) {
     impl AboutWindow {
         fn new(cx: &mut Context<Self>) -> Self {
             let release_channel = ReleaseChannel::global(cx);
-            let _release_channel_name = release_channel.display_name();
-            let full_version: SharedString = AppVersion::global(cx).to_string().into();
-            let version = env!("CARGO_PKG_VERSION");
-
-            let _debug = if cfg!(debug_assertions) {
-                "(debug)"
-            } else {
-                ""
-            };
-            let message: SharedString = format!("Katalyst {version}").into();
             let commit = AppCommitSha::try_global(cx)
                 .map(|sha| sha.full())
                 .filter(|commit| !commit.is_empty())
                 .map(SharedString::from);
+
+            let katalyst_version = "0.1.0";
+            let message: SharedString = format!("Katalyst {katalyst_version}").into();
+            let commit_short = commit.as_deref().unwrap_or("dev");
+            let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };
+            let full_version: SharedString = format!("{katalyst_version} ({commit_prefix})").into();
 
             Self {
                 focus_handle: cx.focus_handle(),
