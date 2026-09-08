@@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {
                 .filter(|commit| !commit.is_empty())
                 .map(SharedString::from);
 
-            let katalyst_version = "0.1.2";
+            let katalyst_version = "0.1.3";
             let message: SharedString = format!("Katalyst {katalyst_version}").into();
             let commit_short = commit.as_deref().unwrap_or("dev");
             let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };

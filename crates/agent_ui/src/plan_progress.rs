@@ -225,6 +225,128 @@ pub fn completed_count_from_disk(path: &Path, phases: &[String]) -> usize {
     completed
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanProposalInfo {
+    pub title: String,
+    pub summary: String,
+    pub plan_path: std::path::PathBuf,
+}
+
+/// Calculate current 1-based phase index and total phases for header ratio chip (e.g. 2/6).
+pub fn plan_phase_ratio(completed: u32, total: usize, in_progress: bool) -> (usize, usize) {
+    let current = if in_progress {
+        (completed as usize + 1).min(total)
+    } else {
+        (completed as usize).min(total)
+    };
+    (current, total)
+}
+
+/// Extract "Active skills: <list>" from the first few lines of an assistant message.
+/// Returns (skills_summary, remaining_markdown_body).
+pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
+    let mut lines = Vec::new();
+    let mut skills = None;
+    let mut split_ix = 0;
+
+    for (i, line) in text.lines().enumerate() {
+        if i < 5 && skills.is_none() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed
+                .strip_prefix("Active skills:")
+                .or_else(|| trimmed.strip_prefix("active skills:"))
+            {
+                let s = rest.trim();
+                if !s.is_empty() && !s.eq_ignore_ascii_case("none | subagent: none") {
+                    skills = Some(s.to_string());
+                    split_ix = i + 1;
+                    continue;
+                }
+            }
+        }
+        lines.push(line);
+    }
+
+    skills.map(|skills_text| {
+        let remaining = lines[split_ix..].join("\n");
+        (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
+    })
+}
+
+/// Detect whether text contains a proposal/mention of a plan file, and extract title/summary.
+pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return None;
+    };
+    let home_path = std::path::Path::new(&home);
+
+    // Look for path candidates ending in .plan.md or -plan.md, or local://...
+    let mut found_path = None;
+    for word in text.split_whitespace() {
+        let clean = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>');
+        if clean.ends_with(".plan.md") || clean.ends_with("-plan.md") {
+            if clean.starts_with("~/") {
+                found_path = Some(home_path.join(&clean[2..]));
+                break;
+            } else if clean.starts_with('/') {
+                found_path = Some(std::path::PathBuf::from(clean));
+                break;
+            } else if let Some(slug) = clean.strip_prefix("local://") {
+                let disk_slug = if slug.ends_with("-plan.md") {
+                    format!("{}.plan.md", &slug[..slug.len() - "-plan.md".len()])
+                } else {
+                    slug.to_string()
+                };
+                found_path = Some(home_path.join(".cursor/plans").join(disk_slug));
+                break;
+            }
+        }
+    }
+
+    let plan_path = found_path?;
+    if !plan_path.is_file() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&plan_path).ok()?;
+    let mut title = "Implementation Plan".to_string();
+    let mut in_context = false;
+    let mut context_lines = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# Plan:") {
+            title = trimmed["# Plan:".len()..].trim().to_string();
+        } else if trimmed.starts_with("# ") && title == "Implementation Plan" {
+            title = trimmed[2..].trim().to_string();
+        }
+
+        if trimmed.starts_with("## Context") {
+            in_context = true;
+            continue;
+        } else if trimmed.starts_with("## ") && in_context {
+            in_context = false;
+        }
+
+        if in_context && !trimmed.is_empty() && context_lines.len() < 2 {
+            context_lines.push(trimmed);
+        }
+    }
+
+    let summary = if !context_lines.is_empty() {
+        context_lines.join(" ")
+    } else {
+        format!("Plan with {} execution steps.", parse_plan_phases(&content).len())
+    };
+
+    Some(PlanProposalInfo {
+        title,
+        summary,
+        plan_path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,4 +409,21 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/bar plan.md"))
         );
     }
+
+    #[test]
+    fn test_plan_phase_ratio_calculation() {
+        assert_eq!(plan_phase_ratio(0, 6, true), (1, 6));
+        assert_eq!(plan_phase_ratio(1, 6, true), (2, 6));
+        assert_eq!(plan_phase_ratio(2, 6, false), (2, 6));
+        assert_eq!(plan_phase_ratio(6, 6, false), (6, 6));
+    }
+
+    #[test]
+    fn test_extract_active_skills() {
+        let text = "Active skills: token-saving, caveman-lite\n\nHere is the plan.";
+        let (skills, body) = extract_active_skills(text).expect("should extract skills");
+        assert_eq!(skills, "token-saving, caveman-lite");
+        assert_eq!(body, "Here is the plan.");
+    }
+
 }

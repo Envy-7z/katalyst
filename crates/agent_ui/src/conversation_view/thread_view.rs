@@ -3717,6 +3717,117 @@ impl ThreadView {
         self.plan_expanded = true;
     }
 
+    pub fn submit_slash_command(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(plan_path) = crate::plan_progress::plan_path_from_go_command(text) {
+            let phases = crate::plan_progress::read_plan_phases(&plan_path);
+            if !phases.is_empty() {
+                let plan = crate::plan_progress::build_acp_plan(&phases, 0);
+                self.thread.update(cx, |thread, cx| {
+                    thread.update_plan(plan, cx);
+                });
+                self.set_execution_plan_path(Some(plan_path));
+                self.expand_plan();
+            }
+        }
+        let message_editor = self.message_editor.clone();
+        message_editor.update(cx, |editor, cx| {
+            editor.clear(window, cx);
+            editor.insert_text(text, window, cx);
+        });
+        self.send(window, cx);
+    }
+
+    fn render_inline_plan_card(
+        &self,
+        info: crate::plan_progress::PlanProposalInfo,
+        _window: &Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let plan_path = info.plan_path.clone();
+        let title = info.title;
+        let summary = info.summary;
+
+        v_flex()
+            .w_full()
+            .my_2()
+            .p_3()
+            .gap_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().elevated_surface_background)
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(
+                                Icon::new(IconName::ListTodo)
+                                    .size(IconSize::Small)
+                                    .color(Color::Accent),
+                            )
+                            .child(
+                                Label::new("Review Plan")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .child(Label::new(title).size(LabelSize::Default))
+                    .child(
+                        Label::new(summary)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("inline-open-plan", "Open Plan")
+                            .label_size(LabelSize::Small)
+                            .size(ButtonSize::Compact)
+                            .style(ButtonStyle::Subtle)
+                            .on_click({
+                                let plan_path = plan_path.clone();
+                                let workspace = self.workspace.clone();
+                                move |_event, window, cx| {
+                                    if let Some(workspace) = workspace.upgrade() {
+                                        workspace.update(cx, |ws, cx| {
+                                            let _ = ws.open_abs_path(plan_path.clone(), workspace::OpenOptions::default(), window, cx);
+                                        });
+                                    }
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("inline-build-plan", "Build Locally")
+                            .label_size(LabelSize::Small)
+                            .size(ButtonSize::Compact)
+                            .style(ButtonStyle::Filled)
+                            .start_icon(
+                                Icon::new(IconName::PlayOutlined)
+                                    .size(IconSize::Small)
+                                    .color(Color::Accent),
+                            )
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                let cmd = format!("/go {}", plan_path.display());
+                                this.submit_slash_command(&cmd, window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
         fn render_plan_summary(
         &self,
         plan: &Plan,
@@ -3751,6 +3862,14 @@ impl ThreadView {
                         )),
                 )
                 .when(stats.pending > 0, |this| {
+                    let total = plan.entries.len();
+                    let current_idx = plan
+                        .entries
+                        .iter()
+                        .position(|e| std::ptr::eq(e, entry))
+                        .map(|i| i + 1)
+                        .unwrap_or(stats.completed as usize + 1);
+
                     this.child(
                         h_flex()
                             .absolute()
@@ -3763,11 +3882,21 @@ impl ThreadView {
                                 linear_color_stop(self.activity_bar_bg(cx).opacity(0.2), 0.),
                             )))
                             .child(
-                                div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
-                                    Label::new(format!("{} left", stats.pending))
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
-                                ),
+                                h_flex()
+                                    .pr_0p5()
+                                    .gap_1()
+                                    .items_center()
+                                    .bg(self.activity_bar_bg(cx))
+                                    .child(
+                                        Label::new(format!("{}/{}", current_idx, total))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Accent),
+                                    )
+                                    .child(
+                                        Label::new(format!("· {} left", stats.pending))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    ),
                             ),
                     )
                 })
@@ -6395,16 +6524,54 @@ impl ThreadView {
                         |(chunk_ix, chunk)| match chunk {
                             AssistantMessageChunk::Message { block, .. } => {
                                 block.markdown().and_then(|md| {
-                                    let this_is_blank = md.read(cx).source().trim().is_empty();
+                                    let raw_source = md.read(cx).source();
+                                    let this_is_blank = raw_source.trim().is_empty();
                                     is_blank = is_blank && this_is_blank;
                                     if this_is_blank {
                                         return None;
                                     }
 
-                                    Some(
-                                        self.render_markdown(md.clone(), style.clone(), cx)
-                                            .into_any_element(),
-                                    )
+                                    let active_skills = crate::plan_progress::extract_active_skills(raw_source);
+                                    let plan_proposal = crate::plan_progress::extract_plan_proposal_info(raw_source);
+                                    let md_element = self
+                                        .render_markdown(md.clone(), style.clone(), cx)
+                                        .into_any_element();
+
+                                    if active_skills.is_some() || plan_proposal.is_some() {
+                                        let container = v_flex()
+                                            .w_full()
+                                            .gap_2()
+                                            .when_some(active_skills, |this, (skills_text, _)| {
+                                                this.child(
+                                                    h_flex()
+                                                        .gap_1p5()
+                                                        .items_center()
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded_md()
+                                                        .bg(cx.theme().colors().elevated_surface_background)
+                                                        .border_1()
+                                                        .border_color(cx.theme().colors().border)
+                                                        .child(
+                                                            Icon::new(IconName::Sparkle)
+                                                                .size(IconSize::XSmall)
+                                                                .color(Color::Accent),
+                                                        )
+                                                        .child(
+                                                            Label::new(format!("Active skills: {}", skills_text))
+                                                                .size(LabelSize::XSmall)
+                                                                .color(Color::Muted),
+                                                        ),
+                                                )
+                                            })
+                                            .child(md_element)
+                                            .when_some(plan_proposal, |this, info| {
+                                                this.child(self.render_inline_plan_card(info, window, cx))
+                                            });
+                                        Some(container.into_any_element())
+                                    } else {
+                                        Some(md_element)
+                                    }
                                 })
                             }
                             AssistantMessageChunk::Thought { block, .. } => {
@@ -10861,6 +11028,18 @@ impl ThreadView {
                                                 self.tool_name_font_size(),
                                             )),
                                         )
+                                    })
+                                    .when(files_changed == 0 && thread.as_ref().is_some(), |this| {
+                                        let entry_count = thread.as_ref().map(|t| t.read(cx).entries().len()).unwrap_or(0);
+                                        if entry_count > 0 {
+                                            this.child(
+                                                Label::new(format!("— {} steps", entry_count))
+                                                    .size(LabelSize::Custom(self.tool_name_font_size()))
+                                                    .color(Color::Muted),
+                                            )
+                                        } else {
+                                            this
+                                        }
                                     }),
                             )
                             .when(!has_no_title_or_canceled && !is_pending_tool_call, |this| {
