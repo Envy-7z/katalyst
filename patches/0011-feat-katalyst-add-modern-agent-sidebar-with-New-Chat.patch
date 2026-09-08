@@ -1,7 +1,7 @@
 From 1199242ec714529ddbd1c5b88789b7a3681b7d3a Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 00:08:48 +0700
-Subject: [PATCH 11/11] feat(katalyst): add modern agent sidebar with New Chat,
+Subject: [PATCH 11/12] feat(katalyst): add modern agent sidebar with New Chat,
  Projects section, and pin badge; fix worktree pollution
 
 - Add dedicated New Chat button row at top of sidebar
