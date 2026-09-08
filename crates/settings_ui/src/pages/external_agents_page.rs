@@ -54,7 +54,221 @@ pub(crate) fn render_external_agents_page(
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
+        .child(render_omp_accounts_card(cx))
         .child(agent_list)
+        .into_any_element()
+}
+
+/// Connected OMP provider accounts shown so users don't need CLI-only `/login`.
+#[derive(Clone)]
+struct OmpAccountRow {
+    provider: SharedString,
+    identity: SharedString,
+    disabled: bool,
+    usage_label: Option<SharedString>,
+}
+
+fn omp_provider_label(provider: &str) -> SharedString {
+    // Keep source brand-neutral for public patch export; show OMP provider ids as-is
+    // except a few safe display aliases.
+    SharedString::from(match provider {
+        "github-copilot" => "GitHub Copilot".to_string(),
+        "google-antigravity" => "Google Antigravity".to_string(),
+        "anthropic" => "Anthropic".to_string(),
+        "openai" => "OpenAI".to_string(),
+        other => other.to_string(),
+    })
+}
+
+fn load_omp_connected_accounts() -> Vec<OmpAccountRow> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let db_path = std::path::Path::new(&home).join(".omp/agent/agent.db");
+    if !db_path.is_file() {
+        return Vec::new();
+    }
+
+    let output = std::process::Command::new("sqlite3")
+        .arg(db_path.as_os_str())
+        .arg(
+            "SELECT c.provider, COALESCE(c.identity_key, ''), \
+             CASE WHEN c.disabled_cause IS NULL THEN 0 ELSE 1 END, \
+             COALESCE(( \
+               SELECT printf('%s · %s', u.label, COALESCE(u.status, '?')) \
+               FROM usage_history u \
+               WHERE u.provider = c.provider \
+               ORDER BY u.recorded_at DESC LIMIT 1 \
+             ), '') \
+             FROM auth_credentials c \
+             ORDER BY c.provider;",
+        )
+        .output();
+
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '|');
+            let provider = parts.next()?.trim();
+            if provider.is_empty() {
+                return None;
+            }
+            let identity_raw = parts.next().unwrap_or("").trim();
+            let disabled = parts.next().unwrap_or("0").trim() == "1";
+            let usage_raw = parts.next().unwrap_or("").trim();
+
+            let identity = if identity_raw.is_empty() {
+                SharedString::from("Connected")
+            } else if let Some(email) = identity_raw.strip_prefix("email:") {
+                SharedString::from(email.to_string())
+            } else if let Some(account) = identity_raw.strip_prefix("account:") {
+                SharedString::from(format!("account · {account}"))
+            } else {
+                SharedString::from(identity_raw.to_string())
+            };
+
+            Some(OmpAccountRow {
+                provider: omp_provider_label(provider),
+                identity,
+                disabled,
+                usage_label: (!usage_raw.is_empty())
+                    .then(|| SharedString::from(usage_raw.to_string())),
+            })
+        })
+        .collect()
+}
+
+fn open_omp_account_connect() {
+    // OMP auth is interactive (`/login` in the TUI). Launch Terminal with a clear
+    // prompt so users don't have to remember the CLI path.
+    #[cfg(target_os = "macos")]
+    {
+        let script = concat!(
+            "tell application \"Terminal\"\n",
+            "activate\n",
+            "do script \"printf '\\\\n=== Katalyst · OMP Account Connect ===\\\\n",
+            "Type /login then choose a provider (subscription or API key).\\\\n\\\\n'; ",
+            "command -v omp >/dev/null && omp || echo 'omp not found — brew install can1357/tap/omp'\"\n",
+            "end tell\n",
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = std::process::Command::new("omp").spawn();
+    }
+}
+
+fn render_omp_accounts_card(cx: &mut Context<SettingsWindow>) -> AnyElement {
+    let accounts = load_omp_connected_accounts();
+
+    let account_rows = if accounts.is_empty() {
+        v_flex()
+            .gap_1()
+            .child(
+                Label::new("No OMP provider accounts connected yet.")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new("Use Connect Account to open OMP, then run /login in the terminal.")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .into_any_element()
+    } else {
+        v_flex()
+            .w_full()
+            .gap_1()
+            .children(accounts.into_iter().map(|row| {
+                let status = if row.disabled {
+                    "Disabled"
+                } else {
+                    "Connected"
+                };
+                let detail = row
+                    .usage_label
+                    .map(|u| format!("{} · {}", row.identity, u))
+                    .unwrap_or_else(|| format!("{} · {}", row.identity, status));
+
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(Label::new(row.provider).size(LabelSize::Small))
+                            .child(
+                                Label::new(detail)
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            ),
+                    )
+                    .child(
+                        Label::new(status)
+                            .size(LabelSize::XSmall)
+                            .color(if row.disabled {
+                                Color::Warning
+                            } else {
+                                Color::Success
+                            }),
+                    )
+                    .into_any_element()
+            }))
+            .into_any_element()
+    };
+
+    v_flex()
+        .w_full()
+        .mt_3()
+        .mb_4()
+        .p_3()
+        .gap_2()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().colors().border)
+        .bg(cx.theme().colors().elevated_surface_background)
+        .child(
+            h_flex()
+                .w_full()
+                .justify_between()
+                .items_center()
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(Label::new("Provider Accounts (OMP)"))
+                        .child(
+                            Label::new(
+                                "Connect subscription or API providers via GUI — no CLI scavenger hunt.",
+                            )
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                        ),
+                )
+                .child(
+                    Button::new("omp-connect-account", "Connect Account…")
+                        .style(ButtonStyle::Outlined)
+                        .label_size(LabelSize::Small)
+                        .start_icon(
+                            Icon::new(IconName::Person)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .on_click(|_, _, _cx| open_omp_account_connect()),
+                ),
+        )
+        .child(account_rows)
         .into_any_element()
 }
 
