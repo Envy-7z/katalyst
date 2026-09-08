@@ -108,6 +108,7 @@ impl MarkdownPreviewMode {
 struct EditorState {
     editor: Entity<Editor>,
     _subscription: Subscription,
+    _buffer_subscription: Option<Subscription>,
 }
 
 #[derive(Default)]
@@ -604,11 +605,33 @@ impl MarkdownPreviewView {
             },
         );
 
+        let buffer_subscription = editor
+            .read(cx)
+            .buffer()
+            .read(cx)
+            .as_singleton()
+            .map(|buffer| {
+                cx.subscribe_in(
+                    &buffer,
+                    window,
+                    |this, _buffer, event: &language::BufferEvent, window, cx| match event {
+                        language::BufferEvent::Reloaded
+                        | language::BufferEvent::Reparsed
+                        | language::BufferEvent::FileHandleChanged
+                        | language::BufferEvent::Edited { .. } => {
+                            this.update_markdown_from_active_editor(false, false, window, cx);
+                        }
+                        _ => {}
+                    },
+                )
+            });
+
         self.base_directory = Self::get_folder_for_active_editor(editor.read(cx), cx);
         self.hovered_url = None;
         self.active_editor = Some(EditorState {
             editor,
             _subscription: subscription,
+            _buffer_subscription: buffer_subscription,
         });
         self.update_markdown_from_active_editor(false, true, window, cx);
         if had_active_editor {
@@ -702,7 +725,7 @@ impl MarkdownPreviewView {
                 }
 
                 editor.update(cx, |editor, cx| {
-                    let contents = editor
+                    let mut contents: SharedString = editor
                         .buffer()
                         .read(cx)
                         .as_singleton()?
@@ -710,6 +733,24 @@ impl MarkdownPreviewView {
                         .as_rope()
                         .to_string()
                         .into();
+                    if contents.is_empty() {
+                        if let Some(buffer) = editor.buffer().read(cx).as_singleton() {
+                            if let Some(file) = buffer.read(cx).file() {
+                                if let Some(local_file) = file.as_local() {
+                                    let abs_path = local_file.abs_path(cx);
+                                    if abs_path.exists() {
+                                        if let Ok(disk_contents) =
+                                            std::fs::read_to_string(&abs_path)
+                                        {
+                                            if !disk_contents.is_empty() {
+                                                contents = disk_contents.into();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let selection_start = Self::selected_source_index(editor, cx);
                     Some((contents, selection_start))
                 })
