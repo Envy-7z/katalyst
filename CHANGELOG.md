@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2026-09-08
+
+### Added
+- **Plan checklist progress (Modern-style)**:
+  - Auto-seed ACP execution plan from `*.plan.md` on Build Locally or `/go <path>`.
+  - Parses Approach phases and marks items InProgress/Completed as turns finish or checkboxes flip.
+- **Context meter idle placeholder**:
+  - Displays muted `Context —` chip with helpful tooltip when agent omits `UsageUpdate`.
+- **In-app Connect Account**:
+  - Connect Account opens an interactive `omp` shell directly inside the docked TerminalPanel.
+
+---
+
 ## [0.1.1] - 2026-09-08
 
 ### Added

@@ -1,0 +1,811 @@
+From 222b0d120c18a999eaed108709cee049d6f75430 Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Tue, 8 Sep 2026 20:51:33 +0700
+Subject: [PATCH] feat(katalyst): plan checklist seeding, context idle chip,
+ in-app connect account (v0.1.2)
+
+- Seed ACP execution plan from *.plan.md on Build Locally / /go
+- Progress tracking from 'Phase N done' output and disk checkbox sync
+- Context meter idle placeholder chip when agent omits UsageUpdate
+- In-app TerminalPanel task spawn for OMP account connect
+- Bump version to 0.1.2
+---
+ Cargo.lock                                    |   1 +
+ crates/agent_ui/src/agent_panel.rs            |  34 ++
+ crates/agent_ui/src/agent_ui.rs               |   1 +
+ crates/agent_ui/src/conversation_view.rs      |  83 ++++-
+ .../src/conversation_view/thread_view.rs      |  44 ++-
+ crates/agent_ui/src/plan_progress.rs          | 290 ++++++++++++++++++
+ crates/agent_ui/src/thread_metadata_store.rs  |   6 +
+ crates/settings_ui/Cargo.toml                 |   1 +
+ .../src/pages/external_agents_page.rs         |  83 ++++-
+ crates/zed/src/zed.rs                         |   2 +-
+ 10 files changed, 534 insertions(+), 11 deletions(-)
+ create mode 100644 crates/agent_ui/src/plan_progress.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 2f63722..3ec2aec 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -16584,6 +16584,7 @@ dependencies = [
+  "settings",
+  "shell_command_parser",
+  "strum 0.28.0",
++ "task",
+  "telemetry",
+  "theme",
+  "theme_settings",
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index fec1321..24546af 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -36,6 +36,7 @@ use zed_actions::{
+ };
+ 
+ use crate::ExpandMessageEditor;
++use crate::plan_progress;
+ use crate::ManageProfiles;
+ use crate::agent_connection_store::AgentConnectionStore;
+ use crate::completion_provider::{AgentContextSelection, AgentContextSource};
+@@ -4134,6 +4135,35 @@ impl AgentPanel {
+         server_view.read(cx).root_thread_view()
+     }
+ 
++    /// Seed the activity-bar plan checklist from a plan markdown file, then expand it.
++    /// Used when OMP does not emit `SessionUpdate::Plan` during `/go`.
++    pub fn seed_execution_plan_from_path(
++        &mut self,
++        path: &std::path::Path,
++        cx: &mut Context<Self>,
++    ) -> bool {
++        let phases = plan_progress::read_plan_phases(path);
++        if phases.is_empty() {
++            return false;
++        }
++        let Some(thread) = self.active_agent_thread(cx) else {
++            return false;
++        };
++        let Some(thread_view) = self.active_thread_view(cx) else {
++            return false;
++        };
++        let plan = plan_progress::build_acp_plan(&phases, 0);
++        thread.update(cx, |thread, cx| {
++            thread.update_plan(plan, cx);
++        });
++        let path_buf = path.to_path_buf();
++        thread_view.update(cx, |view, _cx| {
++            view.set_execution_plan_path(Some(path_buf));
++            view.expand_plan();
++        });
++        true
++    }
++
+     /// Focuses the active thread composer, sets its text, and submits — used by
+     /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
+     pub fn submit_slash_command(
+@@ -4145,6 +4175,9 @@ impl AgentPanel {
+         let Some(thread_view) = self.active_thread_view(cx) else {
+             return false;
+         };
++        if let Some(plan_path) = plan_progress::plan_path_from_go_command(text) {
++            self.seed_execution_plan_from_path(&plan_path, cx);
++        }
+         let text = text.to_string();
+         thread_view.update(cx, |view, cx| {
+             let message_editor = view.message_editor.clone();
+@@ -8149,6 +8182,7 @@ mod tests {
+                         worktree_paths: WorktreePaths::from_folder_paths(&PathList::default()),
+                         remote_connection: None,
+                         archived: false,
++                        pinned: false,
+                     },
+                     cx,
+                 );
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index 3090009..8c1ee14 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -23,6 +23,7 @@ mod message_editor;
+ mod mode_selector;
+ mod model_selector;
+ mod model_selector_popover;
++pub mod plan_progress;
+ mod profile_selector;
+ mod terminal_codegen;
+ mod terminal_inline_assistant;
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index 2325cc3..f170d11 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -45,6 +45,7 @@ use crate::conversation_view::elicitation::{
+     ElicitationCard, ElicitationCardHandlers, ElicitationFormState, should_render_elicitation,
+ };
+ use crate::message_editor::SessionCapabilities;
++use crate::plan_progress::{self, ProgressHint};
+ use crate::{AgentThreadSource, DEFAULT_THREAD_TITLE, resolve_agent_image};
+ use lru::LruCache;
+ use rope::Point;
+@@ -1701,6 +1702,10 @@ impl ConversationView {
+                     return;
+                 }
+ 
++                if *stop_reason == acp::StopReason::EndTurn {
++                    self.apply_execution_plan_progress(&thread, cx);
++                }
++
+                 let sent_queued_message = if let Some(active) = self.root_thread_view() {
+                     active.update(cx, |active, cx| {
+                         // Don't auto-send while the user is editing the next message.
+@@ -2842,7 +2847,82 @@ impl ConversationView {
+         )
+     }
+ 
+-    fn notify_with_sound(
++    /// Advance client-seeded checklist from assistant "Phase N done" / "Plan complete"
++    /// lines (OMP often omits SessionUpdate::Plan).
++    fn apply_execution_plan_progress(
++        &mut self,
++        thread: &Entity<AcpThread>,
++        cx: &mut Context<Self>,
++    ) {
++        let Some(active) = self.root_thread_view() else {
++            return;
++        };
++        let plan_path = active.read(cx).execution_plan_path.clone();
++        let (phases, assistant_text) = thread.read_with(cx, |thread, cx| {
++            let phases: Vec<String> = thread
++                .plan()
++                .entries
++                .iter()
++                .map(|e| e.content.read(cx).source().to_string())
++                .collect();
++            let assistant_text = thread
++                .entries()
++                .iter()
++                .rev()
++                .find_map(|entry| match entry {
++                    AgentThreadEntry::AssistantMessage(msg) => Some(msg.to_markdown(cx)),
++                    _ => None,
++                })
++                .unwrap_or_default();
++            (phases, assistant_text)
++        });
++        if phases.is_empty() {
++            return;
++        }
++
++        let mut hint = plan_progress::progress_from_assistant_text(&assistant_text, phases.len());
++        if let Some(path) = plan_path.as_ref() {
++            let disk_done = plan_progress::completed_count_from_disk(path, &phases);
++            match hint {
++                ProgressHint::None if disk_done > 0 && disk_done < phases.len() => {
++                    hint = ProgressHint::InProgressIndex(disk_done);
++                }
++                ProgressHint::None if disk_done >= phases.len() => {
++                    hint = ProgressHint::AllComplete;
++                }
++                ProgressHint::InProgressIndex(idx) if disk_done > idx => {
++                    if disk_done >= phases.len() {
++                        hint = ProgressHint::AllComplete;
++                    } else {
++                        hint = ProgressHint::InProgressIndex(disk_done);
++                    }
++                }
++                _ => {}
++            }
++        }
++
++        match hint {
++            ProgressHint::None => {}
++            ProgressHint::InProgressIndex(idx) => {
++                let plan = plan_progress::build_acp_plan(&phases, idx);
++                thread.update(cx, |thread, cx| {
++                    thread.update_plan(plan, cx);
++                });
++                active.update(cx, |view, _cx| {
++                    view.expand_plan();
++                });
++            }
++            ProgressHint::AllComplete => {
++                let plan = plan_progress::all_completed_plan(&phases);
++                thread.update(cx, |thread, cx| {
++                    thread.update_plan(plan, cx);
++                    thread.snapshot_completed_plan(cx);
++                });
++            }
++        }
++    }
++
++        fn notify_with_sound(
+         &mut self,
+         caption: impl Into<SharedString>,
+         icon: IconName,
+@@ -4717,6 +4797,7 @@ pub(crate) mod tests {
+                         worktree_paths: WorktreePaths::from_folder_paths(&PathList::default()),
+                         remote_connection: None,
+                         archived: false,
++                        pinned: false,
+                     },
+                     cx,
+                 );
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index 8231181..1f348d3 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -7,6 +7,7 @@ use crate::{
+ };
+ use agent_client_protocol::schema::v1 as acp;
+ use std::cell::RefCell;
++use std::path::PathBuf;
+ 
+ use acp_thread::{
+     Elicitation, ElicitationEntryId, ElicitationStatus, PlanEntry, SandboxAuthorizationDetails,
+@@ -601,6 +602,8 @@ pub struct ThreadView {
+     pub subagent_scroll_handles: RefCell<HashMap<acp::SessionId, ScrollHandle>>,
+     pub edits_expanded: bool,
+     pub plan_expanded: bool,
++    /// Plan path seeded from Build Locally / `/go` for checklist progress sync.
++    pub execution_plan_path: Option<PathBuf>,
+     pub queue_expanded: bool,
+     pub editor_expanded: bool,
+     pub should_be_following: bool,
+@@ -1016,6 +1019,7 @@ impl ThreadView {
+             subagent_scroll_handles: RefCell::new(HashMap::default()),
+             edits_expanded: false,
+             plan_expanded: false,
++            execution_plan_path: None,
+             queue_expanded: true,
+             editor_expanded: false,
+             should_be_following: false,
+@@ -3705,7 +3709,15 @@ impl ThreadView {
+         cx.notify();
+     }
+ 
+-    fn render_plan_summary(
++    pub fn set_execution_plan_path(&mut self, path: Option<PathBuf>) {
++        self.execution_plan_path = path;
++    }
++
++    pub fn expand_plan(&mut self) {
++        self.plan_expanded = true;
++    }
++
++        fn render_plan_summary(
+         &self,
+         plan: &Plan,
+         window: &mut Window,
+@@ -4702,7 +4714,35 @@ impl ThreadView {
+ 
+     fn render_token_usage(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+         let thread = self.thread.read(cx);
+-        let usage = thread.token_usage()?;
++        let Some(usage) = thread.token_usage() else {
++            // Native threads already surface usage via model callbacks; ACP/OMP
++            // agents often omit UsageUpdate — show a muted idle chip so the
++            // composer doesn't look like a missing control.
++            if self.as_native_thread(cx).is_some() {
++                return None;
++            }
++            return Some(
++                h_flex()
++                    .id("token_usage_idle")
++                    .flex_shrink_0()
++                    .gap_1()
++                    .mr_1()
++                    .px_1()
++                    .rounded_sm()
++                    .child(
++                        Label::new("Context")
++                            .size(LabelSize::XSmall)
++                            .color(Color::Muted),
++                    )
++                    .child(
++                        Label::new("—")
++                            .size(LabelSize::XSmall)
++                            .color(Color::Muted),
++                    )
++                    .tooltip(Tooltip::text("Agent has not reported token usage yet"))
++                    .into_any_element(),
++            );
++        };
+         let show_split = self.supports_split_token_display(cx);
+ 
+         let cost_label = thread.cost().map(|cost| {
+diff --git a/crates/agent_ui/src/plan_progress.rs b/crates/agent_ui/src/plan_progress.rs
+new file mode 100644
+index 0000000..c35ee70
+--- /dev/null
++++ b/crates/agent_ui/src/plan_progress.rs
+@@ -0,0 +1,290 @@
++//! Client-side plan checklist seeding + progress for ACP agents (e.g. OMP)
++//! that do not emit `SessionUpdate::Plan` during `/go` execution.
++//!
++//! Reuses existing `AcpThread::update_plan` / activity-bar UI — does not invent
++//! a second checklist widget.
++
++use std::path::Path;
++
++use agent_client_protocol::schema::v1 as acp;
++
++const MAX_PLAN_ENTRIES: usize = 20;
++
++/// Parse execution steps from a Katalyst/OMP plan markdown file.
++///
++/// Preference order:
++/// 1. `### Phase N:` / `### Phase N —` headings (anywhere, typically under Approach)
++/// 2. Checkbox / bullet lines under `## Approach` until the next `## ` heading
++pub fn parse_plan_phases(markdown: &str) -> Vec<String> {
++    let mut phases = Vec::new();
++    for line in markdown.lines() {
++        let trimmed = line.trim();
++        if let Some(rest) = trimmed.strip_prefix("### Phase ") {
++            let name = rest
++                .trim_start_matches(|c: char| c.is_ascii_digit())
++                .trim_start_matches([':', '—', '-', ' '])
++                .trim();
++            if !name.is_empty() {
++                phases.push(name.to_string());
++            } else {
++                phases.push(format!("Phase {}", phases.len() + 1));
++            }
++        }
++        if phases.len() >= MAX_PLAN_ENTRIES {
++            return phases;
++        }
++    }
++    if !phases.is_empty() {
++        return phases;
++    }
++
++    let mut in_approach = false;
++    for line in markdown.lines() {
++        let trimmed = line.trim();
++        if trimmed.starts_with("## ") {
++            in_approach = trimmed.eq_ignore_ascii_case("## Approach")
++                || trimmed.to_ascii_lowercase().starts_with("## approach");
++            continue;
++        }
++        if !in_approach {
++            continue;
++        }
++        let item = trimmed
++            .strip_prefix("- [ ] ")
++            .or_else(|| trimmed.strip_prefix("- [x] "))
++            .or_else(|| trimmed.strip_prefix("- [X] "))
++            .or_else(|| trimmed.strip_prefix("- "))
++            .or_else(|| {
++                if trimmed
++                    .chars()
++                    .next()
++                    .is_some_and(|c| c.is_ascii_digit())
++                {
++                    trimmed
++                        .trim_start_matches(|c: char| c.is_ascii_digit())
++                        .strip_prefix(". ")
++                        .or_else(|| {
++                            trimmed
++                                .trim_start_matches(|c: char| c.is_ascii_digit())
++                                .strip_prefix(") ")
++                        })
++                } else {
++                    None
++                }
++            });
++        if let Some(text) = item {
++            let text = text.trim();
++            if !text.is_empty() && !text.starts_with('`') {
++                phases.push(text.to_string());
++            }
++        }
++        if phases.len() >= MAX_PLAN_ENTRIES {
++            break;
++        }
++    }
++    phases
++}
++
++pub fn read_plan_phases(path: &Path) -> Vec<String> {
++    std::fs::read_to_string(path)
++        .ok()
++        .map(|s| parse_plan_phases(&s))
++        .unwrap_or_default()
++}
++
++/// Extract plan path from a `/go <path>` slash command (optional quotes).
++pub fn plan_path_from_go_command(text: &str) -> Option<std::path::PathBuf> {
++    let trimmed = text.trim();
++    let rest = trimmed
++        .strip_prefix("/go ")
++        .or_else(|| trimmed.strip_prefix("/go\t"))?;
++    let rest = rest.trim();
++    if rest.is_empty() {
++        return None;
++    }
++    let path = if (rest.starts_with('"') && rest.ends_with('"'))
++        || (rest.starts_with('\'') && rest.ends_with('\''))
++    {
++        &rest[1..rest.len() - 1]
++    } else {
++        rest.split_whitespace().next().unwrap_or(rest)
++    };
++    if path.is_empty() {
++        None
++    } else {
++        Some(std::path::PathBuf::from(path))
++    }
++}
++
++/// Build an ACP plan: entries before `in_progress_index` Completed,
++/// that index InProgress (if in range), rest Pending.
++pub fn build_acp_plan(phases: &[String], in_progress_index: usize) -> acp::Plan {
++    let entries = phases
++        .iter()
++        .enumerate()
++        .map(|(i, content)| {
++            let status = if i < in_progress_index {
++                acp::PlanEntryStatus::Completed
++            } else if i == in_progress_index {
++                acp::PlanEntryStatus::InProgress
++            } else {
++                acp::PlanEntryStatus::Pending
++            };
++            acp::PlanEntry::new(content.clone(), acp::PlanEntryPriority::Medium, status)
++        })
++        .collect();
++    acp::Plan::new(entries)
++}
++
++pub fn all_completed_plan(phases: &[String]) -> acp::Plan {
++    let entries = phases
++        .iter()
++        .map(|content| {
++            acp::PlanEntry::new(
++                content.clone(),
++                acp::PlanEntryPriority::Medium,
++                acp::PlanEntryStatus::Completed,
++            )
++        })
++        .collect();
++    acp::Plan::new(entries)
++}
++
++/// Highest `Phase N done` found in assistant text (1-based). Also detects Plan complete.
++pub fn progress_from_assistant_text(text: &str, phase_count: usize) -> ProgressHint {
++    if phase_count == 0 {
++        return ProgressHint::None;
++    }
++    let mut saw_complete = false;
++    let mut max_done = 0usize;
++    for line in text.lines() {
++        let line = line.trim();
++        let lower = line.to_ascii_lowercase();
++        if lower.starts_with("plan complete") {
++            saw_complete = true;
++            continue;
++        }
++        if let Some(rest) = line.strip_prefix("Phase ").or_else(|| {
++            // case-insensitive "phase "
++            if lower.starts_with("phase ") {
++                Some(&line["phase ".len()..])
++            } else {
++                None
++            }
++        }) {
++            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
++            if digits.is_empty() {
++                continue;
++            }
++            let after = rest[digits.len()..].trim_start();
++            let after_lower = after.to_ascii_lowercase();
++            if after_lower.starts_with("done") {
++                if let Ok(n) = digits.parse::<usize>() {
++                    max_done = max_done.max(n);
++                }
++            }
++        }
++    }
++    if saw_complete {
++        return ProgressHint::AllComplete;
++    }
++    if max_done == 0 {
++        ProgressHint::None
++    } else if max_done >= phase_count {
++        ProgressHint::AllComplete
++    } else {
++        // Phase N done → next in progress is index N (0-based)
++        ProgressHint::InProgressIndex(max_done)
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ProgressHint {
++    None,
++    /// 0-based index that should be InProgress (entries before it Completed).
++    InProgressIndex(usize),
++    AllComplete,
++}
++
++/// Contiguous completed count from on-disk `- [x]` lines matching phase titles.
++pub fn completed_count_from_disk(path: &Path, phases: &[String]) -> usize {
++    let Ok(markdown) = std::fs::read_to_string(path) else {
++        return 0;
++    };
++    let lower = markdown.to_ascii_lowercase();
++    let mut completed = 0;
++    for phase in phases {
++        let needle = format!("- [x] {}", phase.to_ascii_lowercase());
++        let needle2 = format!("- [X] {}", phase);
++        if lower.contains(&needle) || markdown.contains(&needle2) {
++            completed += 1;
++        } else {
++            break;
++        }
++    }
++    completed
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses_phase_headings() {
++        let md = r#"
++## Approach
++### Phase 1 — Verify emissions
++- [ ] detail
++### Phase 2: Seed checklist
++### Phase 3 — Context meter
++"#;
++        let phases = parse_plan_phases(md);
++        assert_eq!(
++            phases,
++            vec![
++                "Verify emissions".to_string(),
++                "Seed checklist".to_string(),
++                "Context meter".to_string(),
++            ]
++        );
++    }
++
++    #[test]
++    fn parses_approach_checkboxes_when_no_phase_headings() {
++        let md = r#"
++## Approach
++- [ ] First step
++- [ ] Second step
++## Verification
++- [ ] not counted
++"#;
++        assert_eq!(
++            parse_plan_phases(md),
++            vec!["First step".to_string(), "Second step".to_string()]
++        );
++    }
++
++    #[test]
++    fn progress_parses_phase_done_and_complete() {
++        assert_eq!(
++            progress_from_assistant_text("Phase 2 done: Seed\n", 4),
++            ProgressHint::InProgressIndex(2)
++        );
++        assert_eq!(
++            progress_from_assistant_text("Plan complete. 4/4 phases done.\n", 4),
++            ProgressHint::AllComplete
++        );
++    }
++
++    #[test]
++    fn extracts_go_path() {
++        assert_eq!(
++            plan_path_from_go_command("/go /tmp/foo.plan.md"),
++            Some(std::path::PathBuf::from("/tmp/foo.plan.md"))
++        );
++        assert_eq!(
++            plan_path_from_go_command("/go \"/tmp/bar plan.md\""),
++            Some(std::path::PathBuf::from("/tmp/bar plan.md"))
++        );
++    }
++}
+diff --git a/crates/agent_ui/src/thread_metadata_store.rs b/crates/agent_ui/src/thread_metadata_store.rs
+index aa83d4b..0605c68 100644
+--- a/crates/agent_ui/src/thread_metadata_store.rs
++++ b/crates/agent_ui/src/thread_metadata_store.rs
+@@ -1890,6 +1890,7 @@ mod tests {
+         ThreadMetadata {
+             thread_id: ThreadId::new(),
+             archived: false,
++            pinned: false,
+             session_id: Some(acp::SessionId::new(session_id)),
+             agent_id: agent::ZED_AGENT_ID.clone(),
+             title: if title.is_empty() {
+@@ -2197,6 +2198,7 @@ mod tests {
+             worktree_paths: WorktreePaths::from_folder_paths(&second_paths),
+             remote_connection: None,
+             archived: false,
++            pinned: false,
+         };
+ 
+         cx.update(|cx| {
+@@ -2282,6 +2284,7 @@ mod tests {
+             worktree_paths: WorktreePaths::from_folder_paths(&project_a_paths),
+             remote_connection: None,
+             archived: false,
++            pinned: false,
+         };
+ 
+         cx.update(|cx| {
+@@ -2408,6 +2411,7 @@ mod tests {
+             worktree_paths: WorktreePaths::from_folder_paths(&project_paths),
+             remote_connection: None,
+             archived: false,
++            pinned: false,
+         };
+ 
+         cx.update(|cx| {
+@@ -3152,6 +3156,7 @@ mod tests {
+             interacted_at: None,
+             worktree_paths: linked_worktree_paths.clone(),
+             remote_connection: None,
++            pinned: false,
+         };
+ 
+         let remote_linked_thread = ThreadMetadata {
+@@ -3166,6 +3171,7 @@ mod tests {
+             interacted_at: None,
+             worktree_paths: linked_worktree_paths,
+             remote_connection: Some(remote_a.clone()),
++            pinned: false,
+         };
+ 
+         cx.update(|cx| {
+diff --git a/crates/settings_ui/Cargo.toml b/crates/settings_ui/Cargo.toml
+index b854811..3440f05 100644
+--- a/crates/settings_ui/Cargo.toml
++++ b/crates/settings_ui/Cargo.toml
+@@ -63,6 +63,7 @@ serde_yaml_ng.workspace = true
+ settings.workspace = true
+ shell_command_parser.workspace = true
+ strum.workspace = true
++task.workspace = true
+ telemetry.workspace = true
+ theme.workspace = true
+ theme_settings.workspace = true
+diff --git a/crates/settings_ui/src/pages/external_agents_page.rs b/crates/settings_ui/src/pages/external_agents_page.rs
+index 3e67c6f..9c273d8 100644
+--- a/crates/settings_ui/src/pages/external_agents_page.rs
++++ b/crates/settings_ui/src/pages/external_agents_page.rs
+@@ -24,7 +24,7 @@ use crate::SettingsWindow;
+ pub(crate) fn render_external_agents_page(
+     settings_window: &SettingsWindow,
+     scroll_handle: &ScrollHandle,
+-    _window: &mut Window,
++    window: &mut Window,
+     cx: &mut Context<SettingsWindow>,
+ ) -> AnyElement {
+     let agent_server_store = get_agent_server_store(settings_window, cx);
+@@ -54,7 +54,7 @@ pub(crate) fn render_external_agents_page(
+                 .size(LabelSize::Small)
+                 .color(Color::Muted),
+         )
+-        .child(render_omp_accounts_card(cx))
++        .child(render_omp_accounts_card(settings_window, window, cx))
+         .child(agent_list)
+         .into_any_element()
+ }
+@@ -145,9 +145,8 @@ fn load_omp_connected_accounts() -> Vec<OmpAccountRow> {
+         .collect()
+ }
+ 
+-fn open_omp_account_connect() {
+-    // OMP auth is interactive (`/login` in the TUI). Launch Terminal with a clear
+-    // prompt so users don't have to remember the CLI path.
++fn open_omp_account_connect_external() {
++    // Fallback when Settings has no originating workspace / terminal provider.
+     #[cfg(target_os = "macos")]
+     {
+         let script = concat!(
+@@ -169,7 +168,68 @@ fn open_omp_account_connect() {
+     }
+ }
+ 
+-fn render_omp_accounts_card(cx: &mut Context<SettingsWindow>) -> AnyElement {
++fn open_omp_account_connect(
++    settings_window: &SettingsWindow,
++    _window: &mut Window,
++    cx: &mut Context<SettingsWindow>,
++) {
++    // Prefer in-app Terminal dock via the workspace that opened Settings.
++    let Some(original_window) = settings_window.original_window else {
++        open_omp_account_connect_external();
++        return;
++    };
++
++    let shell_command = concat!(
++        "printf '\\n=== Katalyst · OMP Account Connect ===\\n",
++        "Type /login then choose a provider (subscription or API key).\\n\\n'; ",
++        "command -v omp >/dev/null && exec omp || ",
++        "echo 'omp not found — brew install can1357/tap/omp'",
++    );
++
++    let spawned = original_window.update(cx, |multi_workspace, original_window, cx| {
++        let workspace = multi_workspace.workspace().clone();
++        workspace.update(cx, |workspace, cx| {
++            let spawn = task::SpawnInTerminal {
++                id: task::TaskId("katalyst-omp-account-connect".into()),
++                full_label: "OMP Account Connect".into(),
++                label: "OMP Account Connect".into(),
++                command: Some("sh".into()),
++                args: vec!["-lc".into(), shell_command.into()],
++                command_label: "omp".into(),
++                use_new_terminal: true,
++                allow_concurrent_runs: true,
++                reveal: task::RevealStrategy::Always,
++                reveal_target: task::RevealTarget::Dock,
++                hide: task::HideStrategy::Never,
++                ..Default::default()
++            };
++            // `None` means no terminal provider — fall back outside.
++            workspace.spawn_in_terminal(spawn, original_window, cx)
++        })
++    });
++
++    match spawned {
++        Ok(task) => {
++            // Activate the main window so the dock is visible; keep Settings open.
++            let _ = original_window.update(cx, |_mw, original_window, _cx| {
++                original_window.activate_window();
++            });
++            // Detach the exit-status task; login is interactive and long-lived.
++            cx.spawn(async move |_this, _cx| {
++                let _ = task.await;
++            })
++            .detach();
++        }
++        Err(_) => open_omp_account_connect_external(),
++    }
++}
++
++
++fn render_omp_accounts_card(
++    _settings_window: &SettingsWindow,
++    _window: &mut Window,
++    cx: &mut Context<SettingsWindow>,
++) -> AnyElement {
+     let accounts = load_omp_connected_accounts();
+ 
+     let account_rows = if accounts.is_empty() {
+@@ -265,7 +325,16 @@ fn render_omp_accounts_card(cx: &mut Context<SettingsWindow>) -> AnyElement {
+                                 .size(IconSize::Small)
+                                 .color(Color::Muted),
+                         )
+-                        .on_click(|_, _, _cx| open_omp_account_connect()),
++                        .on_click({
++                            let settings_entity = cx.entity().downgrade();
++                            move |_, window, cx| {
++                                settings_entity
++                                    .update(cx, |settings_window, cx| {
++                                        open_omp_account_connect(settings_window, window, cx);
++                                    })
++                                    .ok();
++                            }
++                        }),
+                 ),
+         )
+         .child(account_rows)
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 22ee3b9..aed1dd0 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
+-            let katalyst_version = "0.1.1";
++            let katalyst_version = "0.1.2";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+             let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };
+-- 
+2.55.0
+
