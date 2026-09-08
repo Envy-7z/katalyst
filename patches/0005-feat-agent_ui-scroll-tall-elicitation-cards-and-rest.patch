@@ -1,7 +1,7 @@
 From 4cdbf6c51b8eb2c1a9d6e3137fb825d560ebc7ef Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 13:43:29 +0700
-Subject: [PATCH 05/12] feat(agent_ui): scroll tall elicitation cards and
+Subject: [PATCH 05/13] feat(agent_ui): scroll tall elicitation cards and
  restore canceled prompts
 
 Cap pending elicitation forms at 420px with an internal body scroll so

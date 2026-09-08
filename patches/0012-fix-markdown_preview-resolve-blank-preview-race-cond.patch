@@ -1,7 +1,7 @@
 From 6cc78deded260b4e6fd96f698c986d5c41b0ada3 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 12:10:34 +0700
-Subject: [PATCH 12/12] fix(markdown_preview): resolve blank preview race
+Subject: [PATCH 12/13] fix(markdown_preview): resolve blank preview race
  condition via BufferEvent subscription and disk fallback
 
 ---

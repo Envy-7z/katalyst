@@ -1,7 +1,7 @@
 From 7202e03978907b9b21e9c75fc8293c52150cf5ee Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 15:31:27 +0700
-Subject: [PATCH 09/12] feat(brand): set version to Katalyst 0.1.0 and render
+Subject: [PATCH 09/13] feat(brand): set version to Katalyst 0.1.0 and render
  custom logo in About modal
 
 ---

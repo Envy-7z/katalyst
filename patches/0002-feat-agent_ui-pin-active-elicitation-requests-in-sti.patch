@@ -1,7 +1,7 @@
 From cbba7b588d1feca851c7234a63eb10772879674c Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Sun, 6 Sep 2026 15:52:38 +0700
-Subject: [PATCH 02/12] feat(agent_ui): pin active elicitation requests in
+Subject: [PATCH 02/13] feat(agent_ui): pin active elicitation requests in
  sticky top banner
 
 Detach pending elicitation requests from the scrolling message list and

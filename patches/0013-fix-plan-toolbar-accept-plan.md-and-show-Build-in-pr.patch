@@ -1,0 +1,77 @@
+From fd0f4baef3406364762cf4c8d3bf00d23857806d Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Tue, 8 Sep 2026 18:20:35 +0700
+Subject: [PATCH 13/13] fix(plan-toolbar): accept *-plan.md and show Build in
+ preview tabs
+
+OMP plan-mode mirrors historically wrote *-plan.md while the toolbar only
+gated on *.plan.md, hiding Build Locally + model selector. Also resolve the
+source editor via active_editor_or_preview so the toolbar works after
+auto-preview conversion.
+---
+ crates/markdown_preview/src/markdown_preview_view.rs |  2 +-
+ crates/zed/src/zed/quick_action_bar.rs               |  2 +-
+ crates/zed/src/zed/quick_action_bar/plan_build.rs    | 12 +++++++++---
+ 3 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/crates/markdown_preview/src/markdown_preview_view.rs b/crates/markdown_preview/src/markdown_preview_view.rs
+index 5431c27..1d482df 100644
+--- a/crates/markdown_preview/src/markdown_preview_view.rs
++++ b/crates/markdown_preview/src/markdown_preview_view.rs
+@@ -559,7 +559,7 @@ impl MarkdownPreviewView {
+         abs_path
+             .file_name()
+             .and_then(|n| n.to_str())
+-            .is_some_and(|n| n.ends_with(".plan.md"))
++            .is_some_and(|n| n.ends_with(".plan.md") || n.ends_with("-plan.md"))
+     }
+ 
+     fn set_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
+diff --git a/crates/zed/src/zed/quick_action_bar.rs b/crates/zed/src/zed/quick_action_bar.rs
+index a3593c8..dcd15d8 100644
+--- a/crates/zed/src/zed/quick_action_bar.rs
++++ b/crates/zed/src/zed/quick_action_bar.rs
+@@ -124,7 +124,7 @@ impl QuickActionBar {
+                 let file = editor.file_at(editor::MultiBufferOffset(0), cx)?;
+                 let path = file.as_local().map(|f| f.abs_path(cx))?;
+                 let name = path.file_name()?.to_string_lossy();
+-                Some(name.ends_with(".plan.md"))
++                Some(plan_build::is_plan_filename(&name))
+             })
+             .unwrap_or(false)
+     }
+diff --git a/crates/zed/src/zed/quick_action_bar/plan_build.rs b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+index 42ae75f..7aef910 100644
+--- a/crates/zed/src/zed/quick_action_bar/plan_build.rs
++++ b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+@@ -14,8 +14,8 @@ struct PlanBuildToast;
+ 
+ impl QuickActionBar {
+     pub fn render_plan_build_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+-        let active_item = self.active_item.as_ref()?;
+-        let editor = active_item.act_as::<Editor>(cx)?;
++        // Prefer source editor even when the active tab is MarkdownPreviewView.
++        let editor = self.active_editor_or_preview(cx)?;
+         let plan_path = plan_path_for_editor(&editor, cx)?;
+ 
+         let workspace_handle = self.workspace.clone();
+@@ -155,9 +155,15 @@ fn plan_path_for_editor(editor: &Entity<Editor>, cx: &App) -> Option<PathBuf> {
+         .or_else(|| file.as_local().map(|file| file.abs_path(cx)))?;
+ 
+     let name = absolute_path.file_name()?.to_string_lossy();
+-    if name.ends_with(".plan.md") {
++    if is_plan_filename(&name) {
+         Some(absolute_path)
+     } else {
+         None
+     }
+ }
++
++/// Katalyst convention is `*.plan.md`. OMP plan-mode local:// paths historically
++/// mirrored as `*-plan.md`; accept both so the Build toolbar stays visible.
++pub(crate) fn is_plan_filename(name: &str) -> bool {
++    name.ends_with(".plan.md") || name.ends_with("-plan.md")
++}
+-- 
+2.55.0
+
