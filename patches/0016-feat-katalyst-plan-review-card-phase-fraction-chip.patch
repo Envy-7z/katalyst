@@ -1,0 +1,431 @@
+From 8abf4357f1a1e8a31da71edd5d9ef7fcf4c68e72 Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Tue, 8 Sep 2026 21:21:52 +0700
+Subject: [PATCH] feat(katalyst): plan review card, phase fraction chip, active
+ skills pill (v0.1.3)
+
+- Inline Review Plan Card in assistant message turn with one-click Build Locally
+- Live phase ratio chip (e.g. 2/6) in plan activity bar header
+- Active skills pill rendered in assistant messages
+- Subagent card step count badge in collapsed header
+- Bump Katalyst version to 0.1.3
+---
+ .../src/conversation_view/thread_view.rs      | 199 +++++++++++++++++-
+ crates/agent_ui/src/plan_progress.rs          | 139 ++++++++++++
+ crates/zed/src/zed.rs                         |   2 +-
+ 3 files changed, 329 insertions(+), 11 deletions(-)
+
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index 1f348d3..c16d600 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -3717,6 +3717,117 @@ impl ThreadView {
+         self.plan_expanded = true;
+     }
+ 
++    pub fn submit_slash_command(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
++        if let Some(plan_path) = crate::plan_progress::plan_path_from_go_command(text) {
++            let phases = crate::plan_progress::read_plan_phases(&plan_path);
++            if !phases.is_empty() {
++                let plan = crate::plan_progress::build_acp_plan(&phases, 0);
++                self.thread.update(cx, |thread, cx| {
++                    thread.update_plan(plan, cx);
++                });
++                self.set_execution_plan_path(Some(plan_path));
++                self.expand_plan();
++            }
++        }
++        let message_editor = self.message_editor.clone();
++        message_editor.update(cx, |editor, cx| {
++            editor.clear(window, cx);
++            editor.insert_text(text, window, cx);
++        });
++        self.send(window, cx);
++    }
++
++    fn render_inline_plan_card(
++        &self,
++        info: crate::plan_progress::PlanProposalInfo,
++        _window: &Window,
++        cx: &Context<Self>,
++    ) -> AnyElement {
++        let plan_path = info.plan_path.clone();
++        let title = info.title;
++        let summary = info.summary;
++
++        v_flex()
++            .w_full()
++            .my_2()
++            .p_3()
++            .gap_2()
++            .rounded_lg()
++            .border_1()
++            .border_color(cx.theme().colors().border)
++            .bg(cx.theme().colors().elevated_surface_background)
++            .child(
++                h_flex()
++                    .w_full()
++                    .justify_between()
++                    .items_center()
++                    .child(
++                        h_flex()
++                            .gap_1p5()
++                            .items_center()
++                            .child(
++                                Icon::new(IconName::ListTodo)
++                                    .size(IconSize::Small)
++                                    .color(Color::Accent),
++                            )
++                            .child(
++                                Label::new("Review Plan")
++                                    .size(LabelSize::Small)
++                                    .color(Color::Muted),
++                            ),
++                    ),
++            )
++            .child(
++                v_flex()
++                    .gap_0p5()
++                    .child(Label::new(title).size(LabelSize::Default))
++                    .child(
++                        Label::new(summary)
++                            .size(LabelSize::Small)
++                            .color(Color::Muted),
++                    ),
++            )
++            .child(
++                h_flex()
++                    .w_full()
++                    .justify_end()
++                    .gap_2()
++                    .child(
++                        Button::new("inline-open-plan", "Open Plan")
++                            .label_size(LabelSize::Small)
++                            .size(ButtonSize::Compact)
++                            .style(ButtonStyle::Subtle)
++                            .on_click({
++                                let plan_path = plan_path.clone();
++                                let workspace = self.workspace.clone();
++                                move |_event, window, cx| {
++                                    if let Some(workspace) = workspace.upgrade() {
++                                        workspace.update(cx, |ws, cx| {
++                                            let _ = ws.open_abs_path(plan_path.clone(), workspace::OpenOptions::default(), window, cx);
++                                        });
++                                    }
++                                }
++                            }),
++                    )
++                    .child(
++                        Button::new("inline-build-plan", "Build Locally")
++                            .label_size(LabelSize::Small)
++                            .size(ButtonSize::Compact)
++                            .style(ButtonStyle::Filled)
++                            .start_icon(
++                                Icon::new(IconName::PlayOutlined)
++                                    .size(IconSize::Small)
++                                    .color(Color::Accent),
++                            )
++                            .on_click(cx.listener(move |this, _event, window, cx| {
++                                let cmd = format!("/go {}", plan_path.display());
++                                this.submit_slash_command(&cmd, window, cx);
++                            })),
++                    ),
++            )
++            .into_any_element()
++    }
++
+         fn render_plan_summary(
+         &self,
+         plan: &Plan,
+@@ -3751,6 +3862,14 @@ impl ThreadView {
+                         )),
+                 )
+                 .when(stats.pending > 0, |this| {
++                    let total = plan.entries.len();
++                    let current_idx = plan
++                        .entries
++                        .iter()
++                        .position(|e| std::ptr::eq(e, entry))
++                        .map(|i| i + 1)
++                        .unwrap_or(stats.completed as usize + 1);
++
+                     this.child(
+                         h_flex()
+                             .absolute()
+@@ -3763,11 +3882,21 @@ impl ThreadView {
+                                 linear_color_stop(self.activity_bar_bg(cx).opacity(0.2), 0.),
+                             )))
+                             .child(
+-                                div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
+-                                    Label::new(format!("{} left", stats.pending))
+-                                        .size(LabelSize::Small)
+-                                        .color(Color::Muted),
+-                                ),
++                                h_flex()
++                                    .pr_0p5()
++                                    .gap_1()
++                                    .items_center()
++                                    .bg(self.activity_bar_bg(cx))
++                                    .child(
++                                        Label::new(format!("{}/{}", current_idx, total))
++                                            .size(LabelSize::Small)
++                                            .color(Color::Accent),
++                                    )
++                                    .child(
++                                        Label::new(format!("· {} left", stats.pending))
++                                            .size(LabelSize::Small)
++                                            .color(Color::Muted),
++                                    ),
+                             ),
+                     )
+                 })
+@@ -6395,16 +6524,54 @@ impl ThreadView {
+                         |(chunk_ix, chunk)| match chunk {
+                             AssistantMessageChunk::Message { block, .. } => {
+                                 block.markdown().and_then(|md| {
+-                                    let this_is_blank = md.read(cx).source().trim().is_empty();
++                                    let raw_source = md.read(cx).source();
++                                    let this_is_blank = raw_source.trim().is_empty();
+                                     is_blank = is_blank && this_is_blank;
+                                     if this_is_blank {
+                                         return None;
+                                     }
+ 
+-                                    Some(
+-                                        self.render_markdown(md.clone(), style.clone(), cx)
+-                                            .into_any_element(),
+-                                    )
++                                    let active_skills = crate::plan_progress::extract_active_skills(raw_source);
++                                    let plan_proposal = crate::plan_progress::extract_plan_proposal_info(raw_source);
++                                    let md_element = self
++                                        .render_markdown(md.clone(), style.clone(), cx)
++                                        .into_any_element();
++
++                                    if active_skills.is_some() || plan_proposal.is_some() {
++                                        let container = v_flex()
++                                            .w_full()
++                                            .gap_2()
++                                            .when_some(active_skills, |this, (skills_text, _)| {
++                                                this.child(
++                                                    h_flex()
++                                                        .gap_1p5()
++                                                        .items_center()
++                                                        .px_2()
++                                                        .py_0p5()
++                                                        .rounded_md()
++                                                        .bg(cx.theme().colors().elevated_surface_background)
++                                                        .border_1()
++                                                        .border_color(cx.theme().colors().border)
++                                                        .child(
++                                                            Icon::new(IconName::Sparkle)
++                                                                .size(IconSize::XSmall)
++                                                                .color(Color::Accent),
++                                                        )
++                                                        .child(
++                                                            Label::new(format!("Active skills: {}", skills_text))
++                                                                .size(LabelSize::XSmall)
++                                                                .color(Color::Muted),
++                                                        ),
++                                                )
++                                            })
++                                            .child(md_element)
++                                            .when_some(plan_proposal, |this, info| {
++                                                this.child(self.render_inline_plan_card(info, window, cx))
++                                            });
++                                        Some(container.into_any_element())
++                                    } else {
++                                        Some(md_element)
++                                    }
+                                 })
+                             }
+                             AssistantMessageChunk::Thought { block, .. } => {
+@@ -10841,6 +11008,18 @@ impl ThreadView {
+                                                 self.tool_name_font_size(),
+                                             )),
+                                         )
++                                    })
++                                    .when(files_changed == 0 && thread.as_ref().is_some(), |this| {
++                                        let entry_count = thread.as_ref().map(|t| t.read(cx).entries().len()).unwrap_or(0);
++                                        if entry_count > 0 {
++                                            this.child(
++                                                Label::new(format!("— {} steps", entry_count))
++                                                    .size(LabelSize::Custom(self.tool_name_font_size()))
++                                                    .color(Color::Muted),
++                                            )
++                                        } else {
++                                            this
++                                        }
+                                     }),
+                             )
+                             .when(!has_no_title_or_canceled && !is_pending_tool_call, |this| {
+diff --git a/crates/agent_ui/src/plan_progress.rs b/crates/agent_ui/src/plan_progress.rs
+index c35ee70..2773b64 100644
+--- a/crates/agent_ui/src/plan_progress.rs
++++ b/crates/agent_ui/src/plan_progress.rs
+@@ -225,6 +225,128 @@ pub fn completed_count_from_disk(path: &Path, phases: &[String]) -> usize {
+     completed
+ }
+ 
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct PlanProposalInfo {
++    pub title: String,
++    pub summary: String,
++    pub plan_path: std::path::PathBuf,
++}
++
++/// Calculate current 1-based phase index and total phases for header ratio chip (e.g. 2/6).
++pub fn plan_phase_ratio(completed: u32, total: usize, in_progress: bool) -> (usize, usize) {
++    let current = if in_progress {
++        (completed as usize + 1).min(total)
++    } else {
++        (completed as usize).min(total)
++    };
++    (current, total)
++}
++
++/// Extract "Active skills: <list>" from the first few lines of an assistant message.
++/// Returns (skills_summary, remaining_markdown_body).
++pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
++    let mut lines = Vec::new();
++    let mut skills = None;
++    let mut split_ix = 0;
++
++    for (i, line) in text.lines().enumerate() {
++        if i < 5 && skills.is_none() {
++            let trimmed = line.trim();
++            if let Some(rest) = trimmed
++                .strip_prefix("Active skills:")
++                .or_else(|| trimmed.strip_prefix("active skills:"))
++            {
++                let s = rest.trim();
++                if !s.is_empty() && !s.eq_ignore_ascii_case("none | subagent: none") {
++                    skills = Some(s.to_string());
++                    split_ix = i + 1;
++                    continue;
++                }
++            }
++        }
++        lines.push(line);
++    }
++
++    skills.map(|skills_text| {
++        let remaining = lines[split_ix..].join("\n");
++        (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
++    })
++}
++
++/// Detect whether text contains a proposal/mention of a plan file, and extract title/summary.
++pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
++    let Some(home) = std::env::var_os("HOME") else {
++        return None;
++    };
++    let home_path = std::path::Path::new(&home);
++
++    // Look for path candidates ending in .plan.md or -plan.md, or local://...
++    let mut found_path = None;
++    for word in text.split_whitespace() {
++        let clean = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>');
++        if clean.ends_with(".plan.md") || clean.ends_with("-plan.md") {
++            if clean.starts_with("~/") {
++                found_path = Some(home_path.join(&clean[2..]));
++                break;
++            } else if clean.starts_with('/') {
++                found_path = Some(std::path::PathBuf::from(clean));
++                break;
++            } else if let Some(slug) = clean.strip_prefix("local://") {
++                let disk_slug = if slug.ends_with("-plan.md") {
++                    format!("{}.plan.md", &slug[..slug.len() - "-plan.md".len()])
++                } else {
++                    slug.to_string()
++                };
++                found_path = Some(home_path.join(".cursor/plans").join(disk_slug));
++                break;
++            }
++        }
++    }
++
++    let plan_path = found_path?;
++    if !plan_path.is_file() {
++        return None;
++    }
++
++    let content = std::fs::read_to_string(&plan_path).ok()?;
++    let mut title = "Implementation Plan".to_string();
++    let mut in_context = false;
++    let mut context_lines = Vec::new();
++
++    for line in content.lines() {
++        let trimmed = line.trim();
++        if trimmed.starts_with("# Plan:") {
++            title = trimmed["# Plan:".len()..].trim().to_string();
++        } else if trimmed.starts_with("# ") && title == "Implementation Plan" {
++            title = trimmed[2..].trim().to_string();
++        }
++
++        if trimmed.starts_with("## Context") {
++            in_context = true;
++            continue;
++        } else if trimmed.starts_with("## ") && in_context {
++            in_context = false;
++        }
++
++        if in_context && !trimmed.is_empty() && context_lines.len() < 2 {
++            context_lines.push(trimmed);
++        }
++    }
++
++    let summary = if !context_lines.is_empty() {
++        context_lines.join(" ")
++    } else {
++        format!("Plan with {} execution steps.", parse_plan_phases(&content).len())
++    };
++
++    Some(PlanProposalInfo {
++        title,
++        summary,
++        plan_path,
++    })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -287,4 +409,21 @@ mod tests {
+             Some(std::path::PathBuf::from("/tmp/bar plan.md"))
+         );
+     }
++
++    #[test]
++    fn test_plan_phase_ratio_calculation() {
++        assert_eq!(plan_phase_ratio(0, 6, true), (1, 6));
++        assert_eq!(plan_phase_ratio(1, 6, true), (2, 6));
++        assert_eq!(plan_phase_ratio(2, 6, false), (2, 6));
++        assert_eq!(plan_phase_ratio(6, 6, false), (6, 6));
++    }
++
++    #[test]
++    fn test_extract_active_skills() {
++        let text = "Active skills: token-saving, caveman-lite\n\nHere is the plan.";
++        let (skills, body) = extract_active_skills(text).expect("should extract skills");
++        assert_eq!(skills, "token-saving, caveman-lite");
++        assert_eq!(body, "Here is the plan.");
++    }
++
+ }
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index aed1dd0..599ba6b 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
+-            let katalyst_version = "0.1.2";
++            let katalyst_version = "0.1.3";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+             let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };
+-- 
+2.55.0
+

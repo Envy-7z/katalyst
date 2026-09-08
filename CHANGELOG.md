@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.3] - 2026-09-08
+
+### Added
+- **Inline Review Plan Card**:
+  - Assistant message turns proposing or referencing a plan now render an inline `ReviewPlanCard` with plan title, 2-line summary, `Open Plan` and one-click `Build Locally` button.
+- **Phase Ratio Progress Chip (`2/6`)**:
+  - Activity bar plan summary now renders a fraction chip (`x/total · y left`) during execution, providing live step progress.
+- **Active Skills Metadata Pill**:
+  - Renders an explicit styled badge (`IconName::Sparkle` + pill) when an assistant message announces active skills.
+- **Subagent Card Step Indicator**:
+  - Collapsed subagent card headers now display step counts when no file diffs are present.
+
+---
+
 ## [0.1.2] - 2026-09-08
 
 ### Added
