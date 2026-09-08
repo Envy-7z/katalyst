@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-09-08
+
+### Added
+- **OMP Provider Accounts (GUI)**:
+  - Settings → External Agents now shows connected OMP provider accounts (identity + latest usage status).
+  - **Connect Account…** opens Terminal with OMP and prompts `/login` — no CLI scavenger hunt for friends/onboarding.
+
+### Fixed
+- Plan toolbar accepts both `*.plan.md` and `*-plan.md`; Build + model selector remain visible in Markdown Preview tabs (patch 0013).
+- Plan auto-open hook strips accidental `nan#` prefixes when mirroring plans; propose-resilience guidance added to agent rules.
+
+### Changed
+- About dialog version bumped to **Katalyst 0.1.1**.
+
+---
+
 ## [0.1.0] - 2026-09-08
 
 ### Added
