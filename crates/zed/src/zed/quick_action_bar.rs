@@ -124,7 +124,7 @@ impl QuickActionBar {
                 let file = editor.file_at(editor::MultiBufferOffset(0), cx)?;
                 let path = file.as_local().map(|f| f.abs_path(cx))?;
                 let name = path.file_name()?.to_string_lossy();
-                Some(name.ends_with(".plan.md"))
+                Some(plan_build::is_plan_filename(&name))
             })
             .unwrap_or(false)
     }

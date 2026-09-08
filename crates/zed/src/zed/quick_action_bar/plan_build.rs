@@ -14,8 +14,8 @@ struct PlanBuildToast;
 
 impl QuickActionBar {
     pub fn render_plan_build_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let active_item = self.active_item.as_ref()?;
-        let editor = active_item.act_as::<Editor>(cx)?;
+        // Prefer source editor even when the active tab is MarkdownPreviewView.
+        let editor = self.active_editor_or_preview(cx)?;
         let plan_path = plan_path_for_editor(&editor, cx)?;
 
         let workspace_handle = self.workspace.clone();
@@ -155,9 +155,15 @@ fn plan_path_for_editor(editor: &Entity<Editor>, cx: &App) -> Option<PathBuf> {
         .or_else(|| file.as_local().map(|file| file.abs_path(cx)))?;
 
     let name = absolute_path.file_name()?.to_string_lossy();
-    if name.ends_with(".plan.md") {
+    if is_plan_filename(&name) {
         Some(absolute_path)
     } else {
         None
     }
+}
+
+/// Katalyst convention is `*.plan.md`. OMP plan-mode local:// paths historically
+/// mirrored as `*-plan.md`; accept both so the Build toolbar stays visible.
+pub(crate) fn is_plan_filename(name: &str) -> bool {
+    name.ends_with(".plan.md") || name.ends_with("-plan.md")
 }

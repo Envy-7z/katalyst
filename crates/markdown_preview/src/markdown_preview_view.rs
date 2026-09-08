@@ -559,7 +559,7 @@ impl MarkdownPreviewView {
         abs_path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".plan.md"))
+            .is_some_and(|n| n.ends_with(".plan.md") || n.ends_with("-plan.md"))
     }
 
     fn set_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
