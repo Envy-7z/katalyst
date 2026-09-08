@@ -24,7 +24,7 @@ use crate::SettingsWindow;
 pub(crate) fn render_external_agents_page(
     settings_window: &SettingsWindow,
     scroll_handle: &ScrollHandle,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let agent_server_store = get_agent_server_store(settings_window, cx);
@@ -54,7 +54,7 @@ pub(crate) fn render_external_agents_page(
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
-        .child(render_omp_accounts_card(cx))
+        .child(render_omp_accounts_card(settings_window, window, cx))
         .child(agent_list)
         .into_any_element()
 }
@@ -145,9 +145,8 @@ fn load_omp_connected_accounts() -> Vec<OmpAccountRow> {
         .collect()
 }
 
-fn open_omp_account_connect() {
-    // OMP auth is interactive (`/login` in the TUI). Launch Terminal with a clear
-    // prompt so users don't have to remember the CLI path.
+fn open_omp_account_connect_external() {
+    // Fallback when Settings has no originating workspace / terminal provider.
     #[cfg(target_os = "macos")]
     {
         let script = concat!(
@@ -169,7 +168,68 @@ fn open_omp_account_connect() {
     }
 }
 
-fn render_omp_accounts_card(cx: &mut Context<SettingsWindow>) -> AnyElement {
+fn open_omp_account_connect(
+    settings_window: &SettingsWindow,
+    _window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    // Prefer in-app Terminal dock via the workspace that opened Settings.
+    let Some(original_window) = settings_window.original_window else {
+        open_omp_account_connect_external();
+        return;
+    };
+
+    let shell_command = concat!(
+        "printf '\\n=== Katalyst · OMP Account Connect ===\\n",
+        "Type /login then choose a provider (subscription or API key).\\n\\n'; ",
+        "command -v omp >/dev/null && exec omp || ",
+        "echo 'omp not found — brew install can1357/tap/omp'",
+    );
+
+    let spawned = original_window.update(cx, |multi_workspace, original_window, cx| {
+        let workspace = multi_workspace.workspace().clone();
+        workspace.update(cx, |workspace, cx| {
+            let spawn = task::SpawnInTerminal {
+                id: task::TaskId("katalyst-omp-account-connect".into()),
+                full_label: "OMP Account Connect".into(),
+                label: "OMP Account Connect".into(),
+                command: Some("sh".into()),
+                args: vec!["-lc".into(), shell_command.into()],
+                command_label: "omp".into(),
+                use_new_terminal: true,
+                allow_concurrent_runs: true,
+                reveal: task::RevealStrategy::Always,
+                reveal_target: task::RevealTarget::Dock,
+                hide: task::HideStrategy::Never,
+                ..Default::default()
+            };
+            // `None` means no terminal provider — fall back outside.
+            workspace.spawn_in_terminal(spawn, original_window, cx)
+        })
+    });
+
+    match spawned {
+        Ok(task) => {
+            // Activate the main window so the dock is visible; keep Settings open.
+            let _ = original_window.update(cx, |_mw, original_window, _cx| {
+                original_window.activate_window();
+            });
+            // Detach the exit-status task; login is interactive and long-lived.
+            cx.spawn(async move |_this, _cx| {
+                let _ = task.await;
+            })
+            .detach();
+        }
+        Err(_) => open_omp_account_connect_external(),
+    }
+}
+
+
+fn render_omp_accounts_card(
+    _settings_window: &SettingsWindow,
+    _window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
     let accounts = load_omp_connected_accounts();
 
     let account_rows = if accounts.is_empty() {
@@ -265,7 +325,16 @@ fn render_omp_accounts_card(cx: &mut Context<SettingsWindow>) -> AnyElement {
                                 .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                        .on_click(|_, _, _cx| open_omp_account_connect()),
+                        .on_click({
+                            let settings_entity = cx.entity().downgrade();
+                            move |_, window, cx| {
+                                settings_entity
+                                    .update(cx, |settings_window, cx| {
+                                        open_omp_account_connect(settings_window, window, cx);
+                                    })
+                                    .ok();
+                            }
+                        }),
                 ),
         )
         .child(account_rows)

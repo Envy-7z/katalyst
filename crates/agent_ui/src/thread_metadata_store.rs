@@ -1890,6 +1890,7 @@ mod tests {
         ThreadMetadata {
             thread_id: ThreadId::new(),
             archived: false,
+            pinned: false,
             session_id: Some(acp::SessionId::new(session_id)),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: if title.is_empty() {
@@ -2197,6 +2198,7 @@ mod tests {
             worktree_paths: WorktreePaths::from_folder_paths(&second_paths),
             remote_connection: None,
             archived: false,
+            pinned: false,
         };
 
         cx.update(|cx| {
@@ -2282,6 +2284,7 @@ mod tests {
             worktree_paths: WorktreePaths::from_folder_paths(&project_a_paths),
             remote_connection: None,
             archived: false,
+            pinned: false,
         };
 
         cx.update(|cx| {
@@ -2408,6 +2411,7 @@ mod tests {
             worktree_paths: WorktreePaths::from_folder_paths(&project_paths),
             remote_connection: None,
             archived: false,
+            pinned: false,
         };
 
         cx.update(|cx| {
@@ -3152,6 +3156,7 @@ mod tests {
             interacted_at: None,
             worktree_paths: linked_worktree_paths.clone(),
             remote_connection: None,
+            pinned: false,
         };
 
         let remote_linked_thread = ThreadMetadata {
@@ -3166,6 +3171,7 @@ mod tests {
             interacted_at: None,
             worktree_paths: linked_worktree_paths,
             remote_connection: Some(remote_a.clone()),
+            pinned: false,
         };
 
         cx.update(|cx| {

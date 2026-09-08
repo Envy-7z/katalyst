@@ -45,6 +45,7 @@ use crate::conversation_view::elicitation::{
     ElicitationCard, ElicitationCardHandlers, ElicitationFormState, should_render_elicitation,
 };
 use crate::message_editor::SessionCapabilities;
+use crate::plan_progress::{self, ProgressHint};
 use crate::{AgentThreadSource, DEFAULT_THREAD_TITLE, resolve_agent_image};
 use lru::LruCache;
 use rope::Point;
@@ -1701,6 +1702,10 @@ impl ConversationView {
                     return;
                 }
 
+                if *stop_reason == acp::StopReason::EndTurn {
+                    self.apply_execution_plan_progress(&thread, cx);
+                }
+
                 let sent_queued_message = if let Some(active) = self.root_thread_view() {
                     active.update(cx, |active, cx| {
                         // Don't auto-send while the user is editing the next message.
@@ -2842,7 +2847,82 @@ impl ConversationView {
         )
     }
 
-    fn notify_with_sound(
+    /// Advance client-seeded checklist from assistant "Phase N done" / "Plan complete"
+    /// lines (OMP often omits SessionUpdate::Plan).
+    fn apply_execution_plan_progress(
+        &mut self,
+        thread: &Entity<AcpThread>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(active) = self.root_thread_view() else {
+            return;
+        };
+        let plan_path = active.read(cx).execution_plan_path.clone();
+        let (phases, assistant_text) = thread.read_with(cx, |thread, cx| {
+            let phases: Vec<String> = thread
+                .plan()
+                .entries
+                .iter()
+                .map(|e| e.content.read(cx).source().to_string())
+                .collect();
+            let assistant_text = thread
+                .entries()
+                .iter()
+                .rev()
+                .find_map(|entry| match entry {
+                    AgentThreadEntry::AssistantMessage(msg) => Some(msg.to_markdown(cx)),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            (phases, assistant_text)
+        });
+        if phases.is_empty() {
+            return;
+        }
+
+        let mut hint = plan_progress::progress_from_assistant_text(&assistant_text, phases.len());
+        if let Some(path) = plan_path.as_ref() {
+            let disk_done = plan_progress::completed_count_from_disk(path, &phases);
+            match hint {
+                ProgressHint::None if disk_done > 0 && disk_done < phases.len() => {
+                    hint = ProgressHint::InProgressIndex(disk_done);
+                }
+                ProgressHint::None if disk_done >= phases.len() => {
+                    hint = ProgressHint::AllComplete;
+                }
+                ProgressHint::InProgressIndex(idx) if disk_done > idx => {
+                    if disk_done >= phases.len() {
+                        hint = ProgressHint::AllComplete;
+                    } else {
+                        hint = ProgressHint::InProgressIndex(disk_done);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        match hint {
+            ProgressHint::None => {}
+            ProgressHint::InProgressIndex(idx) => {
+                let plan = plan_progress::build_acp_plan(&phases, idx);
+                thread.update(cx, |thread, cx| {
+                    thread.update_plan(plan, cx);
+                });
+                active.update(cx, |view, _cx| {
+                    view.expand_plan();
+                });
+            }
+            ProgressHint::AllComplete => {
+                let plan = plan_progress::all_completed_plan(&phases);
+                thread.update(cx, |thread, cx| {
+                    thread.update_plan(plan, cx);
+                    thread.snapshot_completed_plan(cx);
+                });
+            }
+        }
+    }
+
+        fn notify_with_sound(
         &mut self,
         caption: impl Into<SharedString>,
         icon: IconName,
@@ -4717,6 +4797,7 @@ pub(crate) mod tests {
                         worktree_paths: WorktreePaths::from_folder_paths(&PathList::default()),
                         remote_connection: None,
                         archived: false,
+                        pinned: false,
                     },
                     cx,
                 );

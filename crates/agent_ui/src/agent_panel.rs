@@ -36,6 +36,7 @@ use zed_actions::{
 };
 
 use crate::ExpandMessageEditor;
+use crate::plan_progress;
 use crate::ManageProfiles;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
@@ -4134,6 +4135,35 @@ impl AgentPanel {
         server_view.read(cx).root_thread_view()
     }
 
+    /// Seed the activity-bar plan checklist from a plan markdown file, then expand it.
+    /// Used when OMP does not emit `SessionUpdate::Plan` during `/go`.
+    pub fn seed_execution_plan_from_path(
+        &mut self,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let phases = plan_progress::read_plan_phases(path);
+        if phases.is_empty() {
+            return false;
+        }
+        let Some(thread) = self.active_agent_thread(cx) else {
+            return false;
+        };
+        let Some(thread_view) = self.active_thread_view(cx) else {
+            return false;
+        };
+        let plan = plan_progress::build_acp_plan(&phases, 0);
+        thread.update(cx, |thread, cx| {
+            thread.update_plan(plan, cx);
+        });
+        let path_buf = path.to_path_buf();
+        thread_view.update(cx, |view, _cx| {
+            view.set_execution_plan_path(Some(path_buf));
+            view.expand_plan();
+        });
+        true
+    }
+
     /// Focuses the active thread composer, sets its text, and submits — used by
     /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
     pub fn submit_slash_command(
@@ -4145,6 +4175,9 @@ impl AgentPanel {
         let Some(thread_view) = self.active_thread_view(cx) else {
             return false;
         };
+        if let Some(plan_path) = plan_progress::plan_path_from_go_command(text) {
+            self.seed_execution_plan_from_path(&plan_path, cx);
+        }
         let text = text.to_string();
         thread_view.update(cx, |view, cx| {
             let message_editor = view.message_editor.clone();
@@ -8149,6 +8182,7 @@ mod tests {
                         worktree_paths: WorktreePaths::from_folder_paths(&PathList::default()),
                         remote_connection: None,
                         archived: false,
+                        pinned: false,
                     },
                     cx,
                 );

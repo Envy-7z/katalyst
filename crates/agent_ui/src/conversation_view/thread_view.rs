@@ -7,6 +7,7 @@ use crate::{
 };
 use agent_client_protocol::schema::v1 as acp;
 use std::cell::RefCell;
+use std::path::PathBuf;
 
 use acp_thread::{
     Elicitation, ElicitationEntryId, ElicitationStatus, PlanEntry, SandboxAuthorizationDetails,
@@ -601,6 +602,8 @@ pub struct ThreadView {
     pub subagent_scroll_handles: RefCell<HashMap<acp::SessionId, ScrollHandle>>,
     pub edits_expanded: bool,
     pub plan_expanded: bool,
+    /// Plan path seeded from Build Locally / `/go` for checklist progress sync.
+    pub execution_plan_path: Option<PathBuf>,
     pub queue_expanded: bool,
     pub editor_expanded: bool,
     pub should_be_following: bool,
@@ -1016,6 +1019,7 @@ impl ThreadView {
             subagent_scroll_handles: RefCell::new(HashMap::default()),
             edits_expanded: false,
             plan_expanded: false,
+            execution_plan_path: None,
             queue_expanded: true,
             editor_expanded: false,
             should_be_following: false,
@@ -3705,7 +3709,15 @@ impl ThreadView {
         cx.notify();
     }
 
-    fn render_plan_summary(
+    pub fn set_execution_plan_path(&mut self, path: Option<PathBuf>) {
+        self.execution_plan_path = path;
+    }
+
+    pub fn expand_plan(&mut self) {
+        self.plan_expanded = true;
+    }
+
+        fn render_plan_summary(
         &self,
         plan: &Plan,
         window: &mut Window,
@@ -4702,7 +4714,35 @@ impl ThreadView {
 
     fn render_token_usage(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let thread = self.thread.read(cx);
-        let usage = thread.token_usage()?;
+        let Some(usage) = thread.token_usage() else {
+            // Native threads already surface usage via model callbacks; ACP/OMP
+            // agents often omit UsageUpdate — show a muted idle chip so the
+            // composer doesn't look like a missing control.
+            if self.as_native_thread(cx).is_some() {
+                return None;
+            }
+            return Some(
+                h_flex()
+                    .id("token_usage_idle")
+                    .flex_shrink_0()
+                    .gap_1()
+                    .mr_1()
+                    .px_1()
+                    .rounded_sm()
+                    .child(
+                        Label::new("Context")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("—")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .tooltip(Tooltip::text("Agent has not reported token usage yet"))
+                    .into_any_element(),
+            );
+        };
         let show_split = self.supports_split_token_display(cx);
 
         let cost_label = thread.cost().map(|cost| {

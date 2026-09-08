@@ -16647,6 +16647,7 @@ dependencies = [
  "settings",
  "shell_command_parser",
  "strum 0.28.0",
+ "task",
  "telemetry",
  "theme",
  "theme_settings",
