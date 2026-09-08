@@ -80,12 +80,16 @@ cd ~/.katalyst && ./install.sh
 | Feature | Stock Zed | Katalyst ⚡ |
 |---|:---:|:---:|
 | **Plan & Build Toolbar** | ❌ No | ✅ **One-click `[ ▶ Build Locally ]` on any `*.plan.md`** |
+| **Inline Review Plan Card** | ❌ No | ✅ **One-click Build card right inside the chat proposal** |
+| **Live Phase Tracker Chip** | ❌ No | ✅ **Real-time step ratio (`2/6 · 4 left`) in activity bar** |
+| **GUI Provider Accounts** | ❌ No | ✅ **Settings → External Agents card with in-app Connect Account** |
+| **Active Skills Transparency**| ❌ Hidden | ✅ **Metadata pill (`✨ Active skills: ...`) on execution turns** |
 | **Model Switcher on Plan** | ❌ No | ✅ **Instant `[ Auto ˅ ]` picker in preview toolbar** |
 | **Multi-Question Form Scroll** | ⚠️ Buttons get cut off | ✅ **Capped at 420px with internal smooth scrolling** |
 | **Prompt Recovery on Cancel** | ❌ Prompt lost | ✅ **Canceled prompts automatically restored in composer** |
 | **Answered Request Badges** | ❌ Takes up huge space | ✅ **Collapses into sleek 1-line status badges** |
 | **Daily Update Notifications** | ❌ No native alert | ✅ **macOS Notification Center banner at 09:00 AM** |
-| **Universal Skills Suite** | ❌ Empty | ✅ **12 pre-loaded skills (TDD, Debugging, S3, Worktrees)** |
+| **Universal Skills Suite** | ❌ Empty | ✅ **Pre-loaded domain skills with zero-cognitive-load auto-routing** |
 
 ---
 
@@ -93,9 +97,10 @@ cd ~/.katalyst && ./install.sh
 
 Katalyst supports any major cloud model or 100% free local models:
 
-### 1. Interactive Browser Login (Recommended)
-Connect your existing subscriptions with encrypted Keychain storage:
+### 1. In-App Provider Accounts GUI (Recommended)
+Open **Settings (`Cmd+,`) → External Agents** to see all connected provider accounts, quotas, and status. Click **`Connect Account…`** to launch the docked in-app terminal and connect subscriptions or API keys via `/login`.
 
+Alternatively, use the terminal directly:
 ```bash
 # For Claude 3.7 Sonnet / Opus
 omp auth-broker login anthropic
