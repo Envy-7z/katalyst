@@ -53,6 +53,7 @@ fi
 
 if [[ -d "$APP_BUNDLE" ]]; then
   echo "Installing $SRC -> $APP_BIN"
+  rm -f "$APP_BIN" 2>/dev/null || true
   cp "$SRC" "$APP_BIN"
   # Preserve Katalyst branding (name, icon, App Switcher id)
   plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
