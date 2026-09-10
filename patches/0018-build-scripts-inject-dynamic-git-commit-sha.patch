@@ -1,40 +1,25 @@
-From ac1c187915c10c52919f853d78aa9fa4d307d174 Mon Sep 17 00:00:00 2001
+From 174ae4112df7e6a7c209705bcc38e53e5cf46d83 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
-Date: Fri, 11 Sep 2026 03:32:12 +0700
-Subject: [PATCH] build(scripts): inject dynamic git commit sha into rebuild
- scripts
+Date: Fri, 11 Sep 2026 03:52:23 +0700
+Subject: [PATCH] fix(build): unlink active binary before cp to prevent
+ Operation not permitted
 
 ---
- scripts/safe-rebuild.sh     | 2 ++
- scripts/sync-and-rebuild.sh | 2 ++
- 2 files changed, 4 insertions(+)
+ scripts/safe-rebuild.sh | 1 +
+ 1 file changed, 1 insertion(+)
 
 diff --git a/scripts/safe-rebuild.sh b/scripts/safe-rebuild.sh
-index 63cf4c5..2ded7fd 100755
+index 2ded7fd..a066b42 100755
 --- a/scripts/safe-rebuild.sh
 +++ b/scripts/safe-rebuild.sh
-@@ -15,6 +15,8 @@ cd "$REPO_DIR"
- export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
- export CARGO_INCREMENTAL=0
- export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
-+export ZED_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
-+export ZED_BUILD_ID="${ZED_BUILD_ID:-custom}"
+@@ -53,6 +53,7 @@ fi
  
- if [[ "$PROFILE" == "release" ]]; then
-   export CARGO_PROFILE_RELEASE_LTO=false
-diff --git a/scripts/sync-and-rebuild.sh b/scripts/sync-and-rebuild.sh
-index 1c4b0a6..474f837 100755
---- a/scripts/sync-and-rebuild.sh
-+++ b/scripts/sync-and-rebuild.sh
-@@ -14,6 +14,8 @@ cd "$REPO_DIR"
- export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
- export CARGO_INCREMENTAL=0
- export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
-+export ZED_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
-+export ZED_BUILD_ID="${ZED_BUILD_ID:-custom}"
- 
- if [[ "$PROFILE" == "release" ]]; then
-   export CARGO_PROFILE_RELEASE_LTO=false
+ if [[ -d "$APP_BUNDLE" ]]; then
+   echo "Installing $SRC -> $APP_BIN"
++  rm -f "$APP_BIN" 2>/dev/null || true
+   cp "$SRC" "$APP_BIN"
+   # Preserve Katalyst branding (name, icon, App Switcher id)
+   plutil -replace CFBundleDisplayName -string "Katalyst" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true
 -- 
 2.55.0
 
