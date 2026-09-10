@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.4] - 2026-09-11
+
+### Added
+- **Turn Step Numbering Badges (`Step X/Y`)**:
+  - Tool call cards in multi-tool assistant execution turns now display sequential step badges (`Step 1/N`, `Step 2/N`) in the header (Cursor Composer & Windsurf Cascade 2026 parity).
+- **Enhanced Token & Cost Efficiency HUD**:
+  - Composer footer token chip upgraded with live readable count (`{used} / {max}`) and optional session cost badge (`• {cost}`) alongside the circular progress ring.
+
+### Fixed
+- **Katalyst Self-Close on Plan Mode Exit**:
+  - Hardened against ACP agent process exit cascades: default config option set to `default`, unbinding global `Cmd+Q` preventing accidental app exits, and hardening window lifecycle across empty tabs.
+
+---
+
 ## [0.1.3] - 2026-09-08
 
 ### Added

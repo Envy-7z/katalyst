@@ -1,0 +1,342 @@
+From 1bc48c3de02bcb76b7c1d04b9690cbbc8b507cbf Mon Sep 17 00:00:00 2001
+From: Wisnuu <wisnuandrian325@gmail.com>
+Date: Fri, 11 Sep 2026 03:23:54 +0700
+Subject: [PATCH] feat(katalyst): turn step numbering badges and live token
+ cost HUD (v0.1.4)
+
+---
+ .../src/conversation_view/thread_view.rs      | 186 +++++++++++++-----
+ crates/zed/src/zed.rs                         |   8 +-
+ 2 files changed, 144 insertions(+), 50 deletions(-)
+
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index c16d600..a369188 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -3717,7 +3717,12 @@ impl ThreadView {
+         self.plan_expanded = true;
+     }
+ 
+-    pub fn submit_slash_command(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
++    pub fn submit_slash_command(
++        &mut self,
++        text: &str,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
+         if let Some(plan_path) = crate::plan_progress::plan_path_from_go_command(text) {
+             let phases = crate::plan_progress::read_plan_phases(&plan_path);
+             if !phases.is_empty() {
+@@ -3757,25 +3762,21 @@ impl ThreadView {
+             .border_color(cx.theme().colors().border)
+             .bg(cx.theme().colors().elevated_surface_background)
+             .child(
+-                h_flex()
+-                    .w_full()
+-                    .justify_between()
+-                    .items_center()
+-                    .child(
+-                        h_flex()
+-                            .gap_1p5()
+-                            .items_center()
+-                            .child(
+-                                Icon::new(IconName::ListTodo)
+-                                    .size(IconSize::Small)
+-                                    .color(Color::Accent),
+-                            )
+-                            .child(
+-                                Label::new("Review Plan")
+-                                    .size(LabelSize::Small)
+-                                    .color(Color::Muted),
+-                            ),
+-                    ),
++                h_flex().w_full().justify_between().items_center().child(
++                    h_flex()
++                        .gap_1p5()
++                        .items_center()
++                        .child(
++                            Icon::new(IconName::ListTodo)
++                                .size(IconSize::Small)
++                                .color(Color::Accent),
++                        )
++                        .child(
++                            Label::new("Review Plan")
++                                .size(LabelSize::Small)
++                                .color(Color::Muted),
++                        ),
++                ),
+             )
+             .child(
+                 v_flex()
+@@ -3803,7 +3804,12 @@ impl ThreadView {
+                                 move |_event, window, cx| {
+                                     if let Some(workspace) = workspace.upgrade() {
+                                         workspace.update(cx, |ws, cx| {
+-                                            let _ = ws.open_abs_path(plan_path.clone(), workspace::OpenOptions::default(), window, cx);
++                                            let _ = ws.open_abs_path(
++                                                plan_path.clone(),
++                                                workspace::OpenOptions::default(),
++                                                window,
++                                                cx,
++                                            );
+                                         });
+                                     }
+                                 }
+@@ -3828,7 +3834,7 @@ impl ThreadView {
+             .into_any_element()
+     }
+ 
+-        fn render_plan_summary(
++    fn render_plan_summary(
+         &self,
+         plan: &Plan,
+         window: &mut Window,
+@@ -4863,11 +4869,7 @@ impl ThreadView {
+                             .size(LabelSize::XSmall)
+                             .color(Color::Muted),
+                     )
+-                    .child(
+-                        Label::new("—")
+-                            .size(LabelSize::XSmall)
+-                            .color(Color::Muted),
+-                    )
++                    .child(Label::new("—").size(LabelSize::XSmall).color(Color::Muted))
+                     .tooltip(Tooltip::text("Agent has not reported token usage yet"))
+                     .into_any_element(),
+             );
+@@ -4939,6 +4941,10 @@ impl ThreadView {
+             crate::humanize_token_count(usage.max_tokens.saturating_sub(max_output_tokens));
+         let output_max_label = crate::humanize_token_count(max_output_tokens);
+ 
++        let used_for_chip = used.clone();
++        let max_for_chip = max.clone();
++        let cost_for_chip = cost_label.clone();
++
+         let build_tooltip = {
+             move |_window: &mut Window, cx: &mut App| {
+                 let percentage = percentage.clone();
+@@ -5037,6 +5043,9 @@ impl ThreadView {
+             Some(
+                 h_flex()
+                     .id("circular_progress_tokens")
++                    .flex_shrink_0()
++                    .items_center()
++                    .gap_1()
+                     .mt_px()
+                     .mr_1()
+                     .child(
+@@ -5049,6 +5058,18 @@ impl ThreadView {
+                         .stroke_width(stroke_width)
+                         .progress_color(progress_color(progress_ratio)),
+                     )
++                    .child(
++                        Label::new(format!("{used_for_chip} / {max_for_chip}"))
++                            .size(LabelSize::XSmall)
++                            .color(Color::Muted),
++                    )
++                    .when_some(cost_for_chip, |this, cost| {
++                        this.child(
++                            Label::new(format!("• {cost}"))
++                                .size(LabelSize::XSmall)
++                                .color(Color::Muted),
++                        )
++                    })
+                     .hoverable_tooltip(build_tooltip)
+                     .into_any_element(),
+             )
+@@ -6531,8 +6552,12 @@ impl ThreadView {
+                                         return None;
+                                     }
+ 
+-                                    let active_skills = crate::plan_progress::extract_active_skills(raw_source);
+-                                    let plan_proposal = crate::plan_progress::extract_plan_proposal_info(raw_source);
++                                    let active_skills =
++                                        crate::plan_progress::extract_active_skills(raw_source);
++                                    let plan_proposal =
++                                        crate::plan_progress::extract_plan_proposal_info(
++                                            raw_source,
++                                        );
+                                     let md_element = self
+                                         .render_markdown(md.clone(), style.clone(), cx)
+                                         .into_any_element();
+@@ -6549,7 +6574,10 @@ impl ThreadView {
+                                                         .px_2()
+                                                         .py_0p5()
+                                                         .rounded_md()
+-                                                        .bg(cx.theme().colors().elevated_surface_background)
++                                                        .bg(cx
++                                                            .theme()
++                                                            .colors()
++                                                            .elevated_surface_background)
+                                                         .border_1()
+                                                         .border_color(cx.theme().colors().border)
+                                                         .child(
+@@ -6558,15 +6586,20 @@ impl ThreadView {
+                                                                 .color(Color::Accent),
+                                                         )
+                                                         .child(
+-                                                            Label::new(format!("Active skills: {}", skills_text))
+-                                                                .size(LabelSize::XSmall)
+-                                                                .color(Color::Muted),
++                                                            Label::new(format!(
++                                                                "Active skills: {}",
++                                                                skills_text
++                                                            ))
++                                                            .size(LabelSize::XSmall)
++                                                            .color(Color::Muted),
+                                                         ),
+                                                 )
+                                             })
+                                             .child(md_element)
+                                             .when_some(plan_proposal, |this, info| {
+-                                                this.child(self.render_inline_plan_card(info, window, cx))
++                                                this.child(
++                                                    self.render_inline_plan_card(info, window, cx),
++                                                )
+                                             });
+                                         Some(container.into_any_element())
+                                     } else {
+@@ -10230,6 +10263,40 @@ impl ThreadView {
+             .child(bar(4, "w_2_5"))
+             .into_any_element()
+     }
++    fn turn_tool_step_info(&self, entry_ix: usize, cx: &App) -> Option<(usize, usize)> {
++        let thread = self.thread.read(cx);
++        let entries = thread.entries();
++        if entry_ix >= entries.len() {
++            return None;
++        }
++
++        let turn_start = (0..entry_ix)
++            .rev()
++            .find(|&i| matches!(entries.get(i), Some(AgentThreadEntry::UserMessage(_))))
++            .map(|i| i + 1)
++            .unwrap_or(0);
++
++        let turn_end = (entry_ix + 1..entries.len())
++            .find(|&i| matches!(entries.get(i), Some(AgentThreadEntry::UserMessage(_))))
++            .unwrap_or(entries.len());
++
++        let mut current_step = 0;
++        let mut total_steps = 0;
++        for i in turn_start..turn_end {
++            if matches!(entries.get(i), Some(AgentThreadEntry::ToolCall(_))) {
++                total_steps += 1;
++                if i == entry_ix {
++                    current_step = total_steps;
++                }
++            }
++        }
++
++        if total_steps > 1 && current_step > 0 {
++            Some((current_step, total_steps))
++        } else {
++            None
++        }
++    }
+ 
+     fn render_tool_call_label(
+         &self,
+@@ -10298,6 +10365,21 @@ impl ThreadView {
+             .color(Color::Muted)
+             .into_any_element()
+         };
++        let step_badge = self.turn_tool_step_info(entry_ix, cx).map(|(step, total)| {
++            h_flex()
++                .flex_shrink_0()
++                .px_1p5()
++                .py_0p5()
++                .rounded_xs()
++                .bg(cx.theme().colors().element_background)
++                .border_1()
++                .border_color(cx.theme().colors().border_variant)
++                .child(
++                    Label::new(format!("Step {step}/{total}"))
++                        .size(LabelSize::XSmall)
++                        .color(Color::Muted),
++                )
++        });
+ 
+         let gradient_overlay = {
+             div()
+@@ -10340,6 +10422,7 @@ impl ThreadView {
+             })
+             .overflow_hidden()
+             .child(tool_icon)
++            .children(step_badge)
+             .child(if has_location {
+                 h_flex()
+                     .id(("open-tool-call-location", entry_ix))
+@@ -11009,18 +11092,26 @@ impl ThreadView {
+                                             )),
+                                         )
+                                     })
+-                                    .when(files_changed == 0 && thread.as_ref().is_some(), |this| {
+-                                        let entry_count = thread.as_ref().map(|t| t.read(cx).entries().len()).unwrap_or(0);
+-                                        if entry_count > 0 {
+-                                            this.child(
+-                                                Label::new(format!("— {} steps", entry_count))
+-                                                    .size(LabelSize::Custom(self.tool_name_font_size()))
+-                                                    .color(Color::Muted),
+-                                            )
+-                                        } else {
+-                                            this
+-                                        }
+-                                    }),
++                                    .when(
++                                        files_changed == 0 && thread.as_ref().is_some(),
++                                        |this| {
++                                            let entry_count = thread
++                                                .as_ref()
++                                                .map(|t| t.read(cx).entries().len())
++                                                .unwrap_or(0);
++                                            if entry_count > 0 {
++                                                this.child(
++                                                    Label::new(format!("— {} steps", entry_count))
++                                                        .size(LabelSize::Custom(
++                                                            self.tool_name_font_size(),
++                                                        ))
++                                                        .color(Color::Muted),
++                                                )
++                                            } else {
++                                                this
++                                            }
++                                        },
++                                    ),
+                             )
+                             .when(!has_no_title_or_canceled && !is_pending_tool_call, |this| {
+                                 this.tooltip(move |_, cx| {
+@@ -12453,8 +12544,7 @@ impl Render for ThreadView {
+             .on_action(
+                 cx.listener(|this, _: &editor::actions::Cancel, window, cx| {
+                     if !this.close_thread_search(window, cx) {
+-                        let is_generating =
+-                            this.thread.read(cx).status() != ThreadStatus::Idle;
++                        let is_generating = this.thread.read(cx).status() != ThreadStatus::Idle;
+                         if is_generating {
+                             this.cancel_generation_and_restore_prompt(window, cx);
+                         } else {
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 599ba6b..b1d73d4 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1546,10 +1546,14 @@ fn open_about_window(cx: &mut App) {
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
+-            let katalyst_version = "0.1.3";
++            let katalyst_version = "0.1.4";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+-            let commit_prefix = if commit_short.len() >= 8 { &commit_short[..8] } else { commit_short };
++            let commit_prefix = if commit_short.len() >= 8 {
++                &commit_short[..8]
++            } else {
++                commit_short
++            };
+             let full_version: SharedString = format!("{katalyst_version} ({commit_prefix})").into();
+ 
+             Self {
+-- 
+2.55.0
+
