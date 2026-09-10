@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.4)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog notes
+        id: changelog
+        run: |
+          python3 - <<'PY'
+          import os, re
+
+          tag = os.environ.get("RELEASE_TAG", "")
+          version = tag.lstrip("v")
+          
+          notes = ""
+          if os.path.exists("CHANGELOG.md"):
+              with open("CHANGELOG.md", "r", encoding="utf-8") as f:
+                  text = f.read()
+              pattern = rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)"
+              match = re.search(pattern, text, re.DOTALL)
+              if match:
+                  notes = match.group(1).strip()
+
+          if not notes:
+              notes = f"Release {tag} of Katalyst."
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("notes<<EOF\n")
+              out.write(notes + "\n")
+              out.write("EOF\n")
+          PY
+        env:
+          RELEASE_TAG: ${{ steps.vars.outputs.tag }}
+
+      - name: Bundle patches archive
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          ARCHIVE_NAME="katalyst-patches-${TAG}.tar.gz"
+          tar -czvf "${ARCHIVE_NAME}" patches/
+          echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: "Katalyst ${{ steps.vars.outputs.tag }}"
+          body: ${{ steps.changelog.outputs.notes }}
+          files: ${{ env.archive }}
+          draft: false
+          prerelease: false
