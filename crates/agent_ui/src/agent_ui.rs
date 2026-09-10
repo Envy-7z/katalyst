@@ -436,6 +436,11 @@ pub enum Agent {
     Stub,
 }
 
+/// Katalyst starts new workspaces in OMP while keeping the native agent selectable.
+pub(crate) fn katalyst_default_agent() -> Agent {
+    Agent::Custom { id: "omp".into() }
+}
+
 impl From<AgentId> for Agent {
     fn from(id: AgentId) -> Self {
         if id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
@@ -466,6 +471,7 @@ impl Agent {
     pub fn label(&self) -> SharedString {
         match self {
             Self::NativeAgent => "Zed Agent".into(),
+            Self::Custom { id, .. } if id.as_ref() == "omp" => "OMP".into(),
             Self::Custom { id, .. } => id.0.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "Stub Agent".into(),
@@ -1262,6 +1268,14 @@ mod tests {
             Agent::Custom {
                 id: "my-agent".into(),
             },
+        );
+    }
+
+    #[test]
+    fn test_katalyst_default_agent_is_omp() {
+        assert_eq!(
+            katalyst_default_agent(),
+            Agent::Custom { id: "omp".into() }
         );
     }
 

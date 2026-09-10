@@ -1592,7 +1592,7 @@ impl AgentPanel {
             pending_serialization: None,
             new_user_onboarding: onboarding,
             thread_store,
-            selected_agent: Agent::default(),
+            selected_agent: crate::katalyst_default_agent(),
             _thread_view_subscription: None,
             _active_thread_focus_subscription: None,
             new_user_onboarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
@@ -6245,7 +6245,12 @@ impl AgentPanel {
             .justify_between();
 
         let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
-            Label::new(format!("New {} Thread", selected_agent_label))
+            let title = if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
+                "New Katalyst Thread".to_string()
+            } else {
+                format!("New {} Thread", selected_agent_label)
+            };
+            Label::new(title)
                 .color(Color::Muted)
                 .truncate()
                 .into_any_element()
@@ -6355,6 +6360,11 @@ impl AgentPanel {
     }
 
     fn should_render_new_user_onboarding(&mut self, cx: &mut Context<Self>) -> bool {
+        // Katalyst uses OMP as its first-run agent and does not show the Zed Pro upsell.
+        if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
+            return false;
+        }
+
         if self
             .new_user_onboarding_upsell_dismissed
             .load(Ordering::Acquire)

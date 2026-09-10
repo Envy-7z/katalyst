@@ -210,6 +210,10 @@ struct Onboarding {
     focus_handle: FocusHandle,
     user_store: Entity<UserStore>,
     scroll_handle: ScrollHandle,
+    session_sync_status: SharedString,
+    session_sync_in_progress: bool,
+    session_sync_auto_enabled: bool,
+    session_sync_task: Option<Task<()>>,
     _settings_subscription: Subscription,
 }
 
@@ -267,15 +271,25 @@ impl Onboarding {
                 focus_handle: cx.focus_handle(),
                 scroll_handle: ScrollHandle::new(),
                 user_store: workspace.user_store().clone(),
+                session_sync_status: basics_page::session_sync_status(),
+                session_sync_in_progress: false,
+                session_sync_auto_enabled: basics_page::session_sync_auto_enabled(),
+                session_sync_task: None,
                 _settings_subscription: cx
                     .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
             }
         })
     }
 
-    fn on_finish(_: &Finish, _: &mut Window, cx: &mut App) {
+    fn on_finish(_: &Finish, window: &mut Window, cx: &mut App) {
         telemetry::event!("Finish Setup");
+        if basics_page::session_sync_auto_enabled() {
+            let _ = std::process::Command::new("katalyst-session-sync")
+                .args(["sync", "--sources", "cursor,codex", "--all"])
+                .spawn();
+        }
         go_to_welcome_page(cx);
+        window.dispatch_action(zed_actions::assistant::ToggleFocus.boxed_clone(), cx);
     }
 
     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
@@ -297,7 +311,14 @@ impl Onboarding {
     }
 
     fn render_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        crate::basics_page::render_basics_page(&self.user_store, cx).into_any_element()
+        crate::basics_page::render_basics_page(
+            &self.user_store,
+            self.session_sync_status.clone(),
+            self.session_sync_in_progress,
+            self.session_sync_auto_enabled,
+            cx,
+        )
+        .into_any_element()
     }
 }
 
@@ -347,7 +368,7 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(Vector::square(VectorName::ZedLogo, rems(2.5)))
+                                            .child(Vector::square(VectorName::KatalystLogo, rems(2.5)))
                                             .child(
                                                 v_flex()
                                                     .child(
@@ -423,6 +444,10 @@ impl Item for Onboarding {
             user_store: self.user_store.clone(),
             scroll_handle: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
+            session_sync_status: self.session_sync_status.clone(),
+            session_sync_in_progress: false,
+            session_sync_auto_enabled: self.session_sync_auto_enabled,
+            session_sync_task: None,
             _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
         })))
     }

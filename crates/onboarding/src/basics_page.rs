@@ -5,7 +5,7 @@ use client::{Client, TelemetrySettings, UserStore, zed_urls};
 use cloud_api_types::Plan;
 use collections::HashMap;
 use fs::Fs;
-use gpui::{Action, Animation, AnimationExt, App, Entity, IntoElement, TaskExt, pulsating_between};
+use gpui::{Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between};
 use project::agent_server_store::AllAgentServersSettings;
 use project::project_settings::ProjectSettings;
 use project::{AgentRegistryStore, RegistryAgent};
@@ -22,7 +22,7 @@ use ui::{
 use vim_mode_setting::VimModeSetting;
 
 use crate::{
-    ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
+    ImportCursorSettings, ImportVsCodeSettings, Onboarding, SettingsImportState,
     theme_preview::{ThemePreviewStyle, ThemePreviewTile},
 };
 
@@ -536,6 +536,112 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
         .child(h_flex().gap_1().child(vscode).child(cursor))
 }
 
+pub(crate) fn session_sync_status() -> SharedString {
+    std::process::Command::new("katalyst-session-sync")
+        .args(["status"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty())
+        .unwrap_or_else(|| "Cursor and Codex chats will be detected after installation.".to_string())
+        .into()
+}
+
+fn session_sync_auto_marker() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+        .join(".katalyst/imports/auto-sync-disabled")
+}
+
+pub(crate) fn session_sync_auto_enabled() -> bool {
+    !session_sync_auto_marker().exists()
+}
+
+fn set_session_sync_auto_enabled(enabled: bool) {
+    let marker = session_sync_auto_marker();
+    if enabled {
+        let _ = std::fs::remove_file(marker);
+    } else {
+        if let Some(parent) = marker.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(marker, b"disabled\n");
+    }
+}
+
+fn render_session_import_section(
+    sync_status: SharedString,
+    sync_in_progress: bool,
+    auto_enabled: bool,
+    cx: &mut Context<Onboarding>,
+) -> impl IntoElement {
+    v_flex()
+        .gap_2()
+        .child(
+            h_flex()
+                .w_full()
+                .justify_between()
+                .gap_2()
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(Label::new("Cursor & Codex Chat Migration"))
+                        .child(
+                            Label::new(sync_status)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new("One-way sync keeps source transcripts read-only. Continued OMP chats are never overwritten.")
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        ),
+                )
+                .child(h_flex().gap_1().child(
+                    Button::new(
+                        "katalyst-session-auto-import",
+                        if auto_enabled { "Auto import: On" } else { "Auto import: Off" },
+                    )
+                        .style(ButtonStyle::Outlined)
+                        .toggle_state(auto_enabled)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.session_sync_auto_enabled = !this.session_sync_auto_enabled;
+                            set_session_sync_auto_enabled(this.session_sync_auto_enabled);
+                            cx.notify();
+                        })),
+                ).child(
+                    Button::new(
+                        "katalyst-session-sync",
+                        if sync_in_progress { "Syncing…" } else { "Sync now" },
+                    )
+                        .style(ButtonStyle::Outlined)
+                        .disabled(sync_in_progress)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.session_sync_in_progress = true;
+                            this.session_sync_status = "Syncing Cursor and Codex chats…".into();
+                            cx.notify();
+                            let sync = cx.background_executor().spawn(async move {
+                                std::process::Command::new("katalyst-session-sync")
+                                    .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
+                                    .output()
+                            });
+                            this.session_sync_task = Some(cx.spawn(async move |this, cx| {
+                                let _ = sync.await;
+                                this.update(cx, |this, cx| {
+                                    this.session_sync_in_progress = false;
+                                    this.session_sync_status = session_sync_status();
+                                    cx.notify();
+                                })
+                                .ok();
+                            }));
+                        })),
+                )),
+        )
+}
+
 pub(crate) const FEATURED_AGENT_IDS: &[&str] =
     &["claude-acp", "codex-acp", "github-copilot-cli", "cursor"];
 
@@ -712,7 +818,13 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
         .child(grid)
 }
 
-pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
+pub(crate) fn render_basics_page(
+    user_store: &Entity<UserStore>,
+    sync_status: SharedString,
+    sync_in_progress: bool,
+    auto_enabled: bool,
+    cx: &mut Context<Onboarding>,
+) -> impl IntoElement {
     let mut tab_index = 0;
 
     v_flex()
@@ -722,6 +834,12 @@ pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -
         .child(render_base_keymap_section(&mut tab_index, cx))
         .child(render_ai_section(user_store, cx))
         .child(render_import_settings_section(&mut tab_index, cx))
+        .child(render_session_import_section(
+            sync_status,
+            sync_in_progress,
+            auto_enabled,
+            cx,
+        ))
         .child(render_vim_mode_switch(&mut tab_index, cx))
         .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
         .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
