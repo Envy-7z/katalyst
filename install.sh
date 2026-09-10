@@ -63,6 +63,15 @@ else
   echo "   ✓ OMP is installed ($(omp --version 2>/dev/null || echo 'active'))."
 fi
 
+# 2b. OMP-Cost Installation (AI Token Spend & FinOps Telemetry)
+echo "2b. Checking omp-cost (Token Telemetry CLI)..."
+if ! command -v omp-cost >/dev/null 2>&1; then
+  echo "   Installing omp-cost via installer..."
+  run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/faridlamaul/omp-cost/main/install.sh | bash' 2>/dev/null || true
+else
+  echo "   ✓ omp-cost is installed ($(omp-cost --version 2>/dev/null || echo 'active'))."
+fi
+
 # 3. Editor Installation & Branding
 echo "3. Checking Editor (Katalyst / Zed)..."
 if [[ ! -d "/Applications/Katalyst.app" && ! -d "/Applications/Zed.app" ]]; then
@@ -240,5 +249,6 @@ echo "To get started:"
 echo "  1. Open Katalyst:            open -a Katalyst (or zed .)"
 echo "  2. Open Agent Panel:         Cmd + Shift + A"
 echo "  3. Open any *.plan.md file:  Review and click [ ▶ Build Locally ]"
-echo "  4. Check for updates:        katalyst-update"
+echo "  4. Check AI Token Spend:     omp-cost"
+echo "  5. Check for updates:        katalyst-update"
 echo ""
