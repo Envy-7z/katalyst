@@ -15,6 +15,8 @@ cd "$REPO_DIR"
 export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 export CARGO_INCREMENTAL=0
 export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
+export ZED_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+export ZED_BUILD_ID="${ZED_BUILD_ID:-custom}"
 
 if [[ "$PROFILE" == "release" ]]; then
   export CARGO_PROFILE_RELEASE_LTO=false
