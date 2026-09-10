@@ -40,6 +40,14 @@
   "session": {
     "trust_all_worktrees": true
   },
+  "when_closing_with_no_tabs": "keep_window_open",
+  "on_last_window_closed": "platform_default",
+  "confirm_quit": true,
+  "auto_install_extensions": {
+    "html": true,
+    "prettier": true,
+    "toml": true
+  },
   "agent_servers": {
     "omp": {
       "type": "custom",
