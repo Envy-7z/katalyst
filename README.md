@@ -82,6 +82,9 @@ cd ~/.katalyst && ./install.sh
 | **Plan & Build Toolbar** | ❌ No | ✅ **One-click `[ ▶ Build Locally ]` on any `*.plan.md`** |
 | **Inline Review Plan Card** | ❌ No | ✅ **One-click Build card right inside the chat proposal** |
 | **Live Phase Tracker Chip** | ❌ No | ✅ **Real-time step ratio (`2/6 · 4 left`) in activity bar** |
+| **Turn Step Numbering Badges** | ❌ Flat stream | ✅ **Sequential `Step X/Y` badges on tool cards (Cursor/Windsurf parity)** |
+| **Live Token & Cost HUD** | ⚠️ Unlabelled ring | ✅ **Real-time `{used} / {max} • ${cost}` status bar chip (Codex parity)** |
+| **Anti-Sleep Response Engine** | ❌ Mac sleeps mid-stream | ✅ **Display sleep assertion keeps execution alive during streaming** |
 | **GUI Provider Accounts** | ❌ No | ✅ **Settings → External Agents card with in-app Connect Account** |
 | **Active Skills Transparency**| ❌ Hidden | ✅ **Metadata pill (`✨ Active skills: ...`) on execution turns** |
 | **Model Switcher on Plan** | ❌ No | ✅ **Instant `[ Auto ˅ ]` picker in preview toolbar** |
@@ -177,6 +180,23 @@ Instead of asking for messy blind edits, prompt the agent to create a plan:
 | `Escape` (while generating) | Stop generation & restore prompt into composer |
 
 ---
+## 💰 Token Cost & Telemetry (`omp-cost`)
+
+Katalyst integrates natively with **`omp-cost`** to track multi-profile AI spend, prompt cache hit ratios, and per-model consumption directly from your local session database:
+
+```bash
+# Run quick cost report across all profiles
+omp-cost
+
+# Filter by specific profile or time window
+omp-cost --profile default --period 7d
+```
+
+* **Cache Savings Visibility**: Real-time insight into prompt-cache efficiency (typically 85%–91% cost reduction).
+* **Multi-Account Tracking**: Accurate breakdown across Google Antigravity, Copilot, Codex, and Anthropic.
+
+---
+
 
 ## 🧩 Extending Katalyst: Skills, MCP Servers & Hooks
 
