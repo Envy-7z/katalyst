@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enhanced Token & Cost Efficiency HUD**:
   - Composer footer token chip upgraded with live readable count (`{used} / {max}`) and optional session cost badge (`• {cost}`) alongside the circular progress ring.
 
+- **Upstream Zed Core v1.21.0 Sync**:
+  - Rebased on 52 upstream commits (`a57ba9b`), introducing anti-sleep during AI response streaming (`gpui: Prevent idle sleep during AI response streaming`), parse-time markdown code block highlighting cache, and row-chunk buffer highlighting.
+- **OMP Engine v18.1.17**:
+  - Upgraded system OMP engine to v18.1.17 via Homebrew tap with enhanced session management and multimodal video ingestion.
 ### Fixed
 - **Katalyst Self-Close on Plan Mode Exit**:
   - Hardened against ACP agent process exit cascades: default config option set to `default`, unbinding global `Cmd+Q` preventing accidental app exits, and hardening window lifecycle across empty tabs.

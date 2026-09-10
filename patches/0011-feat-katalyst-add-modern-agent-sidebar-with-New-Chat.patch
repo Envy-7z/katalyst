@@ -1,7 +1,7 @@
-From 1199242ec714529ddbd1c5b88789b7a3681b7d3a Mon Sep 17 00:00:00 2001
+From 5d4a91f5675e92573caac7635ca902547d671154 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 00:08:48 +0700
-Subject: [PATCH 11/13] feat(katalyst): add modern agent sidebar with New Chat,
+Subject: [PATCH 11/19] feat(katalyst): add modern agent sidebar with New Chat,
  Projects section, and pin badge; fix worktree pollution
 
 - Add dedicated New Chat button row at top of sidebar
@@ -7780,7 +7780,7 @@ index ad14083..3f6de2c 100644
                  }
                  view.pending_update_task = None;
 diff --git a/crates/recent_projects/src/recent_projects.rs b/crates/recent_projects/src/recent_projects.rs
-index c26d753..fbb9ab7 100644
+index 5578ae9..0fb81d2 100644
 --- a/crates/recent_projects/src/recent_projects.rs
 +++ b/crates/recent_projects/src/recent_projects.rs
 @@ -193,7 +193,10 @@ pub async fn delete_recent_project(workspace_id: WorkspaceId, db: &WorkspaceDb)

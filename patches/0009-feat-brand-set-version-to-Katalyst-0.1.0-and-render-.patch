@@ -1,7 +1,7 @@
-From 7202e03978907b9b21e9c75fc8293c52150cf5ee Mon Sep 17 00:00:00 2001
+From 383f84fe9c228331faeb12fe40f9865628e3b9cd Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 15:31:27 +0700
-Subject: [PATCH 09/13] feat(brand): set version to Katalyst 0.1.0 and render
+Subject: [PATCH 09/19] feat(brand): set version to Katalyst 0.1.0 and render
  custom logo in About modal
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH 09/13] feat(brand): set version to Katalyst 0.1.0 and render
  2 files changed, 22 insertions(+), 39 deletions(-)
 
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index 09165dc..f20afb4 100644
+index 29b5905..4b918ac 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -67,7 +67,7 @@ use project::{

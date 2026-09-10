@@ -1,7 +1,7 @@
-From cbba7b588d1feca851c7234a63eb10772879674c Mon Sep 17 00:00:00 2001
+From 04e5cc0b17a20bad03f8fa1546774b463b07f876 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Sun, 6 Sep 2026 15:52:38 +0700
-Subject: [PATCH 02/13] feat(agent_ui): pin active elicitation requests in
+Subject: [PATCH 02/19] feat(agent_ui): pin active elicitation requests in
  sticky top banner
 
 Detach pending elicitation requests from the scrolling message list and
@@ -12,7 +12,7 @@ elicitations remain in the conversation history as compact badges.
  1 file changed, 53 insertions(+), 10 deletions(-)
 
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index dfff305..eb116d7 100644
+index 26187c7..59a49b7 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -6430,17 +6430,22 @@ impl ThreadView {
@@ -89,7 +89,7 @@ index dfff305..eb116d7 100644
      fn elicitation_card_handlers(&self, cx: &Context<Self>) -> ElicitationCardHandlers {
          let view = cx.entity().downgrade();
  
-@@ -12457,6 +12496,10 @@ impl Render for ThreadView {
+@@ -12477,6 +12516,10 @@ impl Render for ThreadView {
                      .flatten(),
                  |this, bar| this.child(bar),
              )

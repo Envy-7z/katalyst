@@ -1,8 +1,8 @@
-From 222b0d120c18a999eaed108709cee049d6f75430 Mon Sep 17 00:00:00 2001
+From 1e5165a54589ad4a8a9c367972fc0ed0e5e26b50 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 20:51:33 +0700
-Subject: [PATCH] feat(katalyst): plan checklist seeding, context idle chip,
- in-app connect account (v0.1.2)
+Subject: [PATCH 15/19] feat(katalyst): plan checklist seeding, context idle
+ chip, in-app connect account (v0.1.2)
 
 - Seed ACP execution plan from *.plan.md on Build Locally / /go
 - Progress tracking from 'Phase N done' output and disk checkbox sync
@@ -24,10 +24,10 @@ Subject: [PATCH] feat(katalyst): plan checklist seeding, context idle chip,
  create mode 100644 crates/agent_ui/src/plan_progress.rs
 
 diff --git a/Cargo.lock b/Cargo.lock
-index 2f63722..3ec2aec 100644
+index 5eb5c66..9590fa1 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -16584,6 +16584,7 @@ dependencies = [
+@@ -16647,6 +16647,7 @@ dependencies = [
   "settings",
   "shell_command_parser",
   "strum 0.28.0",
@@ -102,7 +102,7 @@ index fec1321..24546af 100644
                      cx,
                  );
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index 3090009..8c1ee14 100644
+index 28fc3c7..f99190c 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
 @@ -23,6 +23,7 @@ mod message_editor;
@@ -229,7 +229,7 @@ index 2325cc3..f170d11 100644
                      cx,
                  );
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index 8231181..1f348d3 100644
+index d21841c..c68ec3c 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -7,6 +7,7 @@ use crate::{
@@ -794,7 +794,7 @@ index 3e67c6f..9c273d8 100644
          )
          .child(account_rows)
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index 22ee3b9..aed1dd0 100644
+index 59136ff..7892e83 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {

@@ -1,7 +1,7 @@
-From fd0f4baef3406364762cf4c8d3bf00d23857806d Mon Sep 17 00:00:00 2001
+From 8901d9d0fcdaa1d48323933f76bd82685c147151 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 18:20:35 +0700
-Subject: [PATCH 13/13] fix(plan-toolbar): accept *-plan.md and show Build in
+Subject: [PATCH 13/19] fix(plan-toolbar): accept *-plan.md and show Build in
  preview tabs
 
 OMP plan-mode mirrors historically wrote *-plan.md while the toolbar only

@@ -1,8 +1,8 @@
-From b18c4ad7f0bd8bd822c9326c0387cf3beea42d67 Mon Sep 17 00:00:00 2001
+From bdf81b21b3a5d3e83b2fa1793f146ea379e1a502 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 19:20:42 +0700
-Subject: [PATCH] feat(settings): add OMP Provider Accounts card with Connect
- Account GUI
+Subject: [PATCH 14/19] feat(settings): add OMP Provider Accounts card with
+ Connect Account GUI
 
 Show connected OMP auth providers on External Agents settings and open
 Terminal with /login guidance. Bump Katalyst About version to 0.1.1.
@@ -241,7 +241,7 @@ index 406dc35..3e67c6f 100644
      settings_window: &SettingsWindow,
      cx: &App,
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index f20afb4..22ee3b9 100644
+index 4b918ac..59136ff 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {

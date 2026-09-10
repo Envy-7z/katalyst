@@ -1,7 +1,7 @@
-From b4957ee6a0ece79cf8bb3778c28f4c69de1e1ddf Mon Sep 17 00:00:00 2001
+From daa2e72ca7d81ddf16750572e0496ffa74dc547e Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 15:23:30 +0700
-Subject: [PATCH 08/13] feat(brand): rename app menus and About modal to
+Subject: [PATCH 08/19] feat(brand): rename app menus and About modal to
  Katalyst
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH 08/13] feat(brand): rename app menus and About modal to
  2 files changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index 259ea57..09165dc 100644
+index c4bf14e..29b5905 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -1551,16 +1551,16 @@ fn open_about_window(cx: &mut App) {

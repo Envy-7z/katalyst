@@ -1,8 +1,8 @@
-From 8abf4357f1a1e8a31da71edd5d9ef7fcf4c68e72 Mon Sep 17 00:00:00 2001
+From 506a544ebae50023530bb59d5f792f242822abe4 Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Tue, 8 Sep 2026 21:21:52 +0700
-Subject: [PATCH] feat(katalyst): plan review card, phase fraction chip, active
- skills pill (v0.1.3)
+Subject: [PATCH 16/19] feat(katalyst): plan review card, phase fraction chip,
+ active skills pill (v0.1.3)
 
 - Inline Review Plan Card in assistant message turn with one-click Build Locally
 - Live phase ratio chip (e.g. 2/6) in plan activity bar header
@@ -16,7 +16,7 @@ Subject: [PATCH] feat(katalyst): plan review card, phase fraction chip, active
  3 files changed, 329 insertions(+), 11 deletions(-)
 
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index 1f348d3..c16d600 100644
+index c68ec3c..af296c2 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -3717,6 +3717,117 @@ impl ThreadView {
@@ -239,7 +239,7 @@ index 1f348d3..c16d600 100644
                                  })
                              }
                              AssistantMessageChunk::Thought { block, .. } => {
-@@ -10841,6 +11008,18 @@ impl ThreadView {
+@@ -10861,6 +11028,18 @@ impl ThreadView {
                                                  self.tool_name_font_size(),
                                              )),
                                          )
@@ -414,7 +414,7 @@ index c35ee70..2773b64 100644
 +
  }
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index aed1dd0..599ba6b 100644
+index 7892e83..2d47fb0 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {

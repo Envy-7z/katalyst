@@ -1,8 +1,8 @@
-From 1bc48c3de02bcb76b7c1d04b9690cbbc8b507cbf Mon Sep 17 00:00:00 2001
+From 999f9786deb0f15d0d8f8c610dd95c47b1b2f81f Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Fri, 11 Sep 2026 03:23:54 +0700
-Subject: [PATCH] feat(katalyst): turn step numbering badges and live token
- cost HUD (v0.1.4)
+Subject: [PATCH 17/19] feat(katalyst): turn step numbering badges and live
+ token cost HUD (v0.1.4)
 
 ---
  .../src/conversation_view/thread_view.rs      | 186 +++++++++++++-----
@@ -10,7 +10,7 @@ Subject: [PATCH] feat(katalyst): turn step numbering badges and live token
  2 files changed, 144 insertions(+), 50 deletions(-)
 
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index c16d600..a369188 100644
+index af296c2..dc6edfd 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -3717,7 +3717,12 @@ impl ThreadView {
@@ -196,7 +196,7 @@ index c16d600..a369188 100644
                                              });
                                          Some(container.into_any_element())
                                      } else {
-@@ -10230,6 +10263,40 @@ impl ThreadView {
+@@ -10250,6 +10283,40 @@ impl ThreadView {
              .child(bar(4, "w_2_5"))
              .into_any_element()
      }
@@ -237,7 +237,7 @@ index c16d600..a369188 100644
  
      fn render_tool_call_label(
          &self,
-@@ -10298,6 +10365,21 @@ impl ThreadView {
+@@ -10318,6 +10385,21 @@ impl ThreadView {
              .color(Color::Muted)
              .into_any_element()
          };
@@ -259,7 +259,7 @@ index c16d600..a369188 100644
  
          let gradient_overlay = {
              div()
-@@ -10340,6 +10422,7 @@ impl ThreadView {
+@@ -10360,6 +10442,7 @@ impl ThreadView {
              })
              .overflow_hidden()
              .child(tool_icon)
@@ -267,7 +267,7 @@ index c16d600..a369188 100644
              .child(if has_location {
                  h_flex()
                      .id(("open-tool-call-location", entry_ix))
-@@ -11009,18 +11092,26 @@ impl ThreadView {
+@@ -11029,18 +11112,26 @@ impl ThreadView {
                                              )),
                                          )
                                      })
@@ -306,7 +306,7 @@ index c16d600..a369188 100644
                              )
                              .when(!has_no_title_or_canceled && !is_pending_tool_call, |this| {
                                  this.tooltip(move |_, cx| {
-@@ -12453,8 +12544,7 @@ impl Render for ThreadView {
+@@ -12473,8 +12564,7 @@ impl Render for ThreadView {
              .on_action(
                  cx.listener(|this, _: &editor::actions::Cancel, window, cx| {
                      if !this.close_thread_search(window, cx) {
@@ -317,7 +317,7 @@ index c16d600..a369188 100644
                              this.cancel_generation_and_restore_prompt(window, cx);
                          } else {
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index 599ba6b..b1d73d4 100644
+index 2d47fb0..3914138 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
 @@ -1546,10 +1546,14 @@ fn open_about_window(cx: &mut App) {

@@ -1,7 +1,7 @@
-From 4cdbf6c51b8eb2c1a9d6e3137fb825d560ebc7ef Mon Sep 17 00:00:00 2001
+From 8fa3f3d21f2ebeb920a97c3fcce3bb12e1e4d8cd Mon Sep 17 00:00:00 2001
 From: Wisnuu <wisnuandrian325@gmail.com>
 Date: Mon, 7 Sep 2026 13:43:29 +0700
-Subject: [PATCH 05/13] feat(agent_ui): scroll tall elicitation cards and
+Subject: [PATCH 05/19] feat(agent_ui): scroll tall elicitation cards and
  restore canceled prompts
 
 Cap pending elicitation forms at 420px with an internal body scroll so
@@ -135,7 +135,7 @@ index 2da7b4c..e7d5d0b 100644
                  this.child(self.render_actions(cx))
              })
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index eb116d7..8231181 100644
+index 59a49b7..d21841c 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -1133,7 +1133,7 @@ impl ThreadView {
@@ -152,7 +152,7 @@ index eb116d7..8231181 100644
      }
  
 +    /// Stop generation and, when the composer is empty, restore the in-flight
-+    /// prompt so the user can refine it (Modern-style stop/cancel recovery).
++    /// prompt so the user can refine it (Cursor-style stop/cancel recovery).
 +    pub fn cancel_generation_and_restore_prompt(
 +        &mut self,
 +        window: &mut Window,
@@ -235,7 +235,7 @@ index eb116d7..8231181 100644
              })
              .unwrap_or_default()
      }
-@@ -12191,9 +12220,9 @@ impl Render for ThreadView {
+@@ -12211,9 +12240,9 @@ impl Render for ThreadView {
          v_flex()
              .key_context("AcpThread")
              .track_focus(&self.focus_handle)
@@ -247,7 +247,7 @@ index eb116d7..8231181 100644
                  }
              }))
              .on_action(cx.listener(
-@@ -12205,7 +12234,13 @@ impl Render for ThreadView {
+@@ -12225,7 +12254,13 @@ impl Render for ThreadView {
              .on_action(
                  cx.listener(|this, _: &editor::actions::Cancel, window, cx| {
                      if !this.close_thread_search(window, cx) {
@@ -262,7 +262,7 @@ index eb116d7..8231181 100644
                      }
                  }),
              )
-@@ -12520,7 +12555,7 @@ impl Render for ThreadView {
+@@ -12540,7 +12575,7 @@ impl Render for ThreadView {
                  |this, version| this.child(self.render_new_version_callout(&version, cx)),
              )
              .children(self.render_token_limit_callout(cx))
