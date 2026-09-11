@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/katalyst-studio-preview.png" width="920" alt="Katalyst Agentic IDE Preview" />
+  <img src="assets/katalyst-v020-ui.png" width="920" alt="Katalyst v0.2.0 desktop UI with OMP Agent Panel" />
 </p>
 
 ---
@@ -67,6 +67,16 @@ katalyst-session-sync status --json
 ```
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
+
+### v0.2.0 desktop UI
+
+The current desktop layout opens with the Katalyst task sidebar, project switcher, plan editor, and OMP Agent Panel together. The public preview uses only synthetic project names and example text; it contains no personal workspace, transcript, account, or provider data.
+
+![Katalyst v0.2.0 desktop UI](assets/katalyst-v020-ui.png)
+
+### Privacy boundary
+
+The repository contains generic defaults, example MCP configuration, release scripts, and reusable skills. Personal Cursor/Codex rules, hooks, settings, MCP credentials, raw transcripts, and provider accounts stay on the local machine under `~/.katalyst/private-profile` and are never copied into this repository. The installer migrates compatible local skills and MCP definitions without publishing the source files or secrets.
 
 ---
 
