@@ -72,7 +72,16 @@ The installer runs the first import and registers a macOS LaunchAgent that watch
 
 The current desktop layout opens with the Katalyst task sidebar, project switcher, plan editor, and OMP Agent Panel together. The public preview uses only synthetic project names and example text; it contains no personal workspace, transcript, account, or provider data.
 
-![Katalyst v0.2.0 desktop UI](assets/katalyst-v020-ui.png)
+![Katalyst v0.2.0 desktop UI](assets/katalyst-v020-sidebar-ui.png)
+
+The sidebar actions are intentionally visible from the first workspace:
+
+- **Open workspace** opens a directory as a workspace. Use this when starting a separate project.
+- **Skills** lists reusable skills installed globally or for the current project.
+- **Import Cursor & Codex** previews and imports detected sessions without changing the original transcripts.
+- **MCP servers** shows configured tool providers and their connection status.
+
+The `+` beside **Projects** creates a project entry in the current workspace. **Open workspace** is the action to add or switch to a separate workspace directory.
 
 ### Privacy boundary
 
