@@ -10,8 +10,8 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import sqlite3
 import tempfile
 import uuid
@@ -326,7 +326,14 @@ def scan_codex(root: Path) -> list[ImportedSession]:
         messages = response_messages or event_messages
         if not meta or not messages:
             continue
-        source_id = str(meta.get("id") or meta.get("session_id") or path.stem)
+        # `session_meta.id` identifies the parent Codex thread in some
+        # rollouts, so several independent transcript files can share it.
+        # The final UUID in a rollout filename is the stable session identity.
+        matches = re.findall(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            path.stem,
+        )
+        source_id = matches[-1] if matches else str(meta.get("session_id") or meta.get("id") or path.stem)
         title = titles.get(source_id) or messages[0].text.splitlines()[0][:120] or "Codex session"
         sessions.append(
             ImportedSession(

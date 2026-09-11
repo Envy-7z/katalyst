@@ -152,6 +152,26 @@ class SessionSyncTests(unittest.TestCase):
         self.assertIn("earlier conversation summary", sessions[0].messages[5].text)
         self.assertEqual(sessions[0].messages[0].images[0]["mimeType"], "image/png")
 
+    def test_codex_rollout_filename_keeps_sessions_distinct_when_metadata_id_is_shared(self) -> None:
+        shared_thread_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        session_ids = [
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        ]
+        for session_id in session_ids:
+            rollout = self.codex_root / "sessions" / "2026" / "09" / "11" / f"rollout-x-{session_id}.jsonl"
+            write_jsonl(
+                rollout,
+                [
+                    {"timestamp": "2026-09-11T00:00:00Z", "type": "session_meta", "payload": {"id": shared_thread_id, "cwd": "/tmp/demo"}},
+                    {"timestamp": "2026-09-11T00:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": session_id}]}},
+                ],
+            )
+
+        sessions = sync.scan_codex(self.codex_root)
+
+        self.assertEqual({session.source_id for session in sessions}, set(session_ids))
+
     def test_codex_archived_session_is_marked_in_provenance(self) -> None:
         session_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         rollout = self.codex_root / "archived_sessions" / f"rollout-x-{session_id}.jsonl"
