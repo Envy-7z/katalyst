@@ -542,7 +542,20 @@ def discover_sessions(
         result.extend(scan_cursor(cursor_root, home))
     if "codex" in sources and codex_root.exists():
         result.extend(scan_codex(codex_root))
-    return result
+    # Cursor can retain the same transcript UUID in more than one project
+    # directory after a workspace move. A UUID still represents one chat;
+    # choose the newest transcript deterministically so sync does not flip
+    # between copies on consecutive runs.
+    deduplicated: dict[tuple[str, str], ImportedSession] = {}
+    for session in result:
+        key = (session.source, session.source_id)
+        existing = deduplicated.get(key)
+        if existing is None or (session.updated_at, str(session.source_path)) > (
+            existing.updated_at,
+            str(existing.source_path),
+        ):
+            deduplicated[key] = session
+    return sorted(deduplicated.values(), key=lambda session: (session.source, session.source_id))
 
 
 def run_sync(

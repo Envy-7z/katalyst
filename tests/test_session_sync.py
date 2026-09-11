@@ -94,6 +94,19 @@ class SessionSyncTests(unittest.TestCase):
         self.assertEqual(session.title, "Archived Cursor fixture")
         self.assertEqual(session.branches, '["main"]')
 
+    def test_discovery_deduplicates_moved_cursor_transcript_by_newest_copy(self) -> None:
+        session_id = "12121212-1212-4121-8121-121212121212"
+        older = self.cursor_root / "old-project" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        newer = self.cursor_root / "new-project" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        write_jsonl(older, [{"role": "user", "message": {"content": [{"type": "text", "text": "older"}]}}])
+        write_jsonl(newer, [{"role": "user", "message": {"content": [{"type": "text", "text": "newer"}]}}])
+        newer.touch()
+
+        sessions = sync.discover_sessions(["cursor"], self.home, self.cursor_root, self.codex_root)
+
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].source_path, newer)
+
     def test_codex_scan_uses_response_items_without_event_duplicates(self) -> None:
         session_id = "22222222-2222-4222-8222-222222222222"
         rollout = self.codex_root / "sessions" / "2026" / "09" / "11" / f"rollout-x-{session_id}.jsonl"
