@@ -1,8 +1,16 @@
 diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
-index 30d3bade5c..5638662a84 100644
+index 30d3bade5c..4f6173fbf4 100644
 --- a/crates/sidebar/src/sidebar.rs
 +++ b/crates/sidebar/src/sidebar.rs
-@@ -2598,6 +2598,7 @@ impl Sidebar {
+@@ -75,6 +75,7 @@ use workspace::{
+ use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
+ use zed_actions::editor::{MoveDown, MoveUp};
+ use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
++use zed_actions::assistant::ManageSkills;
+ 
+ use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
+ 
+@@ -2598,6 +2599,7 @@ impl Sidebar {
      }
  
      fn render_projects_header(&self, _cx: &mut Context<Self>) -> AnyElement {
@@ -10,7 +18,7 @@ index 30d3bade5c..5638662a84 100644
          h_flex()
              .id("projects-header")
              .h(px(26.))
-@@ -2616,13 +2617,14 @@ impl Sidebar {
+@@ -2616,13 +2618,14 @@ impl Sidebar {
                  IconButton::new("add-folder-to-project", IconName::Plus)
                      .icon_size(IconSize::Small)
                      .tooltip(Tooltip::text("Add Folder to Project…"))
@@ -32,3 +40,84 @@ index 30d3bade5c..5638662a84 100644
                      }),
              )
              .into_any_element()
+@@ -7806,6 +7809,62 @@ impl Sidebar {
+                 this.children(Self::render_right_window_controls(window, cx))
+             })
+     }
++    fn render_quick_actions(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
++        h_flex()
++            .mx_2()
++            .my_1p5()
++            .gap_1()
++            .child(self.render_new_chat_button(window, cx))
++            .child(
++                div()
++                    .id("sidebar-open-workspace")
++                    .h(px(32.))
++                    .flex_1()
++                    .rounded_md()
++                    .cursor_pointer()
++                    .hover(|this| this.bg(cx.theme().colors().element_hover))
++                    .child(
++                        h_flex()
++                            .gap_1p5()
++                            .items_center()
++                            .justify_center()
++                            .child(Icon::new(IconName::FolderAdd).size(IconSize::Small).color(Color::Muted))
++                            .child(Label::new("Open").size(LabelSize::Small).color(Color::Default)),
++                    )
++                    .tooltip(Tooltip::text("Open Workspace"))
++                    .on_click(cx.listener(|_, _, window, cx| {
++                        window.dispatch_action(
++                            Open {
++                                create_new_window: Some(false),
++                            }
++                            .boxed_clone(),
++                            cx,
++                        );
++                    })),
++            )
++            .child(
++                div()
++                    .id("sidebar-skills")
++                    .h(px(32.))
++                    .flex_1()
++                    .rounded_md()
++                    .cursor_pointer()
++                    .hover(|this| this.bg(cx.theme().colors().element_hover))
++                    .child(
++                        h_flex()
++                            .gap_1p5()
++                            .items_center()
++                            .justify_center()
++                            .child(Icon::new(IconName::Pencil).size(IconSize::Small).color(Color::Muted))
++                            .child(Label::new("Skills").size(LabelSize::Small).color(Color::Default)),
++                    )
++                    .tooltip(Tooltip::text("Manage Skills"))
++                    .on_click(cx.listener(|_, _, window, cx| {
++                        window.dispatch_action(ManageSkills.boxed_clone(), cx);
++                    })),
++            )
++    }
++
+     fn render_new_chat_button(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+         let focus_handle = self.focus_handle.clone();
+         let color = cx.theme().colors();
+@@ -7833,7 +7892,7 @@ impl Sidebar {
+                             .color(Color::Default),
+                     )
+                     .child(
+-                        Label::new("New chat")
++                            Label::new("New task")
+                             .size(LabelSize::Default)
+                             .weight(FontWeight::SEMIBOLD)
+                             .color(Color::Default),
+@@ -8443,7 +8502,7 @@ impl Render for Sidebar {
+                         if no_open_projects {
+                             this.child(self.render_empty_state(cx))
+                         } else {
+-                            this.child(self.render_new_chat_button(window, cx)).child(
++                            this.child(self.render_quick_actions(window, cx)).child(
+                                 v_flex()
+                                     .relative()
+                                     .flex_1()
