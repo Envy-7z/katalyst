@@ -1,0 +1,34 @@
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index 30d3bade5c..5638662a84 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -2598,6 +2598,7 @@ impl Sidebar {
+     }
+ 
+     fn render_projects_header(&self, _cx: &mut Context<Self>) -> AnyElement {
++        let multi_workspace = self.multi_workspace.clone();
+         h_flex()
+             .id("projects-header")
+             .h(px(26.))
+@@ -2616,13 +2617,14 @@ impl Sidebar {
+                 IconButton::new("add-folder-to-project", IconName::Plus)
+                     .icon_size(IconSize::Small)
+                     .tooltip(Tooltip::text("Add Folder to Project…"))
+-                    .on_click(|_, window, cx| {
+-                        if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {
+-                            let workspace = multi_workspace.read(cx).workspace().clone();
+-                            workspace.update(cx, |workspace, cx| {
+-                                workspace.add_folder_to_project(&AddFolderToProject, window, cx);
+-                            });
+-                        }
++                    .on_click(move |_, window, cx| {
++                        let Some(multi_workspace) = multi_workspace.upgrade() else {
++                            return;
++                        };
++                        let workspace = multi_workspace.read(cx).workspace().clone();
++                        workspace.update(cx, |workspace, cx| {
++                            workspace.add_folder_to_project(&AddFolderToProject, window, cx);
++                        });
+                     }),
+             )
+             .into_any_element()
