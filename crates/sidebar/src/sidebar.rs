@@ -73,8 +73,9 @@ use workspace::{
 };
 
 use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
+use zed_actions::assistant::ManageSkills;
 use zed_actions::editor::{MoveDown, MoveUp};
-use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
+use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenOnboarding, OpenRecent};
 
 use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
 
@@ -2598,6 +2599,7 @@ impl Sidebar {
     }
 
     fn render_projects_header(&self, _cx: &mut Context<Self>) -> AnyElement {
+        let multi_workspace = self.multi_workspace.clone();
         h_flex()
             .id("projects-header")
             .h(px(26.))
@@ -2616,13 +2618,14 @@ impl Sidebar {
                 IconButton::new("add-folder-to-project", IconName::Plus)
                     .icon_size(IconSize::Small)
                     .tooltip(Tooltip::text("Add Folder to Project…"))
-                    .on_click(|_, window, cx| {
-                        if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {
-                            let workspace = multi_workspace.read(cx).workspace().clone();
-                            workspace.update(cx, |workspace, cx| {
-                                workspace.add_folder_to_project(&AddFolderToProject, window, cx);
-                            });
-                        }
+                    .on_click(move |_, window, cx| {
+                        let Some(multi_workspace) = multi_workspace.upgrade() else {
+                            return;
+                        };
+                        let workspace = multi_workspace.read(cx).workspace().clone();
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.add_folder_to_project(&AddFolderToProject, window, cx);
+                        });
                     }),
             )
             .into_any_element()
@@ -7806,6 +7809,114 @@ impl Sidebar {
                 this.children(Self::render_right_window_controls(window, cx))
             })
     }
+    fn render_quick_actions(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .px_2()
+            .my_1p5()
+            .gap_1()
+            .child(self.render_new_chat_button(window, cx))
+            .child(
+                h_flex()
+                    .items_center()
+                    .id("sidebar-open-workspace")
+                    .h(px(36.))
+                    .w_full()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                Icon::new(IconName::FolderAdd)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Open workspace")
+                                    .size(LabelSize::Default)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .tooltip(Tooltip::text("Open Workspace"))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(
+                            Open {
+                                create_new_window: Some(false),
+                            }
+                            .boxed_clone(),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .id("sidebar-skills")
+                    .h(px(36.))
+                    .w_full()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                Icon::new(IconName::Sparkle)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Skills")
+                                    .size(LabelSize::Default)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .tooltip(Tooltip::text("Manage Skills"))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(ManageSkills.boxed_clone(), cx);
+                    })),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .id("sidebar-import-chats")
+                    .h(px(36.))
+                    .w_full()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                Icon::new(IconName::Download)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Import Cursor & Codex")
+                                    .size(LabelSize::Default)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .tooltip(Tooltip::text("Import Cursor and Codex chats"))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(OpenOnboarding.boxed_clone(), cx);
+                    })),
+            )
+    }
+
     fn render_new_chat_button(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle.clone();
         let color = cx.theme().colors();
@@ -7813,9 +7924,8 @@ impl Sidebar {
 
         h_flex()
             .id("sidebar-new-chat-button")
-            .h(px(32.))
-            .mx_2()
-            .my_1p5()
+            .h(px(36.))
+            .w_full()
             .px_2()
             .rounded_md()
             .cursor_pointer()
@@ -7833,7 +7943,7 @@ impl Sidebar {
                             .color(Color::Default),
                     )
                     .child(
-                        Label::new("New chat")
+                        Label::new("New task")
                             .size(LabelSize::Default)
                             .weight(FontWeight::SEMIBOLD)
                             .color(Color::Default),
@@ -7853,7 +7963,17 @@ impl Sidebar {
                 )
             })
             .on_click(cx.listener(|this, _, window, cx| {
-                this.new_thread_in_group(&NewThreadInGroup, window, cx);
+                if this.contents.has_open_projects {
+                    this.new_thread_in_group(&NewThreadInGroup, window, cx);
+                } else {
+                    window.dispatch_action(
+                        Open {
+                            create_new_window: Some(false),
+                        }
+                        .boxed_clone(),
+                        cx,
+                    );
+                }
             }))
     }
 
@@ -8038,10 +8158,10 @@ impl Sidebar {
         });
         render_import_onboarding_banner(
             "acp",
-            "Looking for threads from external agents?",
-            "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client.",
+            "Import from other agents",
+            "Import conversations provided by installed agents. Use Import Cursor & Codex above for local chat history.",
             if verbose_labels {
-                "Import Threads from External Agents"
+                "Browse Agent History"
             } else {
                 "Import Threads"
             },
@@ -8441,9 +8561,10 @@ impl Render for Sidebar {
                     .child(self.render_sidebar_header(no_open_projects, window, cx))
                     .map(|this| {
                         if no_open_projects {
-                            this.child(self.render_empty_state(cx))
+                            this.child(self.render_quick_actions(window, cx))
+                                .child(self.render_empty_state(cx))
                         } else {
-                            this.child(self.render_new_chat_button(window, cx)).child(
+                            this.child(self.render_quick_actions(window, cx)).child(
                                 v_flex()
                                     .relative()
                                     .flex_1()

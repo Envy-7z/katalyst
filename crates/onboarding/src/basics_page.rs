@@ -1,11 +1,14 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use client::{Client, TelemetrySettings, UserStore, zed_urls};
+use client::{Client, UserStore, zed_urls};
 use cloud_api_types::Plan;
 use collections::HashMap;
 use fs::Fs;
-use gpui::{Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between};
+use gpui::{
+    Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between,
+};
 use project::agent_server_store::AllAgentServersSettings;
 use project::project_settings::ProjectSettings;
 use project::{AgentRegistryStore, RegistryAgent};
@@ -241,94 +244,6 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     }
 }
 
-fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement {
-    let fs = <dyn Fs>::global(cx);
-
-    v_flex()
-        .gap_4()
-        .child(
-            SwitchField::new(
-                "onboarding-telemetry-metrics",
-                None::<&str>,
-                Some("Help improve Zed by sending anonymous usage data".into()),
-                if TelemetrySettings::get_global(cx).metrics {
-                    ui::ToggleState::Selected
-                } else {
-                    ui::ToggleState::Unselected
-                },
-                {
-                    let fs = fs.clone();
-                    move |selection, _, cx| {
-                        let enabled = match selection {
-                            ToggleState::Selected => true,
-                            ToggleState::Unselected => false,
-                            ToggleState::Indeterminate => {
-                                return;
-                            }
-                        };
-
-                        update_settings_file(fs.clone(), cx, move |setting, _| {
-                            setting.telemetry.get_or_insert_default().metrics = Some(enabled);
-                        });
-
-                        // This telemetry event shouldn't fire when it's off. If it does we'll be alerted
-                        // and can fix it in a timely manner to respect a user's choice.
-                        telemetry::event!(
-                            "Welcome Page Telemetry Metrics Toggled",
-                            options = if enabled { "on" } else { "off" }
-                        );
-                    }
-                },
-            )
-            .tab_index({
-                *tab_index += 1;
-                *tab_index
-            }),
-        )
-        .child(
-            SwitchField::new(
-                "onboarding-telemetry-crash-reports",
-                None::<&str>,
-                Some(
-                    "Help fix Zed by sending crash reports so we can fix critical issues fast"
-                        .into(),
-                ),
-                if TelemetrySettings::get_global(cx).diagnostics {
-                    ui::ToggleState::Selected
-                } else {
-                    ui::ToggleState::Unselected
-                },
-                {
-                    let fs = fs.clone();
-                    move |selection, _, cx| {
-                        let enabled = match selection {
-                            ToggleState::Selected => true,
-                            ToggleState::Unselected => false,
-                            ToggleState::Indeterminate => {
-                                return;
-                            }
-                        };
-
-                        update_settings_file(fs.clone(), cx, move |setting, _| {
-                            setting.telemetry.get_or_insert_default().diagnostics = Some(enabled);
-                        });
-
-                        // This telemetry event shouldn't fire when it's off. If it does we'll be alerted
-                        // and can fix it in a timely manner to respect a user's choice.
-                        telemetry::event!(
-                            "Welcome Page Telemetry Diagnostics Toggled",
-                            options = if enabled { "on" } else { "off" }
-                        );
-                    }
-                },
-            )
-            .tab_index({
-                *tab_index += 1;
-                *tab_index
-            }),
-        )
-}
-
 fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
     let base_keymap = match BaseKeymap::get_global(cx) {
         BaseKeymap::Zed => Some(0),
@@ -439,12 +354,14 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
         ui::ToggleState::Unselected
     };
 
-    let tooltip_description = "Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
+    let tooltip_description = "Katalyst can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some("Trust All Projects By Default"),
-        Some("Automatically mark all new projects as trusted to unlock all Zed's features".into()),
+        Some(
+            "Automatically mark all new projects as trusted to unlock all Katalyst features".into(),
+        ),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
@@ -536,17 +453,114 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
         .child(h_flex().gap_1().child(vscode).child(cursor))
 }
 
-pub(crate) fn session_sync_status() -> SharedString {
-    std::process::Command::new("katalyst-session-sync")
-        .args(["status"])
+pub(crate) fn session_sync_command() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("katalyst-session-sync"));
+            candidates.push(parent.join("../Resources/bin/katalyst-session-sync"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin/katalyst-session-sync"));
+        candidates.push(home.join(".katalyst/bin/katalyst-session-sync"));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+pub(crate) fn session_sync_output_for_onboarding(
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let Some(command) = session_sync_command() else {
+        return Err("Session sync helper is not installed. Re-run the Katalyst installer.".into());
+    };
+    std::process::Command::new(command)
+        .args(args)
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|output| output.trim().to_string())
-        .filter(|output| !output.is_empty())
-        .unwrap_or_else(|| "Cursor and Codex chats will be detected after installation.".to_string())
-        .into()
+        .map_err(|error| format!("Could not start session sync: {error}"))
+}
+
+fn parse_sync_output(output: std::process::Output) -> Result<serde_json::Value, String> {
+    let value = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+    if !output.status.success() {
+        if let Ok(value) = &value {
+            if value.get("failed").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
+                return Err(format_sync_result(value));
+            }
+        }
+        // Do not put raw stderr (which can contain source transcript content) in the UI.
+        return Err(format!(
+            "Session sync failed ({}). Retry with Sync now.",
+            output.status
+        ));
+    }
+    value.map_err(|_| "Session sync returned an unreadable result. Retry with Sync now.".into())
+}
+
+fn count(value: &serde_json::Value, key: &str) -> u64 {
+    value.get(key).and_then(|v| v.as_u64()).unwrap_or(0)
+}
+
+fn format_sync_result(value: &serde_json::Value) -> String {
+    let sources = &value["detected_by_source"];
+    format!(
+        "Found {} Cursor and {} Codex chats; {} imported, {} updated, {} unchanged, {} continued in OMP, {} failed.",
+        count(sources, "cursor"),
+        count(sources, "codex"),
+        count(value, "imported"),
+        count(value, "updated"),
+        count(value, "unchanged"),
+        count(value, "owned_by_omp"),
+        count(value, "failed"),
+    )
+}
+
+pub(crate) fn sync_sessions_for_onboarding() -> Result<String, String> {
+    let output = session_sync_output_for_onboarding(&[
+        "sync",
+        "--sources",
+        "cursor,codex",
+        "--all",
+        "--json",
+    ])?;
+    parse_sync_output(output).map(|value| format_sync_result(&value))
+}
+
+pub(crate) fn session_sync_status() -> Result<String, String> {
+    // Status is cached; a read-only dry run discovers chats on first installation too.
+    let discovery = parse_sync_output(session_sync_output_for_onboarding(&[
+        "sync",
+        "--sources",
+        "cursor,codex",
+        "--dry-run",
+        "--json",
+    ])?)?;
+    let status = parse_sync_output(session_sync_output_for_onboarding(&["status", "--json"])?)?;
+    let sources = &discovery["detected_by_source"];
+    Ok(format!(
+        "Found {} Cursor and {} Codex chats; {} already imported, {} failed in the last sync.",
+        count(sources, "cursor"),
+        count(sources, "codex"),
+        count(&status, "imported"),
+        count(&status["lastResult"], "failed")
+    ))
+}
+
+pub(crate) fn detect_omp() -> bool {
+    let mut candidates = vec![
+        PathBuf::from("/opt/homebrew/bin/omp"),
+        PathBuf::from("/usr/local/bin/omp"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin/omp"));
+        candidates.push(home.join(".bun/bin/omp"));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|directory| directory.join("omp")));
+    }
+    candidates.iter().any(|path| path.is_file())
 }
 
 fn session_sync_auto_marker() -> std::path::PathBuf {
@@ -560,15 +574,18 @@ pub(crate) fn session_sync_auto_enabled() -> bool {
     !session_sync_auto_marker().exists()
 }
 
-fn set_session_sync_auto_enabled(enabled: bool) {
+fn set_session_sync_auto_enabled(enabled: bool) -> std::io::Result<()> {
     let marker = session_sync_auto_marker();
     if enabled {
-        let _ = std::fs::remove_file(marker);
+        match std::fs::remove_file(marker) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
     } else {
         if let Some(parent) = marker.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent)?;
         }
-        let _ = std::fs::write(marker, b"disabled\n");
+        std::fs::write(marker, b"disabled\n")
     }
 }
 
@@ -608,8 +625,11 @@ fn render_session_import_section(
                         .style(ButtonStyle::Outlined)
                         .toggle_state(auto_enabled)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.session_sync_auto_enabled = !this.session_sync_auto_enabled;
-                            set_session_sync_auto_enabled(this.session_sync_auto_enabled);
+                            let enabled = !this.session_sync_auto_enabled;
+                            match set_session_sync_auto_enabled(enabled) {
+                                Ok(()) => this.session_sync_auto_enabled = enabled,
+                                Err(_) => this.session_sync_status = "Could not save the auto-import preference. Check access to ~/.katalyst/imports.".into(),
+                            }
                             cx.notify();
                         })),
                 ).child(
@@ -619,24 +639,8 @@ fn render_session_import_section(
                     )
                         .style(ButtonStyle::Outlined)
                         .disabled(sync_in_progress)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.session_sync_in_progress = true;
-                            this.session_sync_status = "Syncing Cursor and Codex chats…".into();
-                            cx.notify();
-                            let sync = cx.background_executor().spawn(async move {
-                                std::process::Command::new("katalyst-session-sync")
-                                    .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
-                                    .output()
-                            });
-                            this.session_sync_task = Some(cx.spawn(async move |this, cx| {
-                                let _ = sync.await;
-                                this.update(cx, |this, cx| {
-                                    this.session_sync_in_progress = false;
-                                    this.session_sync_status = session_sync_status();
-                                    cx.notify();
-                                })
-                                .ok();
-                            }));
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.sync_sessions(false, window, cx);
                         })),
                 )),
         )
@@ -756,7 +760,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
                 .size(IconSize::XSmall)
                 .color(Color::Muted),
         )
-        .name("Zed Agent")
+        .name("Native Zed Agent")
         .state(state_element)
         .disabled(is_trial || is_pro)
         .map(|this| {
@@ -767,7 +771,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
                 })
             } else {
                 this.on_click(move |_, _, cx| {
-                    telemetry::event!("Welcome Zed Agent Sign In Clicked");
+                    telemetry::event!("Welcome Native Agent Sign In Clicked");
                     let client = Client::global(cx);
                     cx.spawn(async move |cx| client.sign_in_with_optional_connect(true, cx).await)
                         .detach_and_log_err(cx);
@@ -776,7 +780,32 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
         })
 }
 
-fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
+fn render_omp_agent_button(installed: Option<bool>) -> impl IntoElement {
+    AgentSetupButton::new("omp-agent-onboarding")
+        .icon(
+            Icon::new(IconName::Sparkle)
+                .size(IconSize::XSmall)
+                .color(Color::Accent),
+        )
+        .name("OMP (Default)")
+        .state(
+            Label::new(match installed {
+                Some(true) => "Detected",
+                Some(false) => "Setup guide",
+                None => "Checking…",
+            })
+            .size(LabelSize::XSmall)
+            .into_any_element(),
+        )
+        .disabled(installed != Some(false))
+        .on_click(|_, _, cx| cx.open_url("https://github.com/Envy-7z/katalyst#installation"))
+}
+
+fn render_ai_section(
+    user_store: &Entity<UserStore>,
+    omp_installed: Option<bool>,
+    cx: &mut App,
+) -> impl IntoElement {
     let registry_agents = AgentRegistryStore::try_global(cx)
         .map(|store| store.read(cx).agents().to_vec())
         .unwrap_or_default();
@@ -786,7 +815,7 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
         .get::<AllAgentServersSettings>(None)
         .clone();
 
-    let column_count = 1 + FEATURED_AGENT_IDS.len() as u16;
+    let column_count = 3;
 
     let grid = FEATURED_AGENT_IDS.iter().fold(
         div()
@@ -795,6 +824,7 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
             .grid()
             .grid_cols(column_count)
             .gap_2()
+            .child(render_omp_agent_button(omp_installed))
             .child(render_zed_agent_button(user_store, cx)),
         |grid, agent_id| {
             let Some(agent) = registry_agents
@@ -810,9 +840,9 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
 
     v_flex()
         .gap_0p5()
-        .child(Label::new("Agent Setup"))
+        .child(Label::new("Katalyst Agent Setup"))
         .child(
-            Label::new("Install your favorite agents and start your first thread.")
+            Label::new("OMP is the default agent. Install it with the Katalyst installer; other agents are optional.")
                 .color(Color::Muted),
         )
         .child(grid)
@@ -823,6 +853,7 @@ pub(crate) fn render_basics_page(
     sync_status: SharedString,
     sync_in_progress: bool,
     auto_enabled: bool,
+    omp_installed: Option<bool>,
     cx: &mut Context<Onboarding>,
 ) -> impl IntoElement {
     let mut tab_index = 0;
@@ -832,7 +863,7 @@ pub(crate) fn render_basics_page(
         .gap_6()
         .child(render_theme_section(&mut tab_index, cx))
         .child(render_base_keymap_section(&mut tab_index, cx))
-        .child(render_ai_section(user_store, cx))
+        .child(render_ai_section(user_store, omp_installed, cx))
         .child(render_import_settings_section(&mut tab_index, cx))
         .child(render_session_import_section(
             sync_status,
@@ -843,5 +874,33 @@ pub(crate) fn render_basics_page(
         .child(render_vim_mode_switch(&mut tab_index, cx))
         .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
         .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
-        .child(render_telemetry_section(&mut tab_index, cx))
+}
+
+#[cfg(test)]
+mod session_sync_tests {
+    use super::*;
+
+    #[test]
+    fn sync_result_uses_per_source_counts_and_reports_failures() {
+        let result = format_sync_result(&serde_json::json!({
+            "detected": 7, "detected_by_source": {"cursor": 3, "codex": 4},
+            "imported": 2, "updated": 1, "unchanged": 2, "owned_by_omp": 1, "failed": 1
+        }));
+        assert_eq!(
+            result,
+            "Found 3 Cursor and 4 Codex chats; 2 imported, 1 updated, 2 unchanged, 1 continued in OMP, 1 failed."
+        );
+    }
+
+    #[test]
+    fn unknown_or_missing_count_fields_do_not_panic() {
+        assert!(
+            format_sync_result(&serde_json::json!({"new_field": true}))
+                .contains("0 Cursor and 0 Codex")
+        );
+        assert_eq!(
+            count(&serde_json::json!({"imported": "unknown"}), "imported"),
+            0
+        );
+    }
 }

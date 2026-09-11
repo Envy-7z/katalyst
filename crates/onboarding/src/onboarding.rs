@@ -211,6 +211,7 @@ struct Onboarding {
     user_store: Entity<UserStore>,
     scroll_handle: ScrollHandle,
     session_sync_status: SharedString,
+    omp_installed: Option<bool>,
     session_sync_in_progress: bool,
     session_sync_auto_enabled: bool,
     session_sync_task: Option<Task<()>>,
@@ -258,9 +259,20 @@ impl Onboarding {
         );
 
         cx.new(|cx| {
+            let status_task = cx.background_executor().spawn(async {
+                (
+                    basics_page::session_sync_status().unwrap_or_else(|error| error),
+                    basics_page::detect_omp(),
+                )
+            });
             cx.spawn(async move |this, cx| {
                 font_family_cache.prefetch(cx).await;
-                this.update(cx, |_, cx| {
+                let (session_status, omp_installed) = status_task.await;
+                this.update(cx, |this: &mut Self, cx| {
+                    if this.session_sync_status.as_ref() == "Checking Cursor and Codex chats…" {
+                        this.session_sync_status = session_status.into();
+                    }
+                    this.omp_installed = Some(omp_installed);
                     cx.notify();
                 })
             })
@@ -271,7 +283,8 @@ impl Onboarding {
                 focus_handle: cx.focus_handle(),
                 scroll_handle: ScrollHandle::new(),
                 user_store: workspace.user_store().clone(),
-                session_sync_status: basics_page::session_sync_status(),
+                session_sync_status: "Checking Cursor and Codex chats…".into(),
+                omp_installed: None,
                 session_sync_in_progress: false,
                 session_sync_auto_enabled: basics_page::session_sync_auto_enabled(),
                 session_sync_task: None,
@@ -281,15 +294,57 @@ impl Onboarding {
         })
     }
 
-    fn on_finish(_: &Finish, window: &mut Window, cx: &mut App) {
-        telemetry::event!("Finish Setup");
-        if basics_page::session_sync_auto_enabled() {
-            let _ = std::process::Command::new("katalyst-session-sync")
-                .args(["sync", "--sources", "cursor,codex", "--all"])
-                .spawn();
+    fn on_finish(&mut self, _: &Finish, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session_sync_in_progress {
+            return;
         }
+        if self.session_sync_auto_enabled {
+            self.sync_sessions(true, window, cx);
+        } else {
+            Self::finish_setup(window, cx);
+        }
+    }
+
+    fn finish_setup(window: &mut Window, cx: &mut App) {
+        telemetry::event!("Finish Setup");
         go_to_welcome_page(cx);
+        window.dispatch_action(
+            Box::new(zed_actions::agent::SelectAgent {
+                agent: "omp".into(),
+            }),
+            cx,
+        );
         window.dispatch_action(zed_actions::assistant::ToggleFocus.boxed_clone(), cx);
+    }
+
+    fn sync_sessions(
+        &mut self,
+        finish_after_sync: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_sync_in_progress {
+            return;
+        }
+        self.session_sync_in_progress = true;
+        self.session_sync_status = "Syncing Cursor and Codex chats…".into();
+        cx.notify();
+        let sync = cx
+            .background_executor()
+            .spawn(async { basics_page::sync_sessions_for_onboarding() });
+        self.session_sync_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = sync.await;
+            this.update_in(cx, |this, window, cx| {
+                this.session_sync_in_progress = false;
+                let succeeded = result.is_ok();
+                this.session_sync_status = result.unwrap_or_else(|error| error).into();
+                cx.notify();
+                if finish_after_sync && succeeded {
+                    Self::finish_setup(window, cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
@@ -316,6 +371,7 @@ impl Onboarding {
             self.session_sync_status.clone(),
             self.session_sync_in_progress,
             self.session_sync_auto_enabled,
+            self.omp_installed,
             cx,
         )
         .into_any_element()
@@ -335,7 +391,7 @@ impl Render for Onboarding {
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(cx.theme().colors().editor_background)
-            .on_action(Self::on_finish)
+            .on_action(cx.listener(Self::on_finish))
             .on_action(cx.listener(Self::handle_sign_in))
             .on_action(Self::handle_open_account)
             .on_action(cx.listener(|_, _: &menu::SelectNext, window, cx| {
@@ -368,7 +424,10 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(Vector::square(VectorName::KatalystLogo, rems(2.5)))
+                                            .child(Vector::square(
+                                                VectorName::KatalystLogo,
+                                                rems(2.5),
+                                            ))
                                             .child(
                                                 v_flex()
                                                     .child(
@@ -386,6 +445,7 @@ impl Render for Onboarding {
                                     .child({
                                         Button::new("finish_setup", "Finish Setup")
                                             .style(ButtonStyle::Filled)
+                                            .disabled(self.session_sync_in_progress)
                                             .size(ButtonSize::Medium)
                                             .width(rems_from_px(200_f32))
                                             .key_binding(KeyBinding::for_action_in(
@@ -445,6 +505,7 @@ impl Item for Onboarding {
             scroll_handle: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             session_sync_status: self.session_sync_status.clone(),
+            omp_installed: self.omp_installed,
             session_sync_in_progress: false,
             session_sync_auto_enabled: self.session_sync_auto_enabled,
             session_sync_task: None,

@@ -36,10 +36,10 @@ use zed_actions::{
 };
 
 use crate::ExpandMessageEditor;
-use crate::plan_progress;
 use crate::ManageProfiles;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
+use crate::plan_progress;
 use crate::terminal_thread_metadata_store::{
     TerminalThreadMetadata, TerminalThreadMetadataStore, compose_terminal_thread_title,
     normalize_terminal_custom_title, terminal_title_without_prefix,
@@ -3552,6 +3552,7 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_skills(cx);
         window.dispatch_action(
             Box::new(zed_actions::OpenSettingsAt {
                 path: zed_actions::AGENT_SKILLS_SETTINGS_PATH.to_string(),
@@ -4215,11 +4216,7 @@ impl AgentPanel {
         thread_view.update(cx, |thread_view, cx| {
             if let Some(config_options_view) = thread_view.config_options_view.clone() {
                 let handled = config_options_view.update(cx, |view, cx| {
-                    view.toggle_category_picker(
-                        acp::SessionConfigOptionCategory::Model,
-                        window,
-                        cx,
-                    )
+                    view.toggle_category_picker(acp::SessionConfigOptionCategory::Model, window, cx)
                 });
                 if handled {
                     return true;
@@ -4236,7 +4233,6 @@ impl AgentPanel {
             false
         })
     }
-
 
     pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
         match &self.base_view {
