@@ -13,7 +13,7 @@ ERRORS=0
 
 # 1. Hardcoded /Users/ or /home/ local paths
 echo -n "Checking for hardcoded local user paths (/Users/ or /home/)... "
-LOCAL_PATHS="$(grep -rEn --exclude-dir=".git" --exclude="audit-privacy.sh" "(/(Users|home)/[a-zA-Z0-9_-]+)" . 2>/dev/null | grep -v "/api/users/" || true)"
+LOCAL_PATHS="$(grep -rEn --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "(/(Users|home)/[a-zA-Z0-9_-]+)" . 2>/dev/null | grep -v "/api/users/" || true)"
 if [[ -n "$LOCAL_PATHS" ]]; then
   echo "FAILED!"
   echo "$LOCAL_PATHS"
@@ -25,7 +25,7 @@ fi
 # 2. Private Auth Tokens and Secret Keys
 echo -n "Checking for secret API keys and auth tokens... "
 TOKEN_PATTERNS="(ghp_[a-zA-Z0-9]{20,}|glpat-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk-[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{33}|xoxb-[a-zA-Z0-9-]+|BEGIN[A-Z ]*PRIVATE KEY)"
-MATCHES_TOKENS="$(grep -rEn --exclude-dir=".git" --exclude="audit-privacy.sh" "$TOKEN_PATTERNS" . 2>/dev/null || true)"
+MATCHES_TOKENS="$(grep -rEn --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$TOKEN_PATTERNS" . 2>/dev/null || true)"
 if [[ -n "$MATCHES_TOKENS" ]]; then
   echo "FAILED!"
   echo "$MATCHES_TOKENS"
@@ -34,22 +34,10 @@ else
   echo "OK (clean)"
 fi
 
-# 3. Legacy Brand Mentions
-echo -n "Checking for legacy editor brand keywords... "
-BRAND_PATTERNS="\b($(printf '%s' 'Y3Vyc29yfGNvZGV4' | base64 -d))\b"
-MATCHES_BRAND="$(grep -rEni --exclude-dir=".git" --exclude="audit-privacy.sh" "$BRAND_PATTERNS" . 2>/dev/null | grep -vE "(\.cursor|\.codex)" || true)"
-if [[ -n "$MATCHES_BRAND" ]]; then
-  echo "FAILED!"
-  echo "$MATCHES_BRAND"
-  ERRORS=$((ERRORS + 1))
-else
-  echo "OK (clean)"
-fi
-
-# 4. Custom Private Keywords (optional via env var)
+# 3. Custom Private Keywords (optional via env var)
 if [[ -n "${KATALYST_AUDIT_KEYWORDS:-}" ]]; then
   echo -n "Checking custom private keywords ($KATALYST_AUDIT_KEYWORDS)... "
-  MATCHES_CUSTOM="$(grep -rEni --exclude-dir=".git" --exclude="audit-privacy.sh" "$KATALYST_AUDIT_KEYWORDS" . 2>/dev/null || true)"
+  MATCHES_CUSTOM="$(grep -rEni --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$KATALYST_AUDIT_KEYWORDS" . 2>/dev/null || true)"
   if [[ -n "$MATCHES_CUSTOM" ]]; then
     echo "FAILED!"
     echo "$MATCHES_CUSTOM"

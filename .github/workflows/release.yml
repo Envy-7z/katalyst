@@ -1,82 +1,144 @@
 name: Release
 
 on:
+  pull_request:
+    branches: [main]
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.4)"
-        required: false
+        description: "Release tag (for example v0.2.0)"
+        required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Publish Release
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+      - name: Test session migration and installer contracts
+        run: python3 -m unittest discover -s tests -v
+      - name: Validate shell scripts
+        run: bash -n install.sh bin/katalyst-update bin/notify-updates.sh
 
-      - name: Determine release tag
-        id: vars
+  build-macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            release_arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            release_arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Extract changelog notes
-        id: changelog
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          [[ "${{ github.event_name }}" == "pull_request" ]] && TAG=v0.2.0
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_ARCH=${{ matrix.release_arch }}" >> "$GITHUB_ENV"
+      - name: Check out pinned Zed and apply Katalyst patches
         run: |
-          python3 - <<'PY'
-          import os, re
-
-          tag = os.environ.get("RELEASE_TAG", "")
-          version = tag.lstrip("v")
-          
-          notes = ""
-          if os.path.exists("CHANGELOG.md"):
-              with open("CHANGELOG.md", "r", encoding="utf-8") as f:
-                  text = f.read()
-              pattern = rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)"
-              match = re.search(pattern, text, re.DOTALL)
-              if match:
-                  notes = match.group(1).strip()
-
-          if not notes:
-              notes = f"Release {tag} of Katalyst."
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write("notes<<EOF\n")
-              out.write(notes + "\n")
-              out.write("EOF\n")
-          PY
+          git clone --filter=blob:none https://github.com/zed-industries/zed.git zed
+          git -C zed checkout "$(cat ZED_REVISION)"
+          git -C zed am "$GITHUB_WORKSPACE"/patches/*.patch
+      - name: Install build dependencies
+        run: brew install cmake protobuf
+      - name: Build macOS application bundle
+        working-directory: zed
+        run: script/bundle-mac "${{ matrix.target }}"
+      - name: Brand, sign, and package Katalyst
         env:
-          RELEASE_TAG: ${{ steps.vars.outputs.tag }}
-
-      - name: Bundle patches archive
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          ARCHIVE_NAME="katalyst-patches-${TAG}.tar.gz"
-          tar -czvf "${ARCHIVE_NAME}" patches/
-          echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+          APP_SOURCE="$(find zed/target/${{ matrix.target }}/release/dmg -name '*.app' -type d -prune | head -1)"
+          test -n "$APP_SOURCE"
+          mkdir -p package
+          ditto "$APP_SOURCE" package/Katalyst.app
+          PLIST=package/Katalyst.app/Contents/Info.plist
+          plutil -replace CFBundleDisplayName -string Katalyst "$PLIST"
+          plutil -replace CFBundleName -string Katalyst "$PLIST"
+          plutil -replace CFBundleIdentifier -string dev.katalyst.Katalyst "$PLIST"
+          plutil -replace CFBundleIconFile -string Katalyst.icns "$PLIST"
+          cp assets/Katalyst.icns package/Katalyst.app/Contents/Resources/Katalyst.icns
+          rm -f package/Katalyst.app/Contents/embedded.provisionprofile
+          cp zed/crates/zed/resources/zed.entitlements package/Katalyst.entitlements
+          /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.associated-domains' package/Katalyst.entitlements 2>/dev/null || true
 
-      - name: Create GitHub Release
+          if [[ -n "$MACOS_CERTIFICATE" && -n "$MACOS_CERTIFICATE_PASSWORD" && -n "$MACOS_SIGNING_IDENTITY" && -n "$APPLE_NOTARIZATION_KEY" && -n "$APPLE_NOTARIZATION_KEY_ID" && -n "$APPLE_NOTARIZATION_ISSUER_ID" ]]; then
+            security create-keychain -p "$MACOS_CERTIFICATE_PASSWORD" katalyst.keychain
+            security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" katalyst.keychain
+            printf '%s' "$MACOS_CERTIFICATE" | base64 -D > package/katalyst-certificate.p12
+            security import package/katalyst-certificate.p12 -k katalyst.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CERTIFICATE_PASSWORD" katalyst.keychain
+            security list-keychains -d user -s katalyst.keychain login.keychain
+            codesign --force --deep --timestamp --options runtime --entitlements package/Katalyst.entitlements --sign "$MACOS_SIGNING_IDENTITY" package/Katalyst.app
+            ditto -c -k --keepParent package/Katalyst.app package/notarization.zip
+            printf '%s' "$APPLE_NOTARIZATION_KEY" > package/AuthKey.p8
+            xcrun notarytool submit package/notarization.zip --wait --key package/AuthKey.p8 --key-id "$APPLE_NOTARIZATION_KEY_ID" --issuer "$APPLE_NOTARIZATION_ISSUER_ID"
+            xcrun stapler staple package/Katalyst.app
+            rm package/notarization.zip package/AuthKey.p8 package/katalyst-certificate.p12
+          else
+            codesign --force --deep --entitlements package/Katalyst.entitlements --sign - package/Katalyst.app
+          fi
+
+          ASSET="Katalyst-v${VERSION}-macOS-${RELEASE_ARCH}.zip"
+          ditto -c -k --sequesterRsrc --keepParent package/Katalyst.app "$ASSET"
+          codesign --verify --deep --strict package/Katalyst.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Katalyst-${{ matrix.release_arch }}
+          path: Katalyst-v*-macOS-${{ matrix.release_arch }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build-macos
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Katalyst-*
+          merge-multiple: true
+          path: dist
+      - name: Build runtime archive and checksums
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          tar -czf "dist/katalyst-runtime-v${VERSION}.tar.gz" bin lib config skills assets
+          (cd dist && sha256sum Katalyst-*.zip katalyst-runtime-*.tar.gz > SHA256SUMS)
+          tar -czf "dist/katalyst-patches-${TAG}.tar.gz" patches ZED_REVISION
+      - name: Extract release notes
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          python3 - "$VERSION" > release-notes.md <<'PY'
+          import re, sys
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(rf"## \[{re.escape(sys.argv[1])}\][^\n]*\n(.*?)(?=\n## \[|\Z)", text, re.S)
+          print(match.group(1).strip() if match else f"Katalyst v{sys.argv[1]}")
+          PY
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: "Katalyst ${{ steps.vars.outputs.tag }}"
-          body: ${{ steps.changelog.outputs.notes }}
-          files: ${{ env.archive }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Katalyst ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release-notes.md
+          files: dist/*
           draft: false
           prerelease: false

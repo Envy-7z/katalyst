@@ -39,16 +39,35 @@ curl -fsSL https://raw.githubusercontent.com/Envy-7z/katalyst/main/install.sh | 
 ```
 
 > [!TIP]
-> **Zero Manual Setup**: The installer automatically detects your Mac, installs OMP and Katalyst/Zed if missing, links optimized configurations, and configures 12 autonomous engineering skills.
+> **Zero Manual Setup**: The installer detects Apple Silicon or Intel, verifies the matching prebuilt Katalyst release, installs OMP, and configures the local runtime without cloning source into your config directory.
 
 <details>
 <summary><strong>Manual Clone Option (for contributors & developers)</strong></summary>
 
 ```bash
-git clone https://github.com/Envy-7z/katalyst.git ~/.katalyst
-cd ~/.katalyst && ./install.sh
+git clone https://github.com/Envy-7z/katalyst.git ~/Developer/katalyst-source
+cd ~/Developer/katalyst-source && ./install.sh
 ```
 </details>
+---
+
+## 🔄 Bring Your Cursor and Codex Chats
+
+Katalyst imports local Cursor and Codex transcripts into resumable OMP sessions. Source files remain read-only, repeated syncs do not duplicate sessions, and a chat is never overwritten after you continue it in OMP.
+
+```bash
+# Preview what Katalyst detects
+katalyst-session-sync sync --sources cursor,codex --dry-run --json
+
+# Import all detected chats
+katalyst-session-sync sync --sources cursor,codex --all --json
+
+# Show current counts and sync ownership
+katalyst-session-sync status --json
+```
+
+The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
+
 ---
 
 ## 🧠 Architecture Overview
@@ -314,7 +333,7 @@ export default async function (action: { tool: string; params: any }) {
 
 ## 🛠️ Keeping Katalyst Updated
 
-To update OMP and pull the latest upstream patches:
+To install the latest signed or ad-hoc signed Katalyst release and update OMP:
 
 ```bash
 katalyst-update

@@ -1,0 +1,372 @@
+From 3a7273e8348450984a804d6dcbb995be3f124a0b Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Fri, 11 Sep 2026 06:47:51 +0700
+Subject: [PATCH] feat(katalyst): make OMP the first-run agent
+
+---
+ assets/images/katalyst_logo.svg      |   6 ++
+ crates/agent_ui/src/agent_panel.rs   |  14 ++-
+ crates/agent_ui/src/agent_ui.rs      |  14 +++
+ crates/onboarding/src/basics_page.rs | 124 ++++++++++++++++++++++++++-
+ crates/onboarding/src/onboarding.rs  |  31 ++++++-
+ crates/ui/src/components/image.rs    |   1 +
+ crates/zed/src/zed.rs                |   2 +-
+ 7 files changed, 183 insertions(+), 9 deletions(-)
+ create mode 100644 assets/images/katalyst_logo.svg
+
+diff --git a/assets/images/katalyst_logo.svg b/assets/images/katalyst_logo.svg
+new file mode 100644
+index 0000000000..d781928416
+--- /dev/null
++++ b/assets/images/katalyst_logo.svg
+@@ -0,0 +1,6 @@
++<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
++  <rect x="3" y="3" width="90" height="90" rx="22" fill="#111528" stroke="#273453" stroke-width="3"/>
++  <path d="M31 22v52" stroke="#58A6FF" stroke-width="10" stroke-linecap="round"/>
++  <path d="M69 24 38 51l31 24" stroke="#7C83FF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
++  <path d="m64 34-18 17 14 12" stroke="#32B8F2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
++</svg>
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index 24546afbaf..c3765a0377 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -1592,7 +1592,7 @@ impl AgentPanel {
+             pending_serialization: None,
+             new_user_onboarding: onboarding,
+             thread_store,
+-            selected_agent: Agent::default(),
++            selected_agent: crate::katalyst_default_agent(),
+             _thread_view_subscription: None,
+             _active_thread_focus_subscription: None,
+             new_user_onboarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
+@@ -6245,7 +6245,12 @@ impl AgentPanel {
+             .justify_between();
+ 
+         let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
+-            Label::new(format!("New {} Thread", selected_agent_label))
++            let title = if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
++                "New Katalyst Thread".to_string()
++            } else {
++                format!("New {} Thread", selected_agent_label)
++            };
++            Label::new(title)
+                 .color(Color::Muted)
+                 .truncate()
+                 .into_any_element()
+@@ -6355,6 +6360,11 @@ impl AgentPanel {
+     }
+ 
+     fn should_render_new_user_onboarding(&mut self, cx: &mut Context<Self>) -> bool {
++        // Katalyst uses OMP as its first-run agent and does not show the Zed Pro upsell.
++        if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
++            return false;
++        }
++
+         if self
+             .new_user_onboarding_upsell_dismissed
+             .load(Ordering::Acquire)
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index f99190cea3..5769530d36 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -436,6 +436,11 @@ pub enum Agent {
+     Stub,
+ }
+ 
++/// Katalyst starts new workspaces in OMP while keeping the native agent selectable.
++pub(crate) fn katalyst_default_agent() -> Agent {
++    Agent::Custom { id: "omp".into() }
++}
++
+ impl From<AgentId> for Agent {
+     fn from(id: AgentId) -> Self {
+         if id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+@@ -466,6 +471,7 @@ impl Agent {
+     pub fn label(&self) -> SharedString {
+         match self {
+             Self::NativeAgent => "Zed Agent".into(),
++            Self::Custom { id, .. } if id.as_ref() == "omp" => "OMP".into(),
+             Self::Custom { id, .. } => id.0.clone(),
+             #[cfg(any(test, feature = "test-support"))]
+             Self::Stub => "Stub Agent".into(),
+@@ -1265,6 +1271,14 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn test_katalyst_default_agent_is_omp() {
++        assert_eq!(
++            katalyst_default_agent(),
++            Agent::Custom { id: "omp".into() }
++        );
++    }
++
+     #[test]
+     fn test_deserialize_new_external_agent_thread() {
+         let action = serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"gemini"}"#)
+diff --git a/crates/onboarding/src/basics_page.rs b/crates/onboarding/src/basics_page.rs
+index 840d930681..d0f8d1ce34 100644
+--- a/crates/onboarding/src/basics_page.rs
++++ b/crates/onboarding/src/basics_page.rs
+@@ -5,7 +5,7 @@ use client::{Client, TelemetrySettings, UserStore, zed_urls};
+ use cloud_api_types::Plan;
+ use collections::HashMap;
+ use fs::Fs;
+-use gpui::{Action, Animation, AnimationExt, App, Entity, IntoElement, TaskExt, pulsating_between};
++use gpui::{Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between};
+ use project::agent_server_store::AllAgentServersSettings;
+ use project::project_settings::ProjectSettings;
+ use project::{AgentRegistryStore, RegistryAgent};
+@@ -22,7 +22,7 @@ use ui::{
+ use vim_mode_setting::VimModeSetting;
+ 
+ use crate::{
+-    ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
++    ImportCursorSettings, ImportVsCodeSettings, Onboarding, SettingsImportState,
+     theme_preview::{ThemePreviewStyle, ThemePreviewTile},
+ };
+ 
+@@ -536,6 +536,112 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
+         .child(h_flex().gap_1().child(vscode).child(cursor))
+ }
+ 
++pub(crate) fn session_sync_status() -> SharedString {
++    std::process::Command::new("katalyst-session-sync")
++        .args(["status"])
++        .output()
++        .ok()
++        .filter(|output| output.status.success())
++        .and_then(|output| String::from_utf8(output.stdout).ok())
++        .map(|output| output.trim().to_string())
++        .filter(|output| !output.is_empty())
++        .unwrap_or_else(|| "Cursor and Codex chats will be detected after installation.".to_string())
++        .into()
++}
++
++fn session_sync_auto_marker() -> std::path::PathBuf {
++    std::env::var_os("HOME")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_default()
++        .join(".katalyst/imports/auto-sync-disabled")
++}
++
++pub(crate) fn session_sync_auto_enabled() -> bool {
++    !session_sync_auto_marker().exists()
++}
++
++fn set_session_sync_auto_enabled(enabled: bool) {
++    let marker = session_sync_auto_marker();
++    if enabled {
++        let _ = std::fs::remove_file(marker);
++    } else {
++        if let Some(parent) = marker.parent() {
++            let _ = std::fs::create_dir_all(parent);
++        }
++        let _ = std::fs::write(marker, b"disabled\n");
++    }
++}
++
++fn render_session_import_section(
++    sync_status: SharedString,
++    sync_in_progress: bool,
++    auto_enabled: bool,
++    cx: &mut Context<Onboarding>,
++) -> impl IntoElement {
++    v_flex()
++        .gap_2()
++        .child(
++            h_flex()
++                .w_full()
++                .justify_between()
++                .gap_2()
++                .child(
++                    v_flex()
++                        .gap_0p5()
++                        .child(Label::new("Cursor & Codex Chat Migration"))
++                        .child(
++                            Label::new(sync_status)
++                                .size(LabelSize::Small)
++                                .color(Color::Muted),
++                        )
++                        .child(
++                            Label::new("One-way sync keeps source transcripts read-only. Continued OMP chats are never overwritten.")
++                                .size(LabelSize::XSmall)
++                                .color(Color::Muted),
++                        ),
++                )
++                .child(h_flex().gap_1().child(
++                    Button::new(
++                        "katalyst-session-auto-import",
++                        if auto_enabled { "Auto import: On" } else { "Auto import: Off" },
++                    )
++                        .style(ButtonStyle::Outlined)
++                        .toggle_state(auto_enabled)
++                        .on_click(cx.listener(|this, _, _, cx| {
++                            this.session_sync_auto_enabled = !this.session_sync_auto_enabled;
++                            set_session_sync_auto_enabled(this.session_sync_auto_enabled);
++                            cx.notify();
++                        })),
++                ).child(
++                    Button::new(
++                        "katalyst-session-sync",
++                        if sync_in_progress { "Syncing…" } else { "Sync now" },
++                    )
++                        .style(ButtonStyle::Outlined)
++                        .disabled(sync_in_progress)
++                        .on_click(cx.listener(|this, _, _, cx| {
++                            this.session_sync_in_progress = true;
++                            this.session_sync_status = "Syncing Cursor and Codex chats…".into();
++                            cx.notify();
++                            let sync = cx.background_executor().spawn(async move {
++                                std::process::Command::new("katalyst-session-sync")
++                                    .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
++                                    .output()
++                            });
++                            this.session_sync_task = Some(cx.spawn(async move |this, cx| {
++                                let _ = sync.await;
++                                this.update(cx, |this, cx| {
++                                    this.session_sync_in_progress = false;
++                                    this.session_sync_status = session_sync_status();
++                                    cx.notify();
++                                })
++                                .ok();
++                            }));
++                        })),
++                )),
++        )
++}
++
+ pub(crate) const FEATURED_AGENT_IDS: &[&str] =
+     &["claude-acp", "codex-acp", "github-copilot-cli", "cursor"];
+ 
+@@ -712,7 +818,13 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
+         .child(grid)
+ }
+ 
+-pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
++pub(crate) fn render_basics_page(
++    user_store: &Entity<UserStore>,
++    sync_status: SharedString,
++    sync_in_progress: bool,
++    auto_enabled: bool,
++    cx: &mut Context<Onboarding>,
++) -> impl IntoElement {
+     let mut tab_index = 0;
+ 
+     v_flex()
+@@ -722,6 +834,12 @@ pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -
+         .child(render_base_keymap_section(&mut tab_index, cx))
+         .child(render_ai_section(user_store, cx))
+         .child(render_import_settings_section(&mut tab_index, cx))
++        .child(render_session_import_section(
++            sync_status,
++            sync_in_progress,
++            auto_enabled,
++            cx,
++        ))
+         .child(render_vim_mode_switch(&mut tab_index, cx))
+         .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
+         .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
+diff --git a/crates/onboarding/src/onboarding.rs b/crates/onboarding/src/onboarding.rs
+index 962737c0b7..76e3e5a9af 100644
+--- a/crates/onboarding/src/onboarding.rs
++++ b/crates/onboarding/src/onboarding.rs
+@@ -210,6 +210,10 @@ struct Onboarding {
+     focus_handle: FocusHandle,
+     user_store: Entity<UserStore>,
+     scroll_handle: ScrollHandle,
++    session_sync_status: SharedString,
++    session_sync_in_progress: bool,
++    session_sync_auto_enabled: bool,
++    session_sync_task: Option<Task<()>>,
+     _settings_subscription: Subscription,
+ }
+ 
+@@ -267,15 +271,25 @@ impl Onboarding {
+                 focus_handle: cx.focus_handle(),
+                 scroll_handle: ScrollHandle::new(),
+                 user_store: workspace.user_store().clone(),
++                session_sync_status: basics_page::session_sync_status(),
++                session_sync_in_progress: false,
++                session_sync_auto_enabled: basics_page::session_sync_auto_enabled(),
++                session_sync_task: None,
+                 _settings_subscription: cx
+                     .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
+             }
+         })
+     }
+ 
+-    fn on_finish(_: &Finish, _: &mut Window, cx: &mut App) {
++    fn on_finish(_: &Finish, window: &mut Window, cx: &mut App) {
+         telemetry::event!("Finish Setup");
++        if basics_page::session_sync_auto_enabled() {
++            let _ = std::process::Command::new("katalyst-session-sync")
++                .args(["sync", "--sources", "cursor,codex", "--all"])
++                .spawn();
++        }
+         go_to_welcome_page(cx);
++        window.dispatch_action(zed_actions::assistant::ToggleFocus.boxed_clone(), cx);
+     }
+ 
+     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
+@@ -297,7 +311,14 @@ impl Onboarding {
+     }
+ 
+     fn render_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+-        crate::basics_page::render_basics_page(&self.user_store, cx).into_any_element()
++        crate::basics_page::render_basics_page(
++            &self.user_store,
++            self.session_sync_status.clone(),
++            self.session_sync_in_progress,
++            self.session_sync_auto_enabled,
++            cx,
++        )
++        .into_any_element()
+     }
+ }
+ 
+@@ -347,7 +368,7 @@ impl Render for Onboarding {
+                                     .child(
+                                         h_flex()
+                                             .gap_4()
+-                                            .child(Vector::square(VectorName::ZedLogo, rems(2.5)))
++                                            .child(Vector::square(VectorName::KatalystLogo, rems(2.5)))
+                                             .child(
+                                                 v_flex()
+                                                     .child(
+@@ -423,6 +444,10 @@ impl Item for Onboarding {
+             user_store: self.user_store.clone(),
+             scroll_handle: ScrollHandle::new(),
+             focus_handle: cx.focus_handle(),
++            session_sync_status: self.session_sync_status.clone(),
++            session_sync_in_progress: false,
++            session_sync_auto_enabled: self.session_sync_auto_enabled,
++            session_sync_task: None,
+             _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
+         })))
+     }
+diff --git a/crates/ui/src/components/image.rs b/crates/ui/src/components/image.rs
+index 8143e0ace5..18a575c2cd 100644
+--- a/crates/ui/src/components/image.rs
++++ b/crates/ui/src/components/image.rs
+@@ -19,6 +19,7 @@ pub enum VectorName {
+     ProTrialStamp,
+     ProUserStamp,
+     StudentStamp,
++    KatalystLogo,
+     ZedLogo,
+     ZedXCopilot,
+ }
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 3914138179..696a2a2cc4 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1546,7 +1546,7 @@ fn open_about_window(cx: &mut App) {
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
+-            let katalyst_version = "0.1.4";
++            let katalyst_version = "0.2.0";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+             let commit_prefix = if commit_short.len() >= 8 {

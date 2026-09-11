@@ -1,31 +1,18 @@
 #!/usr/bin/env bash
-# Katalyst 1-command updater: OMP + Zed rebase.
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+REPOSITORY="${KATALYST_REPOSITORY:-Envy-7z/katalyst}"
+DATA_HOME="${KATALYST_DATA_HOME:-$HOME/.local/share/katalyst}"
+CURRENT_VERSION="$(cat "$DATA_HOME/VERSION" 2>/dev/null || echo 0.1.0)"
+LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPOSITORY}/releases/latest" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')"
 
-echo "=== Updating OMP ==="
-if command -v omp >/dev/null 2>&1; then
-  omp update
+if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
+  echo "Katalyst ${CURRENT_VERSION} is current."
 else
-  echo "OMP not installed. Run: brew install can1357/tap/omp"
+  echo "Updating Katalyst ${CURRENT_VERSION} to ${LATEST_VERSION}..."
+  curl -fsSL "https://raw.githubusercontent.com/${REPOSITORY}/main/install.sh" | KATALYST_VERSION="$LATEST_VERSION" bash
 fi
 
-if [[ -d "$HOME/zed-custom" ]]; then
-  echo ""
-  echo "=== Checking Zed upstream updates ==="
-  cd "$HOME/zed-custom"
-  git fetch upstream main >/dev/null 2>&1 || true
-  BEHIND="$(git rev-list --count HEAD..upstream/main 2>/dev/null || echo 0)"
-  if [[ "$BEHIND" -gt 0 ]]; then
-    echo "Katalyst is behind upstream by $BEHIND commit(s)."
-    if [[ -t 0 ]]; then
-      read -r -p "Rebuild Katalyst now? [y/N] " ans
-      if [[ "$ans" =~ ^[yY]$ ]]; then
-        bash "$HOME/zed-custom/scripts/sync-and-rebuild.sh"
-      fi
-    fi
-  else
-    echo "Katalyst is up to date with upstream/main."
-  fi
+if command -v omp >/dev/null 2>&1; then
+  omp update
 fi
