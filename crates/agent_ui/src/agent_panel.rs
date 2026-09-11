@@ -93,8 +93,8 @@ use terminal_view::{TerminalView, terminal_panel::TerminalPanel};
 use text::OffsetRangeExt;
 use theme_settings::ThemeSettings;
 use ui::{
-    ContextMenu, ContextMenuEntry, GradientFade, IconButton, KeyBinding, PopoverMenu,
-    PopoverMenuHandle, ProjectEmptyState, Tab, Tooltip, prelude::*, utils::WithRemSize,
+    ContextMenu, ContextMenuEntry, GradientFade, IconButton, PopoverMenu, PopoverMenuHandle, Tab,
+    Tooltip, prelude::*, utils::WithRemSize,
 };
 use util::ResultExt as _;
 use workspace::{
@@ -5923,21 +5923,132 @@ impl AgentPanel {
     }
 
     fn render_no_project_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let focus_handle = self.focus_handle(cx);
+        let new_thread = |label: &'static str, icon: IconName| {
+            div()
+                .id(label)
+                .flex_1()
+                .min_w_0()
+                .h(px(44.))
+                .px_3()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().colors().border)
+                .bg(cx.theme().colors().element_background)
+                .cursor_pointer()
+                .hover(|this| this.bg(cx.theme().colors().element_hover))
+                .on_click(cx.listener(|_, _, window, cx| {
+                    window.dispatch_action(NewThread.boxed_clone(), cx);
+                }))
+                .child(
+                    h_flex()
+                        .h_full()
+                        .gap_2()
+                        .items_center()
+                        .child(Icon::new(icon).color(Color::Muted).size(IconSize::Small))
+                        .child(Label::new(label).size(LabelSize::Small).color(Color::Default)),
+                )
+        };
 
-        ProjectEmptyState::new(
-            "Agent Panel",
-            focus_handle.clone(),
-            KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
-        )
-        .on_open_project(|_, window, cx| {
-            telemetry::event!("Agent Panel Add Project Clicked");
-            window.dispatch_action(workspace::Open::default().boxed_clone(), cx);
-        })
-        .on_clone_repo(|_, window, cx| {
-            telemetry::event!("Agent Panel Clone Repo Clicked");
-            window.dispatch_action(git::Clone.boxed_clone(), cx);
-        })
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .px_6()
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(Label::new("Welcome to Katalyst").size(LabelSize::Large))
+                    .child(
+                        Label::new("Plan, build, review, and debug with OMP.")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(520.))
+                    .gap_2()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().element_background)
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .child(Label::new("OMP Agent Panel").size(LabelSize::Default))
+                            .child(
+                                Label::new(if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
+                                    "OMP ACP"
+                                } else {
+                                    "Agent picker"
+                                })
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(IconName::Check).color(Color::Success))
+                            .child(
+                                Label::new("Agent ready for your workspace")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    )
+                    .child(
+                        Label::new("Planning · coding · review · debugging · documentation")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .max_w(px(520.))
+                    .gap_2()
+                    .child(new_thread("Plan a feature", IconName::Sparkle))
+                    .child(new_thread("Explain code", IconName::Book)),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .max_w(px(520.))
+                    .gap_2()
+                    .child(new_thread("Debug an issue", IconName::Warning))
+                    .child(new_thread("Improve this", IconName::Sparkle)),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        Label::new("Open a workspace to start a project")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        IconButton::new("open-workspace", IconName::FolderAdd)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text("Open workspace"))
+                            .on_click(|_, window, cx| {
+                                telemetry::event!("Agent Panel Add Project Clicked");
+                                window.dispatch_action(workspace::Open::default().boxed_clone(), cx);
+                            }),
+                    )
+                    .child(
+                        IconButton::new("clone-repository", IconName::GitBranch)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text("Clone repository"))
+                            .on_click(|_, window, cx| {
+                                telemetry::event!("Agent Panel Clone Repo Clicked");
+                                window.dispatch_action(git::Clone.boxed_clone(), cx);
+                            }),
+                    )
+            )
     }
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

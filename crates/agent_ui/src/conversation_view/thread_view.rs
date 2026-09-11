@@ -12543,7 +12543,44 @@ impl Render for ThreadView {
                         .vertical_scrollbar_for(&list_state, window, cx)
                         .into_any()
                 } else {
-                    this.into_any()
+                    this
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .px_6()
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .max_w(px(620.))
+                                .items_center()
+                                .gap_4()
+                                .child(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(Label::new("Welcome to Katalyst").size(LabelSize::Large))
+                                        .child(
+                                            Label::new("Start a conversation with OMP to plan, build, review, or debug.")
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(Self::quick_start_card("Plan a feature", IconName::Sparkle, cx))
+                                        .child(Self::quick_start_card("Explain code", IconName::Book, cx)),
+                                )
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(Self::quick_start_card("Debug an issue", IconName::Warning, cx))
+                                        .child(Self::quick_start_card("Improve this", IconName::Sparkle, cx)),
+                                ),
+                        )
+                        .into_any()
                 }
             });
 
@@ -12886,6 +12923,37 @@ impl Render for ThreadView {
             .children(self.render_token_limit_callout(cx))
             .children(self.render_request_elicitations(window, cx))
             .child(self.render_message_editor(window, cx))
+    }
+}
+
+impl ThreadView {
+    fn quick_start_card(
+        label: &'static str,
+        icon: IconName,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(label)
+            .flex_1()
+            .h(px(44.))
+            .px_3()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().element_background)
+            .cursor_pointer()
+            .hover(|this| this.bg(cx.theme().colors().element_hover))
+            .on_click(cx.listener(|_, _, window, cx| {
+                window.dispatch_action(NewThread.boxed_clone(), cx);
+            }))
+            .child(
+                h_flex()
+                    .h_full()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
+                    .child(Label::new(label).size(LabelSize::Small)),
+            )
     }
 }
 
