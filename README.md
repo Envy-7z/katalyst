@@ -377,7 +377,7 @@ Katalyst is an evolving, community-driven project. We'd love to hear your though
 
 * 💡 **Feature Requests & Ideas**: Have an idea for a new agent skill, workflow, or tool integration? Open an issue on [GitHub Issues](https://github.com/Envy-7z/katalyst/issues).
 * 🐛 **Bug Reports**: Encountered an issue with installation or UI? Submit a bug report via [GitHub Issues](https://github.com/Envy-7z/katalyst/issues).
-* 🤝 **Direct Contact & Collaboration**: Want to connect, collaborate, or share feedback directly with the creator? Reach out on [LinkedIn: Wisnu Andrian](https://www.linkedin.com/in/wisnuandriaan/).
+* 🤝 **Feedback & collaboration**: Open an issue or discussion in the [Katalyst repository](https://github.com/Envy-7z/katalyst).
 * ⭐ **Support the Project**: If Katalyst speeds up your development workflow, consider giving the repository a star on GitHub!
 
 ---
@@ -387,4 +387,25 @@ Katalyst is an evolving, community-driven project. We'd love to hear your though
 * Katalyst modifications and tooling are distributed under the **GNU General Public License v3.0 (GPL-3.0)**.
 * Core editor architecture copyright © [Zed Industries, Inc.](https://zed.dev)
 * Agent runtime powered by [OMP](https://github.com/can1357/oh-my-pi).
-* Designed and crafted with ❤️ by [Wisnuu](https://github.com/Envy-7z).
+* Maintained by Katalyst Contributors.
+
+---
+
+## Privacy and local profile migration
+
+Katalyst's repository contains only generic defaults, public documentation, and the patch series needed to build the app. It does not include a user's credentials, chat transcripts, private skills, rules, commands, hooks, or machine paths.
+
+During installation, `katalyst-migrate-profile` copies the current machine's Cursor and Codex setup into `~/.katalyst`:
+
+- User skills are copied into Katalyst's local skill directory and are available to OMP.
+- Compatible MCP server definitions are merged into `~/.omp/agent/mcp.json`; an existing OMP definition wins if names collide.
+- Cursor rules, commands, hooks, and Codex configuration/hooks are retained under `~/.katalyst/private-profile/` as local provenance. They are not published and are not auto-enabled across agent runtimes because their event formats differ.
+- The installer preserves the existing Zed settings, keymap, OMP configuration, and MCP file before applying Katalyst defaults.
+
+This keeps personal workflow automation on the user's Mac while allowing the public release to remain reproducible and safe to share.
+
+## Updating upstream Zed and OMP
+
+Katalyst keeps the upstream Zed revision in [`ZED_REVISION`](ZED_REVISION) and applies the numbered patch series during every release build. To update, start from a clean worktree, move the pinned revision forward, apply the patch series, resolve conflicts, run the test suite, and release a new Katalyst version.
+
+OMP remains an external dependency installed through its official package channel. Updating OMP does not replace the Katalyst runtime, and Katalyst preserves the user's local OMP configuration and profile migration data across upgrades.

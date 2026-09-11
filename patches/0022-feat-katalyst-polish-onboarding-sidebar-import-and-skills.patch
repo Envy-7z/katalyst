@@ -1,242 +1,169 @@
-From 10280dc26248d0cc8e41b27639710eb134fbe5a5 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
-Date: Fri, 11 Sep 2026 23:31:28 +0700
-Subject: [PATCH] feat: polish Katalyst onboarding and sidebar
+From c9cc1ae5fe8fe658e9d54e5efdc8c2353afe234d Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Sat, 12 Sep 2026 03:52:12 +0700
+Subject: [PATCH] feat(katalyst): polish onboarding sidebar import and skills
 
 ---
- Cargo.lock                            |   1 +
- assets/images/katalyst_logo.svg       |   5 +-
- crates/agent_ui/src/agent_panel.rs    |  10 +-
- crates/onboarding/Cargo.toml          |   1 +
- crates/onboarding/src/basics_page.rs  | 327 +++++++++++++++-----------
- crates/onboarding/src/onboarding.rs   |  81 ++++++-
- crates/settings_ui/src/settings_ui.rs |  99 ++++++++
- crates/sidebar/src/sidebar.rs         | 157 +++++++++++--
- crates/workspace/src/welcome.rs       |   6 +-
- 9 files changed, 511 insertions(+), 176 deletions(-)
+ crates/agent_ui/src/thread_import.rs |  72 +++++++-
+ crates/sidebar/src/sidebar.rs        | 249 +++++++++++++++++++++++----
+ 2 files changed, 281 insertions(+), 40 deletions(-)
 
-diff --git a/Cargo.lock b/Cargo.lock
-index 9590fa1334..1952d6874a 100644
---- a/Cargo.lock
-+++ b/Cargo.lock
-@@ -12179,6 +12179,7 @@ dependencies = [
-  "project",
-  "schemars 1.0.4",
-  "serde",
-+ "serde_json",
-  "settings",
-  "telemetry",
-  "theme",
-diff --git a/assets/images/katalyst_logo.svg b/assets/images/katalyst_logo.svg
-index d781928416..4baca193aa 100644
---- a/assets/images/katalyst_logo.svg
-+++ b/assets/images/katalyst_logo.svg
-@@ -1,6 +1,3 @@
- <svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
--  <rect x="3" y="3" width="90" height="90" rx="22" fill="#111528" stroke="#273453" stroke-width="3"/>
--  <path d="M31 22v52" stroke="#58A6FF" stroke-width="10" stroke-linecap="round"/>
--  <path d="M69 24 38 51l31 24" stroke="#7C83FF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
--  <path d="m64 34-18 17 14 12" stroke="#32B8F2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-+  <path d="M27 20v56M69 22 39 48l30 26" stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
- </svg>
-diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
-index c3765a0377..3698c48999 100644
---- a/crates/agent_ui/src/agent_panel.rs
-+++ b/crates/agent_ui/src/agent_panel.rs
-@@ -36,10 +36,10 @@ use zed_actions::{
+diff --git a/crates/agent_ui/src/thread_import.rs b/crates/agent_ui/src/thread_import.rs
+index 35085c8462..aaa055ecb1 100644
+--- a/crates/agent_ui/src/thread_import.rs
++++ b/crates/agent_ui/src/thread_import.rs
+@@ -1,4 +1,4 @@
+-use std::time::Duration;
++use std::{path::PathBuf, time::Duration};
+ 
+ use acp_thread::AgentSessionListRequest;
+ use agent::ThreadStore;
+@@ -24,6 +24,7 @@ use ui::{
+     ModalHeader, Section, Tooltip, prelude::*,
+ };
+ use util::ResultExt;
++use util::path_list::PathList;
+ use workspace::{ModalView, MultiWorkspace, Workspace};
+ 
+ use crate::{
+@@ -867,9 +868,14 @@ fn collect_importable_threads(
+             if !existing_sessions.insert(session.session_id.clone()) {
+                 continue;
+             }
+-            let Some(folder_paths) = session.work_dirs else {
++            let Some(source_folder_paths) = session.work_dirs else {
+                 continue;
+             };
++            let folder_paths = if agent_id.as_ref() == "omp" {
++                katalyst_history_workspace()
++            } else {
++                source_folder_paths
++            };
+             to_insert.push(ThreadMetadata {
+                 thread_id: ThreadId::new(),
+                 session_id: Some(session.session_id),
+@@ -889,6 +895,18 @@ fn collect_importable_threads(
+     to_insert
+ }
+ 
++/// Imported ACP sessions are history, not project-open requests. Their original
++/// working directory stays in the agent session itself; using it as Zed's
++/// workspace can recursively index a directory that merely contains projects.
++fn katalyst_history_workspace() -> PathList {
++    let path = std::env::var_os("HOME")
++        .map(PathBuf::from)
++        .unwrap_or_else(std::env::temp_dir)
++        .join(".katalyst/history");
++    let _ = std::fs::create_dir_all(&path);
++    PathList::new(&[path])
++}
++
+ pub fn import_threads_from_other_channels(_workspace: &mut Workspace, cx: &mut Context<Workspace>) {
+     let database_dir = paths::database_dir().clone();
+     import_threads_from_other_channels_in(database_dir, cx);
+@@ -991,7 +1009,7 @@ mod tests {
+     use acp_thread::AgentSessionInfo;
+     use chrono::Utc;
+     use gpui::TestAppContext;
+-    use std::path::Path;
++    use std::path::{Path, PathBuf};
+     use workspace::PathList;
+ 
+     fn make_session(
+@@ -1061,6 +1079,54 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn test_collect_imports_external_sessions_into_the_history_workspace() {
++        let existing = HashSet::default();
++        let source_paths = PathList::new(&[Path::new("/source/project")]);
++
++        let sessions_by_agent = vec![SessionByAgent {
++            agent_id: AgentId::new("omp"),
++            remote_connection: None,
++            sessions: vec![make_session(
++                "external-history",
++                Some("Imported history"),
++                Some(source_paths),
++                None,
++                None,
++            )],
++        }];
++
++        let result = collect_importable_threads(sessions_by_agent, existing);
++        let imported_paths = result[0].folder_paths().ordered_paths().collect::<Vec<_>>();
++
++        let history = katalyst_history_workspace();
++        let expected = history.ordered_paths().collect::<Vec<_>>();
++        assert_eq!(imported_paths, expected);
++    }
++
++    #[test]
++    fn test_collect_preserves_workspace_for_non_omp_agents() {
++        let existing = HashSet::default();
++        let source_paths = PathList::new(&[Path::new("/project")]);
++
++        let sessions_by_agent = vec![SessionByAgent {
++            agent_id: AgentId::new("claude-code"),
++            remote_connection: None,
++            sessions: vec![make_session(
++                "external-session",
++                Some("External session"),
++                Some(source_paths),
++                None,
++                None,
++            )],
++        }];
++
++        let result = collect_importable_threads(sessions_by_agent, existing);
++        let imported_paths = result[0].folder_paths().ordered_paths().collect::<Vec<_>>();
++
++        assert_eq!(imported_paths, vec![&PathBuf::from("/project")]);
++    }
++
+     #[test]
+     fn test_collect_marks_all_imported_threads_as_archived() {
+         let existing = HashSet::default();
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index 4f6173fbf4..a8e1b67ad5 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -52,6 +52,7 @@ use std::cmp::Ordering;
+ use std::collections::{HashMap, HashSet};
+ use std::mem;
+ use std::path::{Path, PathBuf};
++use std::process::Command;
+ use std::rc::Rc;
+ use std::sync::Arc;
+ use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING};
+@@ -65,7 +66,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
+ use util::ResultExt as _;
+ use util::path_list::PathList;
+ use workspace::{
+-    AddFolderToProject, CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
++    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
+     MultiWorkspace, MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject,
+     PreviousThread, ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar,
+     SidebarSide, Toast, ToggleWorkspaceSidebar, Workspace, notifications::NotificationId,
+@@ -73,9 +74,9 @@ use workspace::{
  };
  
- use crate::ExpandMessageEditor;
--use crate::plan_progress;
- use crate::ManageProfiles;
- use crate::agent_connection_store::AgentConnectionStore;
- use crate::completion_provider::{AgentContextSelection, AgentContextSource};
-+use crate::plan_progress;
- use crate::terminal_thread_metadata_store::{
-     TerminalThreadMetadata, TerminalThreadMetadataStore, compose_terminal_thread_title,
-     normalize_terminal_custom_title, terminal_title_without_prefix,
-@@ -3552,6 +3552,7 @@ impl AgentPanel {
-         window: &mut Window,
-         cx: &mut Context<Self>,
-     ) {
-+        self.refresh_skills(cx);
-         window.dispatch_action(
-             Box::new(zed_actions::OpenSettingsAt {
-                 path: zed_actions::AGENT_SKILLS_SETTINGS_PATH.to_string(),
-@@ -4215,11 +4216,7 @@ impl AgentPanel {
-         thread_view.update(cx, |thread_view, cx| {
-             if let Some(config_options_view) = thread_view.config_options_view.clone() {
-                 let handled = config_options_view.update(cx, |view, cx| {
--                    view.toggle_category_picker(
--                        acp::SessionConfigOptionCategory::Model,
--                        window,
--                        cx,
--                    )
-+                    view.toggle_category_picker(acp::SessionConfigOptionCategory::Model, window, cx)
-                 });
-                 if handled {
-                     return true;
-@@ -4237,7 +4234,6 @@ impl AgentPanel {
-         })
-     }
+ use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
++use zed_actions::assistant::ManageSkills;
+ use zed_actions::editor::{MoveDown, MoveUp};
+ use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
+-use zed_actions::assistant::ManageSkills;
  
--
-     pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
-         match &self.base_view {
-             BaseView::AgentThread { conversation_view } => {
-diff --git a/crates/onboarding/Cargo.toml b/crates/onboarding/Cargo.toml
-index 6994b2ba95..882d924a30 100644
---- a/crates/onboarding/Cargo.toml
-+++ b/crates/onboarding/Cargo.toml
-@@ -31,6 +31,7 @@ picker.workspace = true
- project.workspace = true
- schemars.workspace = true
- serde.workspace = true
-+serde_json.workspace = true
- settings.workspace = true
- telemetry.workspace = true
- theme.workspace = true
-diff --git a/crates/onboarding/src/basics_page.rs b/crates/onboarding/src/basics_page.rs
-index d0f8d1ce34..470d258c3c 100644
---- a/crates/onboarding/src/basics_page.rs
-+++ b/crates/onboarding/src/basics_page.rs
-@@ -1,11 +1,14 @@
-+use std::path::PathBuf;
- use std::sync::Arc;
- use std::time::Duration;
+ use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
  
--use client::{Client, TelemetrySettings, UserStore, zed_urls};
-+use client::{Client, UserStore, zed_urls};
- use cloud_api_types::Plan;
- use collections::HashMap;
- use fs::Fs;
--use gpui::{Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between};
-+use gpui::{
-+    Action, Animation, AnimationExt, App, Context, Entity, IntoElement, TaskExt, pulsating_between,
-+};
- use project::agent_server_store::AllAgentServersSettings;
- use project::project_settings::ProjectSettings;
- use project::{AgentRegistryStore, RegistryAgent};
-@@ -241,94 +244,6 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
-     }
- }
+@@ -97,6 +98,24 @@ gpui::actions!(
+     ]
+ );
  
--fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement {
--    let fs = <dyn Fs>::global(cx);
--
--    v_flex()
--        .gap_4()
--        .child(
--            SwitchField::new(
--                "onboarding-telemetry-metrics",
--                None::<&str>,
--                Some("Help improve Zed by sending anonymous usage data".into()),
--                if TelemetrySettings::get_global(cx).metrics {
--                    ui::ToggleState::Selected
--                } else {
--                    ui::ToggleState::Unselected
--                },
--                {
--                    let fs = fs.clone();
--                    move |selection, _, cx| {
--                        let enabled = match selection {
--                            ToggleState::Selected => true,
--                            ToggleState::Unselected => false,
--                            ToggleState::Indeterminate => {
--                                return;
--                            }
--                        };
--
--                        update_settings_file(fs.clone(), cx, move |setting, _| {
--                            setting.telemetry.get_or_insert_default().metrics = Some(enabled);
--                        });
--
--                        // This telemetry event shouldn't fire when it's off. If it does we'll be alerted
--                        // and can fix it in a timely manner to respect a user's choice.
--                        telemetry::event!(
--                            "Welcome Page Telemetry Metrics Toggled",
--                            options = if enabled { "on" } else { "off" }
--                        );
--                    }
--                },
--            )
--            .tab_index({
--                *tab_index += 1;
--                *tab_index
--            }),
--        )
--        .child(
--            SwitchField::new(
--                "onboarding-telemetry-crash-reports",
--                None::<&str>,
--                Some(
--                    "Help fix Zed by sending crash reports so we can fix critical issues fast"
--                        .into(),
--                ),
--                if TelemetrySettings::get_global(cx).diagnostics {
--                    ui::ToggleState::Selected
--                } else {
--                    ui::ToggleState::Unselected
--                },
--                {
--                    let fs = fs.clone();
--                    move |selection, _, cx| {
--                        let enabled = match selection {
--                            ToggleState::Selected => true,
--                            ToggleState::Unselected => false,
--                            ToggleState::Indeterminate => {
--                                return;
--                            }
--                        };
--
--                        update_settings_file(fs.clone(), cx, move |setting, _| {
--                            setting.telemetry.get_or_insert_default().diagnostics = Some(enabled);
--                        });
--
--                        // This telemetry event shouldn't fire when it's off. If it does we'll be alerted
--                        // and can fix it in a timely manner to respect a user's choice.
--                        telemetry::event!(
--                            "Welcome Page Telemetry Diagnostics Toggled",
--                            options = if enabled { "on" } else { "off" }
--                        );
--                    }
--                },
--            )
--            .tab_index({
--                *tab_index += 1;
--                *tab_index
--            }),
--        )
--}
--
- fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
-     let base_keymap = match BaseKeymap::get_global(cx) {
-         BaseKeymap::Zed => Some(0),
-@@ -439,12 +354,14 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
-         ui::ToggleState::Unselected
-     };
- 
--    let tooltip_description = "Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
-+    let tooltip_description = "Katalyst can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
- 
-     SwitchField::new(
-         "onboarding-auto-trust-worktrees",
-         Some("Trust All Projects By Default"),
--        Some("Automatically mark all new projects as trusted to unlock all Zed's features".into()),
-+        Some(
-+            "Automatically mark all new projects as trusted to unlock all Katalyst features".into(),
-+        ),
-         toggle_state,
-         {
-             let fs = <dyn Fs>::global(cx);
-@@ -536,17 +453,114 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
-         .child(h_flex().gap_1().child(vscode).child(cursor))
- }
- 
--pub(crate) fn session_sync_status() -> SharedString {
--    std::process::Command::new("katalyst-session-sync")
--        .args(["status"])
-+pub(crate) fn session_sync_command() -> Option<PathBuf> {
++struct KatalystImportError;
++
++fn katalyst_session_sync_command() -> Option<PathBuf> {
 +    let mut candidates = Vec::new();
 +    if let Ok(exe) = std::env::current_exe() {
 +        if let Some(parent) = exe.parent() {
@@ -252,647 +179,79 @@ index d0f8d1ce34..470d258c3c 100644
 +    candidates.into_iter().find(|path| path.is_file())
 +}
 +
-+pub(crate) fn session_sync_output_for_onboarding(
-+    args: &[&str],
-+) -> Result<std::process::Output, String> {
-+    let Some(command) = session_sync_command() else {
-+        return Err("Session sync helper is not installed. Re-run the Katalyst installer.".into());
-+    };
-+    std::process::Command::new(command)
-+        .args(args)
-         .output()
--        .ok()
--        .filter(|output| output.status.success())
--        .and_then(|output| String::from_utf8(output.stdout).ok())
--        .map(|output| output.trim().to_string())
--        .filter(|output| !output.is_empty())
--        .unwrap_or_else(|| "Cursor and Codex chats will be detected after installation.".to_string())
--        .into()
-+        .map_err(|error| format!("Could not start session sync: {error}"))
-+}
-+
-+fn parse_sync_output(output: std::process::Output) -> Result<serde_json::Value, String> {
-+    let value = serde_json::from_slice::<serde_json::Value>(&output.stdout);
-+    if !output.status.success() {
-+        if let Ok(value) = &value {
-+            if value.get("failed").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
-+                return Err(format_sync_result(value));
-+            }
-+        }
-+        // Do not put raw stderr (which can contain source transcript content) in the UI.
-+        return Err(format!(
-+            "Session sync failed ({}). Retry with Sync now.",
-+            output.status
-+        ));
-+    }
-+    value.map_err(|_| "Session sync returned an unreadable result. Retry with Sync now.".into())
-+}
-+
-+fn count(value: &serde_json::Value, key: &str) -> u64 {
-+    value.get(key).and_then(|v| v.as_u64()).unwrap_or(0)
-+}
-+
-+fn format_sync_result(value: &serde_json::Value) -> String {
-+    let sources = &value["detected_by_source"];
-+    format!(
-+        "Found {} Cursor and {} Codex chats; {} imported, {} updated, {} unchanged, {} continued in OMP, {} failed.",
-+        count(sources, "cursor"),
-+        count(sources, "codex"),
-+        count(value, "imported"),
-+        count(value, "updated"),
-+        count(value, "unchanged"),
-+        count(value, "owned_by_omp"),
-+        count(value, "failed"),
-+    )
-+}
-+
-+pub(crate) fn sync_sessions_for_onboarding() -> Result<String, String> {
-+    let output = session_sync_output_for_onboarding(&[
-+        "sync",
-+        "--sources",
-+        "cursor,codex",
-+        "--all",
-+        "--json",
-+    ])?;
-+    parse_sync_output(output).map(|value| format_sync_result(&value))
-+}
-+
-+pub(crate) fn session_sync_status() -> Result<String, String> {
-+    // Status is cached; a read-only dry run discovers chats on first installation too.
-+    let discovery = parse_sync_output(session_sync_output_for_onboarding(&[
-+        "sync",
-+        "--sources",
-+        "cursor,codex",
-+        "--dry-run",
-+        "--json",
-+    ])?)?;
-+    let status = parse_sync_output(session_sync_output_for_onboarding(&["status", "--json"])?)?;
-+    let sources = &discovery["detected_by_source"];
-+    Ok(format!(
-+        "Found {} Cursor and {} Codex chats; {} already imported, {} failed in the last sync.",
-+        count(sources, "cursor"),
-+        count(sources, "codex"),
-+        count(&status, "imported"),
-+        count(&status["lastResult"], "failed")
-+    ))
-+}
-+
-+pub(crate) fn detect_omp() -> bool {
-+    let mut candidates = vec![
-+        PathBuf::from("/opt/homebrew/bin/omp"),
-+        PathBuf::from("/usr/local/bin/omp"),
-+    ];
-+    if let Some(home) = std::env::var_os("HOME") {
-+        let home = PathBuf::from(home);
-+        candidates.push(home.join(".local/bin/omp"));
-+        candidates.push(home.join(".bun/bin/omp"));
-+    }
-+    if let Some(path) = std::env::var_os("PATH") {
-+        candidates.extend(std::env::split_paths(&path).map(|directory| directory.join("omp")));
-+    }
-+    candidates.iter().any(|path| path.is_file())
- }
- 
- fn session_sync_auto_marker() -> std::path::PathBuf {
-@@ -560,15 +574,18 @@ pub(crate) fn session_sync_auto_enabled() -> bool {
-     !session_sync_auto_marker().exists()
- }
- 
--fn set_session_sync_auto_enabled(enabled: bool) {
-+fn set_session_sync_auto_enabled(enabled: bool) -> std::io::Result<()> {
-     let marker = session_sync_auto_marker();
-     if enabled {
--        let _ = std::fs::remove_file(marker);
-+        match std::fs::remove_file(marker) {
-+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-+            result => result,
-+        }
-     } else {
-         if let Some(parent) = marker.parent() {
--            let _ = std::fs::create_dir_all(parent);
-+            std::fs::create_dir_all(parent)?;
-         }
--        let _ = std::fs::write(marker, b"disabled\n");
-+        std::fs::write(marker, b"disabled\n")
-     }
- }
- 
-@@ -608,8 +625,11 @@ fn render_session_import_section(
-                         .style(ButtonStyle::Outlined)
-                         .toggle_state(auto_enabled)
-                         .on_click(cx.listener(|this, _, _, cx| {
--                            this.session_sync_auto_enabled = !this.session_sync_auto_enabled;
--                            set_session_sync_auto_enabled(this.session_sync_auto_enabled);
-+                            let enabled = !this.session_sync_auto_enabled;
-+                            match set_session_sync_auto_enabled(enabled) {
-+                                Ok(()) => this.session_sync_auto_enabled = enabled,
-+                                Err(_) => this.session_sync_status = "Could not save the auto-import preference. Check access to ~/.katalyst/imports.".into(),
-+                            }
-                             cx.notify();
-                         })),
-                 ).child(
-@@ -619,24 +639,8 @@ fn render_session_import_section(
-                     )
-                         .style(ButtonStyle::Outlined)
-                         .disabled(sync_in_progress)
--                        .on_click(cx.listener(|this, _, _, cx| {
--                            this.session_sync_in_progress = true;
--                            this.session_sync_status = "Syncing Cursor and Codex chats…".into();
--                            cx.notify();
--                            let sync = cx.background_executor().spawn(async move {
--                                std::process::Command::new("katalyst-session-sync")
--                                    .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
--                                    .output()
--                            });
--                            this.session_sync_task = Some(cx.spawn(async move |this, cx| {
--                                let _ = sync.await;
--                                this.update(cx, |this, cx| {
--                                    this.session_sync_in_progress = false;
--                                    this.session_sync_status = session_sync_status();
--                                    cx.notify();
--                                })
--                                .ok();
--                            }));
-+                        .on_click(cx.listener(|this, _, window, cx| {
-+                            this.sync_sessions(false, window, cx);
-                         })),
-                 )),
-         )
-@@ -756,7 +760,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
-                 .size(IconSize::XSmall)
-                 .color(Color::Muted),
-         )
--        .name("Zed Agent")
-+        .name("Native Zed Agent")
-         .state(state_element)
-         .disabled(is_trial || is_pro)
-         .map(|this| {
-@@ -767,7 +771,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
-                 })
-             } else {
-                 this.on_click(move |_, _, cx| {
--                    telemetry::event!("Welcome Zed Agent Sign In Clicked");
-+                    telemetry::event!("Welcome Native Agent Sign In Clicked");
-                     let client = Client::global(cx);
-                     cx.spawn(async move |cx| client.sign_in_with_optional_connect(true, cx).await)
-                         .detach_and_log_err(cx);
-@@ -776,7 +780,32 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
-         })
- }
- 
--fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
-+fn render_omp_agent_button(installed: Option<bool>) -> impl IntoElement {
-+    AgentSetupButton::new("omp-agent-onboarding")
-+        .icon(
-+            Icon::new(IconName::Sparkle)
-+                .size(IconSize::XSmall)
-+                .color(Color::Accent),
-+        )
-+        .name("OMP (Default)")
-+        .state(
-+            Label::new(match installed {
-+                Some(true) => "Detected",
-+                Some(false) => "Setup guide",
-+                None => "Checking…",
-+            })
-+            .size(LabelSize::XSmall)
-+            .into_any_element(),
-+        )
-+        .disabled(installed != Some(false))
-+        .on_click(|_, _, cx| cx.open_url("https://github.com/Envy-7z/katalyst#installation"))
-+}
-+
-+fn render_ai_section(
-+    user_store: &Entity<UserStore>,
-+    omp_installed: Option<bool>,
-+    cx: &mut App,
-+) -> impl IntoElement {
-     let registry_agents = AgentRegistryStore::try_global(cx)
-         .map(|store| store.read(cx).agents().to_vec())
-         .unwrap_or_default();
-@@ -786,7 +815,7 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
-         .get::<AllAgentServersSettings>(None)
-         .clone();
- 
--    let column_count = 1 + FEATURED_AGENT_IDS.len() as u16;
-+    let column_count = 3;
- 
-     let grid = FEATURED_AGENT_IDS.iter().fold(
-         div()
-@@ -795,6 +824,7 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
-             .grid()
-             .grid_cols(column_count)
-             .gap_2()
-+            .child(render_omp_agent_button(omp_installed))
-             .child(render_zed_agent_button(user_store, cx)),
-         |grid, agent_id| {
-             let Some(agent) = registry_agents
-@@ -810,9 +840,9 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
- 
-     v_flex()
-         .gap_0p5()
--        .child(Label::new("Agent Setup"))
-+        .child(Label::new("Katalyst Agent Setup"))
-         .child(
--            Label::new("Install your favorite agents and start your first thread.")
-+            Label::new("OMP is the default agent. Install it with the Katalyst installer; other agents are optional.")
-                 .color(Color::Muted),
-         )
-         .child(grid)
-@@ -823,6 +853,7 @@ pub(crate) fn render_basics_page(
-     sync_status: SharedString,
-     sync_in_progress: bool,
-     auto_enabled: bool,
-+    omp_installed: Option<bool>,
-     cx: &mut Context<Onboarding>,
- ) -> impl IntoElement {
-     let mut tab_index = 0;
-@@ -832,7 +863,7 @@ pub(crate) fn render_basics_page(
-         .gap_6()
-         .child(render_theme_section(&mut tab_index, cx))
-         .child(render_base_keymap_section(&mut tab_index, cx))
--        .child(render_ai_section(user_store, cx))
-+        .child(render_ai_section(user_store, omp_installed, cx))
-         .child(render_import_settings_section(&mut tab_index, cx))
-         .child(render_session_import_section(
-             sync_status,
-@@ -843,5 +874,33 @@ pub(crate) fn render_basics_page(
-         .child(render_vim_mode_switch(&mut tab_index, cx))
-         .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
-         .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
--        .child(render_telemetry_section(&mut tab_index, cx))
-+}
-+
-+#[cfg(test)]
-+mod session_sync_tests {
-+    use super::*;
-+
-+    #[test]
-+    fn sync_result_uses_per_source_counts_and_reports_failures() {
-+        let result = format_sync_result(&serde_json::json!({
-+            "detected": 7, "detected_by_source": {"cursor": 3, "codex": 4},
-+            "imported": 2, "updated": 1, "unchanged": 2, "owned_by_omp": 1, "failed": 1
-+        }));
-+        assert_eq!(
-+            result,
-+            "Found 3 Cursor and 4 Codex chats; 2 imported, 1 updated, 2 unchanged, 1 continued in OMP, 1 failed."
-+        );
-+    }
-+
-+    #[test]
-+    fn unknown_or_missing_count_fields_do_not_panic() {
-+        assert!(
-+            format_sync_result(&serde_json::json!({"new_field": true}))
-+                .contains("0 Cursor and 0 Codex")
-+        );
-+        assert_eq!(
-+            count(&serde_json::json!({"imported": "unknown"}), "imported"),
-+            0
-+        );
-+    }
- }
-diff --git a/crates/onboarding/src/onboarding.rs b/crates/onboarding/src/onboarding.rs
-index 76e3e5a9af..7eb5a6267a 100644
---- a/crates/onboarding/src/onboarding.rs
-+++ b/crates/onboarding/src/onboarding.rs
-@@ -211,6 +211,7 @@ struct Onboarding {
-     user_store: Entity<UserStore>,
-     scroll_handle: ScrollHandle,
-     session_sync_status: SharedString,
-+    omp_installed: Option<bool>,
-     session_sync_in_progress: bool,
-     session_sync_auto_enabled: bool,
-     session_sync_task: Option<Task<()>>,
-@@ -258,9 +259,20 @@ impl Onboarding {
-         );
- 
-         cx.new(|cx| {
-+            let status_task = cx.background_executor().spawn(async {
-+                (
-+                    basics_page::session_sync_status().unwrap_or_else(|error| error),
-+                    basics_page::detect_omp(),
-+                )
-+            });
-             cx.spawn(async move |this, cx| {
-                 font_family_cache.prefetch(cx).await;
--                this.update(cx, |_, cx| {
-+                let (session_status, omp_installed) = status_task.await;
-+                this.update(cx, |this: &mut Self, cx| {
-+                    if this.session_sync_status.as_ref() == "Checking Cursor and Codex chats…" {
-+                        this.session_sync_status = session_status.into();
-+                    }
-+                    this.omp_installed = Some(omp_installed);
-                     cx.notify();
-                 })
-             })
-@@ -271,7 +283,8 @@ impl Onboarding {
-                 focus_handle: cx.focus_handle(),
-                 scroll_handle: ScrollHandle::new(),
-                 user_store: workspace.user_store().clone(),
--                session_sync_status: basics_page::session_sync_status(),
-+                session_sync_status: "Checking Cursor and Codex chats…".into(),
-+                omp_installed: None,
-                 session_sync_in_progress: false,
-                 session_sync_auto_enabled: basics_page::session_sync_auto_enabled(),
-                 session_sync_task: None,
-@@ -281,17 +294,59 @@ impl Onboarding {
-         })
-     }
- 
--    fn on_finish(_: &Finish, window: &mut Window, cx: &mut App) {
--        telemetry::event!("Finish Setup");
--        if basics_page::session_sync_auto_enabled() {
--            let _ = std::process::Command::new("katalyst-session-sync")
--                .args(["sync", "--sources", "cursor,codex", "--all"])
--                .spawn();
-+    fn on_finish(&mut self, _: &Finish, window: &mut Window, cx: &mut Context<Self>) {
-+        if self.session_sync_in_progress {
-+            return;
-+        }
-+        if self.session_sync_auto_enabled {
-+            self.sync_sessions(true, window, cx);
-+        } else {
-+            Self::finish_setup(window, cx);
-         }
-+    }
-+
-+    fn finish_setup(window: &mut Window, cx: &mut App) {
-+        telemetry::event!("Finish Setup");
-         go_to_welcome_page(cx);
-+        window.dispatch_action(
-+            Box::new(zed_actions::agent::SelectAgent {
-+                agent: "omp".into(),
-+            }),
-+            cx,
-+        );
-         window.dispatch_action(zed_actions::assistant::ToggleFocus.boxed_clone(), cx);
-     }
- 
-+    fn sync_sessions(
-+        &mut self,
-+        finish_after_sync: bool,
-+        window: &mut Window,
-+        cx: &mut Context<Self>,
-+    ) {
-+        if self.session_sync_in_progress {
-+            return;
-+        }
-+        self.session_sync_in_progress = true;
-+        self.session_sync_status = "Syncing Cursor and Codex chats…".into();
-+        cx.notify();
-+        let sync = cx
-+            .background_executor()
-+            .spawn(async { basics_page::sync_sessions_for_onboarding() });
-+        self.session_sync_task = Some(cx.spawn_in(window, async move |this, cx| {
-+            let result = sync.await;
-+            this.update_in(cx, |this, window, cx| {
-+                this.session_sync_in_progress = false;
-+                let succeeded = result.is_ok();
-+                this.session_sync_status = result.unwrap_or_else(|error| error).into();
-+                cx.notify();
-+                if finish_after_sync && succeeded {
-+                    Self::finish_setup(window, cx);
-+                }
-+            })
-+            .ok();
-+        }));
-+    }
-+
-     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
-         let client = Client::global(cx);
-         let workspace = self.workspace.clone();
-@@ -316,6 +371,7 @@ impl Onboarding {
-             self.session_sync_status.clone(),
-             self.session_sync_in_progress,
-             self.session_sync_auto_enabled,
-+            self.omp_installed,
-             cx,
-         )
-         .into_any_element()
-@@ -335,7 +391,7 @@ impl Render for Onboarding {
-             .track_focus(&self.focus_handle)
-             .size_full()
-             .bg(cx.theme().colors().editor_background)
--            .on_action(Self::on_finish)
-+            .on_action(cx.listener(Self::on_finish))
-             .on_action(cx.listener(Self::handle_sign_in))
-             .on_action(Self::handle_open_account)
-             .on_action(cx.listener(|_, _: &menu::SelectNext, window, cx| {
-@@ -368,7 +424,10 @@ impl Render for Onboarding {
-                                     .child(
-                                         h_flex()
-                                             .gap_4()
--                                            .child(Vector::square(VectorName::KatalystLogo, rems(2.5)))
-+                                            .child(Vector::square(
-+                                                VectorName::KatalystLogo,
-+                                                rems(2.5),
-+                                            ))
-                                             .child(
-                                                 v_flex()
-                                                     .child(
-@@ -386,6 +445,7 @@ impl Render for Onboarding {
-                                     .child({
-                                         Button::new("finish_setup", "Finish Setup")
-                                             .style(ButtonStyle::Filled)
-+                                            .disabled(self.session_sync_in_progress)
-                                             .size(ButtonSize::Medium)
-                                             .width(rems_from_px(200_f32))
-                                             .key_binding(KeyBinding::for_action_in(
-@@ -445,6 +505,7 @@ impl Item for Onboarding {
-             scroll_handle: ScrollHandle::new(),
-             focus_handle: cx.focus_handle(),
-             session_sync_status: self.session_sync_status.clone(),
-+            omp_installed: self.omp_installed,
-             session_sync_in_progress: false,
-             session_sync_auto_enabled: self.session_sync_auto_enabled,
-             session_sync_task: None,
-diff --git a/crates/settings_ui/src/settings_ui.rs b/crates/settings_ui/src/settings_ui.rs
-index 12ede658ba..74ebc97130 100644
---- a/crates/settings_ui/src/settings_ui.rs
-+++ b/crates/settings_ui/src/settings_ui.rs
-@@ -788,6 +788,16 @@ fn open_settings_editor_at_target(
-             return;
-         }
- 
-+        // Exact links to a subpage should open its content, even when the
-+        // search index also matches descendant settings.
-+        if path == AGENT_SKILLS_SETTINGS_PATH {
-+            settings_window.sub_page_stack.clear();
-+            if settings_window.navigate_to_sub_page(path, window, cx) {
-+                cx.notify();
-+                return;
-+            }
-+        }
-+
-         let query = format!("#{path}");
-         let indices = settings_window.filter_by_json_path(&query);
- 
-@@ -6483,6 +6493,95 @@ pub mod test {
-             })
-             .unwrap();
-     }
-+    #[gpui::test]
-+    async fn test_open_skills_settings_action_opens_skills_list(
-+        cx: &mut gpui::TestAppContext,
-+    ) {
-+        use project::Project;
-+
-+        cx.update(|cx| {
-+            register_settings(cx);
-+            release_channel::init("0.0.0".parse().unwrap(), cx);
-+            crate::init(cx);
-+        });
-+
-+        let app_state = cx.update(|cx| {
-+            let app_state = AppState::test(cx);
-+            AppState::set_global(app_state.clone(), cx);
-+            app_state
-+        });
-+
-+        app_state
-+            .fs
-+            .as_fake()
-+            .insert_tree("/project", serde_json::json!({ "main.rs": "fn main() {}" }))
-+            .await;
-+
-+        let project = cx.update(|cx| {
-+            Project::local(
-+                app_state.client.clone(),
-+                app_state.node_runtime.clone(),
-+                app_state.user_store.clone(),
-+                app_state.languages.clone(),
-+                app_state.fs.clone(),
-+                None,
-+                project::LocalProjectFlags::default(),
-+                cx,
-+            )
-+        });
-+        project
-+            .update(cx, |project, cx| {
-+                project.find_or_create_worktree("/project", true, cx)
-+            })
-+            .await
-+            .expect("Failed to create worktree");
-+
-+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
-+            let workspace = cx.new(|cx| {
-+                Workspace::new(
-+                    Default::default(),
-+                    project.clone(),
-+                    app_state.clone(),
-+                    window,
-+                    cx,
-+                )
-+            });
-+            MultiWorkspace::new(workspace, window, cx)
-+        });
-+
-+        cx.run_until_parked();
-+
-+        // Dispatch the action the way the command palette does: on the
-+        // workspace window.
-+        multi_workspace.update_in(cx, |_multi_workspace, window, cx| {
-+            window.dispatch_action(Box::new(zed_actions::OpenSettingsAt { path: AGENT_SKILLS_SETTINGS_PATH.to_string(), target: None }), cx);
-+        });
-+
-+        cx.run_until_parked();
-+
-+        let settings_window = cx
-+            .update(|_, cx| {
-+                cx.windows()
-+                    .into_iter()
-+                    .find_map(|window| window.downcast::<SettingsWindow>())
-+            })
-+            .expect("dispatching the Skills link should open the settings window");
-+
-+        settings_window
-+            .read_with(cx, |settings_window, _| {
-+                let titles: Vec<_> = settings_window
-+                    .sub_page_stack
-+                    .iter()
-+                    .map(|sub_page| sub_page.link.title.to_string())
-+                    .collect();
-+                assert_eq!(
-+                    titles,
-+                    ["Skills"],
-+                    "the exact Skills link should open the list, not a search result"
-+                );
-+            })
-+            .unwrap();
-+    }
- }
- 
- #[cfg(test)]
-diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
-index 30d3bade5c..a9f52882ab 100644
---- a/crates/sidebar/src/sidebar.rs
-+++ b/crates/sidebar/src/sidebar.rs
-@@ -73,8 +73,9 @@ use workspace::{
- };
- 
- use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
-+use zed_actions::assistant::ManageSkills;
- use zed_actions::editor::{MoveDown, MoveUp};
--use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
-+use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenOnboarding, OpenRecent};
- 
- use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
- 
-@@ -2598,6 +2599,7 @@ impl Sidebar {
+ gpui::actions!(
+     dev,
+     [
+@@ -2599,7 +2618,6 @@ impl Sidebar {
      }
  
      fn render_projects_header(&self, _cx: &mut Context<Self>) -> AnyElement {
-+        let multi_workspace = self.multi_workspace.clone();
+-        let multi_workspace = self.multi_workspace.clone();
          h_flex()
              .id("projects-header")
              .h(px(26.))
-@@ -2616,13 +2618,14 @@ impl Sidebar {
-                 IconButton::new("add-folder-to-project", IconName::Plus)
+@@ -2615,17 +2633,19 @@ impl Sidebar {
+                     .color(Color::Muted),
+             )
+             .child(
+-                IconButton::new("add-folder-to-project", IconName::Plus)
++                IconButton::new("open-workspace", IconName::Plus)
                      .icon_size(IconSize::Small)
-                     .tooltip(Tooltip::text("Add Folder to Project…"))
--                    .on_click(|_, window, cx| {
--                        if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {
--                            let workspace = multi_workspace.read(cx).workspace().clone();
--                            workspace.update(cx, |workspace, cx| {
--                                workspace.add_folder_to_project(&AddFolderToProject, window, cx);
--                            });
--                        }
-+                    .on_click(move |_, window, cx| {
-+                        let Some(multi_workspace) = multi_workspace.upgrade() else {
-+                            return;
-+                        };
-+                        let workspace = multi_workspace.read(cx).workspace().clone();
-+                        workspace.update(cx, |workspace, cx| {
-+                            workspace.add_folder_to_project(&AddFolderToProject, window, cx);
-+                        });
+-                    .tooltip(Tooltip::text("Add Folder to Project…"))
++                    .tooltip(Tooltip::text("Open Workspace…"))
+                     .on_click(move |_, window, cx| {
+-                        let Some(multi_workspace) = multi_workspace.upgrade() else {
+-                            return;
+-                        };
+-                        let workspace = multi_workspace.read(cx).workspace().clone();
+-                        workspace.update(cx, |workspace, cx| {
+-                            workspace.add_folder_to_project(&AddFolderToProject, window, cx);
+-                        });
++                        // A project in Katalyst is a workspace group. Adding a folder to the
++                        // active project would merge its file tree, which is a different action.
++                        window.dispatch_action(
++                            Open {
++                                create_new_window: Some(false),
++                            }
++                            .boxed_clone(),
++                            cx,
++                        );
                      }),
              )
              .into_any_element()
-@@ -7806,6 +7809,114 @@ impl Sidebar {
-                 this.children(Self::render_right_window_controls(window, cx))
+@@ -7810,26 +7830,37 @@ impl Sidebar {
              })
      }
-+    fn render_quick_actions(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+     fn render_quick_actions(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+-        h_flex()
+-            .mx_2()
 +        v_flex()
 +            .w_full()
 +            .px_2()
-+            .my_1p5()
-+            .gap_1()
-+            .child(self.render_new_chat_button(window, cx))
-+            .child(
+             .my_1p5()
+             .gap_1()
+             .child(self.render_new_chat_button(window, cx))
+             .child(
+-                div()
 +                h_flex()
 +                    .items_center()
-+                    .id("sidebar-open-workspace")
+                     .id("sidebar-open-workspace")
+-                    .h(px(32.))
+-                    .flex_1()
 +                    .h(px(36.))
 +                    .w_full()
 +                    .px_2()
-+                    .rounded_md()
-+                    .cursor_pointer()
-+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
-+                    .child(
-+                        h_flex()
+                     .rounded_md()
+                     .cursor_pointer()
+                     .hover(|this| this.bg(cx.theme().colors().element_hover))
+                     .child(
+                         h_flex()
+-                            .gap_1p5()
 +                            .gap_2()
-+                            .items_center()
+                             .items_center()
+-                            .justify_center()
+-                            .child(Icon::new(IconName::FolderAdd).size(IconSize::Small).color(Color::Muted))
+-                            .child(Label::new("Open").size(LabelSize::Small).color(Color::Default)),
 +                            .justify_start()
 +                            .child(
 +                                Icon::new(IconName::FolderAdd)
@@ -904,32 +263,33 @@ index 30d3bade5c..a9f52882ab 100644
 +                                    .size(LabelSize::Default)
 +                                    .color(Color::Default),
 +                            ),
-+                    )
-+                    .tooltip(Tooltip::text("Open Workspace"))
-+                    .on_click(cx.listener(|_, _, window, cx| {
-+                        window.dispatch_action(
-+                            Open {
-+                                create_new_window: Some(false),
-+                            }
-+                            .boxed_clone(),
-+                            cx,
-+                        );
-+                    })),
-+            )
-+            .child(
+                     )
+                     .tooltip(Tooltip::text("Open Workspace"))
+                     .on_click(cx.listener(|_, _, window, cx| {
+@@ -7843,26 +7874,104 @@ impl Sidebar {
+                     })),
+             )
+             .child(
+-                div()
 +                h_flex()
 +                    .items_center()
-+                    .id("sidebar-skills")
+                     .id("sidebar-skills")
+-                    .h(px(32.))
+-                    .flex_1()
 +                    .h(px(36.))
 +                    .w_full()
 +                    .px_2()
-+                    .rounded_md()
-+                    .cursor_pointer()
-+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
-+                    .child(
-+                        h_flex()
+                     .rounded_md()
+                     .cursor_pointer()
+                     .hover(|this| this.bg(cx.theme().colors().element_hover))
+                     .child(
+                         h_flex()
+-                            .gap_1p5()
 +                            .gap_2()
-+                            .items_center()
+                             .items_center()
+-                            .justify_center()
+-                            .child(Icon::new(IconName::Pencil).size(IconSize::Small).color(Color::Muted))
+-                            .child(Label::new("Skills").size(LabelSize::Small).color(Color::Default)),
 +                            .justify_start()
 +                            .child(
 +                                Icon::new(IconName::Sparkle)
@@ -941,12 +301,12 @@ index 30d3bade5c..a9f52882ab 100644
 +                                    .size(LabelSize::Default)
 +                                    .color(Color::Default),
 +                            ),
-+                    )
-+                    .tooltip(Tooltip::text("Manage Skills"))
-+                    .on_click(cx.listener(|_, _, window, cx| {
-+                        window.dispatch_action(ManageSkills.boxed_clone(), cx);
-+                    })),
-+            )
+                     )
+                     .tooltip(Tooltip::text("Manage Skills"))
+                     .on_click(cx.listener(|_, _, window, cx| {
+                         window.dispatch_action(ManageSkills.boxed_clone(), cx);
+                     })),
+             )
 +            .child(
 +                h_flex()
 +                    .items_center()
@@ -974,16 +334,51 @@ index 30d3bade5c..a9f52882ab 100644
 +                            ),
 +                    )
 +                    .tooltip(Tooltip::text("Import Cursor and Codex chats"))
-+                    .on_click(cx.listener(|_, _, window, cx| {
-+                        window.dispatch_action(OpenOnboarding.boxed_clone(), cx);
++                    .on_click(cx.listener(|this, _, window, cx| {
++                        this.sync_local_sessions_and_show_import_modal(window, cx);
 +                    })),
 +            )
-+    }
-+
++            .child(
++                h_flex()
++                    .items_center()
++                    .id("sidebar-mcp-servers")
++                    .h(px(36.))
++                    .w_full()
++                    .px_2()
++                    .rounded_md()
++                    .cursor_pointer()
++                    .hover(|this| this.bg(cx.theme().colors().element_hover))
++                    .child(
++                        h_flex()
++                            .gap_2()
++                            .items_center()
++                            .justify_start()
++                            .child(
++                                Icon::new(IconName::Server)
++                                    .size(IconSize::Small)
++                                    .color(Color::Muted),
++                            )
++                            .child(
++                                Label::new("MCP servers")
++                                    .size(LabelSize::Default)
++                                    .color(Color::Default),
++                            ),
++                    )
++                    .tooltip(Tooltip::text("Manage MCP servers"))
++                    .on_click(cx.listener(|_, _, window, cx| {
++                        window.dispatch_action(
++                            Box::new(zed_actions::OpenSettingsAt {
++                                path: "context_servers".to_string(),
++                                target: None,
++                            }),
++                            cx,
++                        );
++                    })),
++            )
+     }
+ 
      fn render_new_chat_button(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-         let focus_handle = self.focus_handle.clone();
-         let color = cx.theme().colors();
-@@ -7813,9 +7924,8 @@ impl Sidebar {
+@@ -7872,9 +7981,8 @@ impl Sidebar {
  
          h_flex()
              .id("sidebar-new-chat-button")
@@ -995,16 +390,16 @@ index 30d3bade5c..a9f52882ab 100644
              .px_2()
              .rounded_md()
              .cursor_pointer()
-@@ -7833,7 +7943,7 @@ impl Sidebar {
+@@ -7892,7 +8000,7 @@ impl Sidebar {
                              .color(Color::Default),
                      )
                      .child(
--                        Label::new("New chat")
+-                            Label::new("New task")
 +                        Label::new("New task")
                              .size(LabelSize::Default)
                              .weight(FontWeight::SEMIBOLD)
                              .color(Color::Default),
-@@ -7853,7 +7963,17 @@ impl Sidebar {
+@@ -7912,7 +8020,17 @@ impl Sidebar {
                  )
              })
              .on_click(cx.listener(|this, _, window, cx| {
@@ -1023,7 +418,70 @@ index 30d3bade5c..a9f52882ab 100644
              }))
      }
  
-@@ -8038,10 +8158,10 @@ impl Sidebar {
+@@ -8070,6 +8188,62 @@ impl Sidebar {
+         });
+     }
+ 
++    fn sync_local_sessions_and_show_import_modal(
++        &mut self,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        let helper = katalyst_session_sync_command();
++        let Some(helper) = helper else {
++            self.show_katalyst_import_error(
++                "Session sync helper is not installed. Re-run the Katalyst installer.",
++                cx,
++            );
++            return;
++        };
++
++        let sync = cx.background_executor().spawn(async move {
++            Command::new(helper)
++                .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
++                .output()
++                .map_err(|error| error.to_string())
++        });
++
++        cx.spawn_in(window, async move |this, cx| {
++            let result = sync.await;
++            this.update_in(cx, |this, window, cx| match result {
++                Ok(output) if output.status.success() => {
++                    // The helper writes only to OMP. Switch to history before presenting the
++                    // chooser, so successful imports have an obvious destination and are not
++                    // hidden behind the current project workspace.
++                    this.show_archive(window, cx);
++                    this.show_thread_import_modal("katalyst_local_session_sync", window, cx);
++                }
++                Ok(_) => this.show_katalyst_import_error(
++                    "Could not sync Cursor and Codex chats. Try again from onboarding.",
++                    cx,
++                ),
++                Err(_) => this.show_katalyst_import_error(
++                    "Could not start the Cursor and Codex session sync.",
++                    cx,
++                ),
++            })
++        })
++        .detach_and_log_err(cx);
++    }
++
++    fn show_katalyst_import_error(&self, message: &'static str, cx: &mut Context<Self>) {
++        let Some(workspace) = self.active_workspace(cx) else {
++            return;
++        };
++        workspace.update(cx, |workspace, cx| {
++            workspace.show_toast(
++                Toast::new(NotificationId::unique::<KatalystImportError>(), message),
++                cx,
++            );
++        });
++    }
++
+     fn should_render_acp_import_onboarding(&self, cx: &App) -> bool {
+         let has_external_agents = self
+             .active_workspace(cx)
+@@ -8097,10 +8271,10 @@ impl Sidebar {
          });
          render_import_onboarding_banner(
              "acp",
@@ -1037,7 +495,7 @@ index 30d3bade5c..a9f52882ab 100644
              } else {
                  "Import Threads"
              },
-@@ -8441,9 +8561,10 @@ impl Render for Sidebar {
+@@ -8500,7 +8674,8 @@ impl Render for Sidebar {
                      .child(self.render_sidebar_header(no_open_projects, window, cx))
                      .map(|this| {
                          if no_open_projects {
@@ -1045,36 +503,7 @@ index 30d3bade5c..a9f52882ab 100644
 +                            this.child(self.render_quick_actions(window, cx))
 +                                .child(self.render_empty_state(cx))
                          } else {
--                            this.child(self.render_new_chat_button(window, cx)).child(
-+                            this.child(self.render_quick_actions(window, cx)).child(
+                             this.child(self.render_quick_actions(window, cx)).child(
                                  v_flex()
-                                     .relative()
-                                     .flex_1()
-diff --git a/crates/workspace/src/welcome.rs b/crates/workspace/src/welcome.rs
-index 1016cc1d79..919d956849 100644
---- a/crates/workspace/src/welcome.rs
-+++ b/crates/workspace/src/welcome.rs
-@@ -32,7 +32,7 @@ pub struct OpenRecentProject {
- actions!(
-     zed,
-     [
--        /// Show the Zed welcome screen
-+        /// Show the Katalyst welcome screen
-         ShowWelcome
-     ]
- );
-@@ -477,10 +477,10 @@ impl Render for WelcomePage {
-                             .justify_center()
-                             .mb_4()
-                             .gap_4()
--                            .child(Vector::square(VectorName::ZedLogo, rems_from_px(45_f32)))
-+                            .child(Vector::square(VectorName::KatalystLogo, rems_from_px(45_f32)))
-                             .child(
-                                 v_flex().child(Headline::new(welcome_label)).child(
--                                    Label::new("The editor for what's next")
-+                                    Label::new("Your projects, skills, and AI conversations")
-                                         .size(LabelSize::Small)
-                                         .color(Color::Muted)
-                                         .italic(),
 -- 
 2.50.1 (Apple Git-155)

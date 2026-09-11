@@ -1,3 +1,12 @@
+From 32ec14dd0a3a123e120afb58899bd86cebb947eb Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Sat, 12 Sep 2026 03:51:32 +0700
+Subject: [PATCH] fix(katalyst): open project picker from the active workspace
+
+---
+ crates/sidebar/src/sidebar.rs | 77 +++++++++++++++++++++++++++++++----
+ 1 file changed, 68 insertions(+), 9 deletions(-)
+
 diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
 index 30d3bade5c..4f6173fbf4 100644
 --- a/crates/sidebar/src/sidebar.rs
@@ -121,3 +130,5 @@ index 30d3bade5c..4f6173fbf4 100644
                                  v_flex()
                                      .relative()
                                      .flex_1()
+-- 
+2.50.1 (Apple Git-155)

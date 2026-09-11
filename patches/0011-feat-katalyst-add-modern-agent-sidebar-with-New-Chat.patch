@@ -1,5 +1,5 @@
 From 5d4a91f5675e92573caac7635ca902547d671154 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Tue, 8 Sep 2026 00:08:48 +0700
 Subject: [PATCH 11/19] feat(katalyst): add modern agent sidebar with New Chat,
  Projects section, and pin badge; fix worktree pollution

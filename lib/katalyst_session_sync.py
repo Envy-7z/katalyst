@@ -379,7 +379,10 @@ def omp_bucket(cwd: str, home: Path) -> str:
     return encoded or "-home"
 
 
-def render_omp_session(session: ImportedSession, target_id: str) -> bytes:
+def render_omp_session(
+    session: ImportedSession, target_id: str, runtime_cwd: str | None = None
+) -> bytes:
+    runtime_cwd = runtime_cwd or session.cwd
     rows: list[dict[str, Any]] = [
         {
             "type": "session",
@@ -388,7 +391,7 @@ def render_omp_session(session: ImportedSession, target_id: str) -> bytes:
             "title": session.title,
             "titleSource": "user",
             "timestamp": session.timestamp,
-            "cwd": session.cwd,
+            "cwd": runtime_cwd,
         }
     ]
     parent_id: str | None = None
@@ -534,6 +537,26 @@ def target_matches_record(target: Path, record: dict[str, Any]) -> bool:
         return False
 
 
+def render_history_projection(source: Path, runtime_cwd: str) -> bytes:
+    """Make an immutable, loadable history copy without changing an OMP-owned session."""
+    rows: list[str] = []
+    session_seen = False
+    for raw_line in source.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError:
+            rows.append(raw_line)
+            continue
+        if row.get("type") == "session":
+            row["cwd"] = runtime_cwd
+            raw_line = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+            session_seen = True
+        rows.append(raw_line)
+    if not session_seen:
+        raise ValueError("OMP transcript has no session record")
+    return ("\n".join(rows) + "\n").encode("utf-8")
+
+
 def discover_sessions(
     sources: Iterable[str], home: Path, cursor_root: Path, codex_root: Path
 ) -> list[ImportedSession]:
@@ -610,24 +633,62 @@ def _run_sync(
         # tracked separately so new source turns update that session in place
         # until OMP has added content of its own.
         target_id = str(uuid.uuid5(SESSION_NAMESPACE, key))
-        bucket = omp_root / omp_bucket(session.cwd, home)
-        target = bucket / f"{session.timestamp.replace(':', '-')}_{target_id}.jsonl"
+        runtime_cwd = str(home / ".katalyst" / "history")
+        bucket = omp_root / omp_bucket(runtime_cwd, home)
+        target_filename = (
+            Path(record["targetPath"]).name
+            if record and record.get("targetPath")
+            else f"{session.timestamp.replace(':', '-')}_{target_id}.jsonl"
+        )
+        canonical_target = bucket / target_filename
+        target = canonical_target
         if not record and omp_root.exists():
             existing_targets = list(omp_root.rglob(f"*_{target_id}.jsonl"))
             if existing_targets:
                 target = existing_targets[0]
         previous_record = record
         if record:
-            target = Path(record["targetPath"])
-            if not target.is_file():
+            recorded_target = Path(record["targetPath"])
+            if not recorded_target.is_file():
                 record = None
             else:
-                if not target_matches_record(target, record):
+                if not target_matches_record(recorded_target, record):
                     record["ownedByOmp"] = True
                 if record.get("ownedByOmp"):
                     counters["owned_by_omp"] += 1
+                    # A continued session that already occupies the canonical
+                    # history path cannot be shadowed safely: OMP resolves by
+                    # session id. Leave it entirely under OMP ownership.
+                    if recorded_target == canonical_target:
+                        continue
+                    try:
+                        projection = render_history_projection(recorded_target, runtime_cwd)
+                        projection_hash = hashlib.sha256(projection).hexdigest()
+                        if record.get("historyProjectionHash") == projection_hash and canonical_target.is_file():
+                            counters["unchanged"] += 1
+                        elif dry_run:
+                            counters["would_update"] += 1
+                        else:
+                            atomic_write(canonical_target, projection)
+                            record["historyProjectionPath"] = str(canonical_target)
+                            record["historyProjectionHash"] = projection_hash
+                            record["historyProjectionRuntimeCwd"] = runtime_cwd
+                            state["sessions"][key] = record
+                            counters["updated"] += 1
+                    except (OSError, ValueError) as error:
+                        counters["failed"] += 1
+                        counters["failures"].append(
+                            {"source": session.source, "sourceId": session.source_id, "error": str(error)}
+                        )
                     continue
-                if record.get("sourceHash") == session.source_hash:
+                # A clean legacy import is migrated to the canonical history
+                # location. Its original file remains untouched as a backup.
+                target = canonical_target
+                if (
+                    target == recorded_target
+                    and record.get("sourceHash") == session.source_hash
+                    and record.get("runtimeCwd") == runtime_cwd
+                ):
                     counters["unchanged"] += 1
                     continue
         elif target.is_file():
@@ -640,6 +701,7 @@ def _run_sync(
                     "targetId": target_id,
                     "targetPath": str(target),
                     "targetHash": file_hash(target),
+                    "runtimeCwd": runtime_cwd,
                     "ownedByOmp": True,
                     "updatedAt": session.updated_at,
                 }
@@ -650,7 +712,7 @@ def _run_sync(
             # Preserve it instead of assuming ownership after state loss.
             counters["owned_by_omp"] += 1
             continue
-        content = render_omp_session(session, target_id)
+        content = render_omp_session(session, target_id, runtime_cwd)
         if dry_run:
             counters["would_update" if record else "would_import"] += 1
             continue
@@ -664,6 +726,7 @@ def _run_sync(
                 "targetId": target_id,
                 "targetPath": str(target),
                 "targetHash": hashlib.sha256(content).hexdigest(),
+                "runtimeCwd": runtime_cwd,
                 "ownedByOmp": False,
                 "updatedAt": session.updated_at,
             }

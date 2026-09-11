@@ -1,5 +1,5 @@
 From 9756707fca8ab50be25394f4b5eaed032bb22325 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Mon, 7 Sep 2026 18:27:41 +0700
 Subject: [PATCH 10/19] feat(brand): update Welcome screens and Help menu links
  to Katalyst & LinkedIn
@@ -74,7 +74,7 @@ index 551b02a..a29cfe8 100644
 +                    "Contact Creator (LinkedIn)",
                      super::OpenBrowser {
 -                        url: "https://zed.dev/jobs".into(),
-+                        url: "https://www.linkedin.com/in/wisnuandriaan/".into(),
++                        url: "https://github.com/Envy-7z/katalyst".into(),
                      },
                  ),
              ],

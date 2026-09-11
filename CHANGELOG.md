@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-09-11
 
 ### Added
+- Local profile migration helper that preserves private Cursor/Codex settings under `~/.katalyst` and merges compatible MCP definitions without overwriting existing OMP servers.
 - Cursor and Codex transcript migration into resumable OMP sessions, including titles, workspace paths, reasoning, historical tool activity, timestamps, archive metadata, and source provenance.
 - Idempotent one-way background sync with OMP ownership protection once an imported chat is continued.
 - Katalyst onboarding controls for detected chat counts and manual sync.
@@ -17,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - OMP is the first-run Agent Panel selection; native Zed Agent remains available in the agent picker.
+- Installer migrates each user's local Cursor/Codex skills and compatible MCP definitions into Katalyst without publishing private rules, hooks, credentials, or workflow automation.
+- Imported sessions open through a dedicated Katalyst history workspace so old project paths cannot trigger a large workspace scan.
 - Katalyst suppresses the Zed AI/GPT Luna upsell on the OMP path and uses Katalyst first-run labels.
 - Installer downloads the patched Katalyst binary and keeps immutable runtime files under `~/.local/share/katalyst` instead of turning `~/.katalyst` into a dirty source checkout.
 

@@ -1,5 +1,5 @@
 From f98d390d10a7df09b0d0c40d12650d30a78857d1 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Mon, 7 Sep 2026 14:23:08 +0700
 Subject: [PATCH 07/19] build(scripts): OOM-safe sync and weekly update helpers
 

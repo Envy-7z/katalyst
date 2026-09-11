@@ -29,6 +29,12 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertIn("Auto import: On", patch.read_text())
         self.assertIn("Syncing Cursor and Codex chats", patch.read_text())
 
+    def test_public_runtime_excludes_private_workflow_hook(self) -> None:
+        self.assertFalse((ROOT / "config/omp/hooks/pre/plan-auto-open.ts").exists())
+        installer = (ROOT / "install.sh").read_text()
+        self.assertNotIn("plan-auto-open", installer)
+        self.assertIn("katalyst-migrate-profile", installer)
+
 
 if __name__ == "__main__":
     unittest.main()

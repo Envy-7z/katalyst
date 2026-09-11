@@ -29,7 +29,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] download ${RELEASE_BASE}/${APP_ASSET}"
   echo "[dry-run] verify SHA256SUMS and install ${KATALYST_APPLICATIONS_HOME}/Katalyst.app"
   echo "[dry-run] install ${RUNTIME_ASSET} into ${KATALYST_DATA_HOME}"
-  echo "[dry-run] install OMP, Cursor/Codex sync helper, config, skills, and LaunchAgents"
+  echo "[dry-run] install OMP, local Cursor/Codex profile migration, sync helper, generic skills, and LaunchAgents"
   exit 0
 fi
 
@@ -129,7 +129,6 @@ backup_user_path "$HOME/.config/zed/settings.json" config/zed-settings
 backup_user_path "$HOME/.config/zed/keymap.json" config/zed-keymap
 backup_user_path "$HOME/.omp/agent/config.yml" config/omp-config
 backup_user_path "$HOME/.omp/agent/mcp.json" config/omp-mcp
-backup_user_path "$HOME/.omp/agent/hooks/pre/plan-auto-open.ts" config/omp-hook
 backup_user_path "$HOME/.omp/agent/skills" config/omp-skills
 backup_user_path "$KATALYST_STATE_HOME/skills" state/skills
 backup_user_path "$KATALYST_STATE_HOME/imports" state/imports
@@ -218,11 +217,12 @@ if [[ -d "$KATALYST_STATE_HOME/.git" ]]; then
   [[ "${KATALYST_TEST_FAIL_AFTER_STATE_MIGRATION:-0}" == "1" ]] && exit 99
 fi
 
-mkdir -p "$HOME/.local/bin" "$HOME/.config/zed" "$HOME/.omp/agent/hooks/pre" \
+mkdir -p "$HOME/.local/bin" "$HOME/.config/zed" "$HOME/.omp/agent" \
   "$KATALYST_STATE_HOME/imports" "$KATALYST_STATE_HOME/skills" "$HOME/Library/LaunchAgents"
 install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-session-sync" "$HOME/.local/bin/katalyst-session-sync"
 install -m 644 "$KATALYST_DATA_HOME/lib/katalyst_session_sync.py" "$HOME/.local/bin/katalyst_session_sync.py"
 install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-update" "$HOME/.local/bin/katalyst-update"
+install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-migrate-profile" "$HOME/.local/bin/katalyst-migrate-profile"
 install -m 755 "$KATALYST_DATA_HOME/bin/notify-updates.sh" "$HOME/.local/bin/katalyst-notify"
 
 SETTINGS_CURRENT="$HOME/.config/zed/settings.json"
@@ -258,9 +258,6 @@ materialize_config() {
 materialize_config "$KATALYST_DATA_HOME/config/zed/keymap.json" "$HOME/.config/zed/keymap.json" "$TEMP_DIR/config-snapshot/zed-keymap.json"
 materialize_config "$KATALYST_DATA_HOME/config/omp/config.yml" "$HOME/.omp/agent/config.yml" "$TEMP_DIR/config-snapshot/omp-config.yml"
 materialize_config "$KATALYST_DATA_HOME/config/omp/mcp.json.example" "$HOME/.omp/agent/mcp.json" "$TEMP_DIR/config-snapshot/omp-mcp.json"
-if [[ -f "$KATALYST_DATA_HOME/config/omp/hooks/pre/plan-auto-open.ts" ]]; then
-  cp "$KATALYST_DATA_HOME/config/omp/hooks/pre/plan-auto-open.ts" "$HOME/.omp/agent/hooks/pre/plan-auto-open.ts"
-fi
 rm -rf "$KATALYST_STATE_HOME/skills.new"
 ditto "$KATALYST_DATA_HOME/skills" "$KATALYST_STATE_HOME/skills.new"
 rm -rf "$KATALYST_STATE_HOME/skills"
@@ -308,6 +305,7 @@ if [[ "${KATALYST_SKIP_LAUNCHCTL:-0}" != "1" ]]; then
   launchctl bootout "gui/$(id -u)/dev.katalyst.update-check" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.katalyst.update-check.plist"
 fi
+"$HOME/.local/bin/katalyst-migrate-profile" --home "$HOME" --state-home "$KATALYST_STATE_HOME"
 "$HOME/.local/bin/katalyst-session-sync" sync --sources cursor,codex --all
 [[ "${KATALYST_TEST_FAIL_AFTER_USER_MUTATIONS:-0}" == "1" ]] && exit 98
 

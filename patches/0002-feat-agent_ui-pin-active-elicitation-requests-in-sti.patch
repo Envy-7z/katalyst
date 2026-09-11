@@ -1,5 +1,5 @@
 From 04e5cc0b17a20bad03f8fa1546774b463b07f876 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Sun, 6 Sep 2026 15:52:38 +0700
 Subject: [PATCH 02/19] feat(agent_ui): pin active elicitation requests in
  sticky top banner

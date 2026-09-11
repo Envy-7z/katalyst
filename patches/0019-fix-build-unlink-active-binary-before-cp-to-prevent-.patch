@@ -1,5 +1,5 @@
 From 17653ef1a9536b2fe422183561ebc89c1ebd8c11 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Fri, 11 Sep 2026 03:52:23 +0700
 Subject: [PATCH 19/19] fix(build): unlink active binary before cp to prevent
  Operation not permitted

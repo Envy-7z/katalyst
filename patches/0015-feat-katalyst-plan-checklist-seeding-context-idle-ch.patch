@@ -1,5 +1,5 @@
 From 1e5165a54589ad4a8a9c367972fc0ed0e5e26b50 Mon Sep 17 00:00:00 2001
-From: Wisnuu <wisnuandrian325@gmail.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Tue, 8 Sep 2026 20:51:33 +0700
 Subject: [PATCH 15/19] feat(katalyst): plan checklist seeding, context idle
  chip, in-app connect account (v0.1.2)
