@@ -52,6 +52,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
 use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING};
@@ -65,7 +66,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use util::ResultExt as _;
 use util::path_list::PathList;
 use workspace::{
-    AddFolderToProject, CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
+    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
     MultiWorkspace, MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject,
     PreviousThread, ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar,
     SidebarSide, Toast, ToggleWorkspaceSidebar, Workspace, notifications::NotificationId,
@@ -75,7 +76,7 @@ use workspace::{
 use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
 use zed_actions::assistant::ManageSkills;
 use zed_actions::editor::{MoveDown, MoveUp};
-use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenOnboarding, OpenRecent};
+use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
 
 use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
 
@@ -96,6 +97,24 @@ gpui::actions!(
         ToggleThreadHistory,
     ]
 );
+
+struct KatalystImportError;
+
+fn katalyst_session_sync_command() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("katalyst-session-sync"));
+            candidates.push(parent.join("../Resources/bin/katalyst-session-sync"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin/katalyst-session-sync"));
+        candidates.push(home.join(".katalyst/bin/katalyst-session-sync"));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
 
 gpui::actions!(
     dev,
@@ -2599,7 +2618,6 @@ impl Sidebar {
     }
 
     fn render_projects_header(&self, _cx: &mut Context<Self>) -> AnyElement {
-        let multi_workspace = self.multi_workspace.clone();
         h_flex()
             .id("projects-header")
             .h(px(26.))
@@ -2615,17 +2633,19 @@ impl Sidebar {
                     .color(Color::Muted),
             )
             .child(
-                IconButton::new("add-folder-to-project", IconName::Plus)
+                IconButton::new("open-workspace", IconName::Plus)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Add Folder to Project…"))
+                    .tooltip(Tooltip::text("Open Workspace…"))
                     .on_click(move |_, window, cx| {
-                        let Some(multi_workspace) = multi_workspace.upgrade() else {
-                            return;
-                        };
-                        let workspace = multi_workspace.read(cx).workspace().clone();
-                        workspace.update(cx, |workspace, cx| {
-                            workspace.add_folder_to_project(&AddFolderToProject, window, cx);
-                        });
+                        // A project in Katalyst is a workspace group. Adding a folder to the
+                        // active project would merge its file tree, which is a different action.
+                        window.dispatch_action(
+                            Open {
+                                create_new_window: Some(false),
+                            }
+                            .boxed_clone(),
+                            cx,
+                        );
                     }),
             )
             .into_any_element()
@@ -7911,8 +7931,45 @@ impl Sidebar {
                             ),
                     )
                     .tooltip(Tooltip::text("Import Cursor and Codex chats"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.sync_local_sessions_and_show_import_modal(window, cx);
+                    })),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .id("sidebar-mcp-servers")
+                    .h(px(36.))
+                    .w_full()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                Icon::new(IconName::Server)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("MCP servers")
+                                    .size(LabelSize::Default)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .tooltip(Tooltip::text("Manage MCP servers"))
                     .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(OpenOnboarding.boxed_clone(), cx);
+                        window.dispatch_action(
+                            Box::new(zed_actions::OpenSettingsAt {
+                                path: "context_servers".to_string(),
+                                target: None,
+                            }),
+                            cx,
+                        );
                     })),
             )
     }
@@ -8128,6 +8185,62 @@ impl Sidebar {
                     cx,
                 )
             });
+        });
+    }
+
+    fn sync_local_sessions_and_show_import_modal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let helper = katalyst_session_sync_command();
+        let Some(helper) = helper else {
+            self.show_katalyst_import_error(
+                "Session sync helper is not installed. Re-run the Katalyst installer.",
+                cx,
+            );
+            return;
+        };
+
+        let sync = cx.background_executor().spawn(async move {
+            Command::new(helper)
+                .args(["sync", "--sources", "cursor,codex", "--all", "--json"])
+                .output()
+                .map_err(|error| error.to_string())
+        });
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = sync.await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(output) if output.status.success() => {
+                    // The helper writes only to OMP. Switch to history before presenting the
+                    // chooser, so successful imports have an obvious destination and are not
+                    // hidden behind the current project workspace.
+                    this.show_archive(window, cx);
+                    this.show_thread_import_modal("katalyst_local_session_sync", window, cx);
+                }
+                Ok(_) => this.show_katalyst_import_error(
+                    "Could not sync Cursor and Codex chats. Try again from onboarding.",
+                    cx,
+                ),
+                Err(_) => this.show_katalyst_import_error(
+                    "Could not start the Cursor and Codex session sync.",
+                    cx,
+                ),
+            })
+        })
+        .detach_and_log_err(cx);
+    }
+
+    fn show_katalyst_import_error(&self, message: &'static str, cx: &mut Context<Self>) {
+        let Some(workspace) = self.active_workspace(cx) else {
+            return;
+        };
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_toast(
+                Toast::new(NotificationId::unique::<KatalystImportError>(), message),
+                cx,
+            );
         });
     }
 

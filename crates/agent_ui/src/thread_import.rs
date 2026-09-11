@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use acp_thread::AgentSessionListRequest;
 use agent::ThreadStore;
@@ -24,6 +24,7 @@ use ui::{
     ModalHeader, Section, Tooltip, prelude::*,
 };
 use util::ResultExt;
+use util::path_list::PathList;
 use workspace::{ModalView, MultiWorkspace, Workspace};
 
 use crate::{
@@ -867,8 +868,13 @@ fn collect_importable_threads(
             if !existing_sessions.insert(session.session_id.clone()) {
                 continue;
             }
-            let Some(folder_paths) = session.work_dirs else {
+            let Some(source_folder_paths) = session.work_dirs else {
                 continue;
+            };
+            let folder_paths = if agent_id.as_ref() == "omp" {
+                katalyst_history_workspace()
+            } else {
+                source_folder_paths
             };
             to_insert.push(ThreadMetadata {
                 thread_id: ThreadId::new(),
@@ -887,6 +893,18 @@ fn collect_importable_threads(
         }
     }
     to_insert
+}
+
+/// Imported ACP sessions are history, not project-open requests. Their original
+/// working directory stays in the agent session itself; using it as Zed's
+/// workspace can recursively index a directory that merely contains projects.
+fn katalyst_history_workspace() -> PathList {
+    let path = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".katalyst/history");
+    let _ = std::fs::create_dir_all(&path);
+    PathList::new(&[path])
 }
 
 pub fn import_threads_from_other_channels(_workspace: &mut Workspace, cx: &mut Context<Workspace>) {
@@ -991,7 +1009,7 @@ mod tests {
     use acp_thread::AgentSessionInfo;
     use chrono::Utc;
     use gpui::TestAppContext;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use workspace::PathList;
 
     fn make_session(
@@ -1059,6 +1077,54 @@ mod tests {
             result[0].session_id.as_ref().unwrap().0.as_ref(),
             "has-dirs"
         );
+    }
+
+    #[test]
+    fn test_collect_imports_external_sessions_into_the_history_workspace() {
+        let existing = HashSet::default();
+        let source_paths = PathList::new(&[Path::new("/source/project")]);
+
+        let sessions_by_agent = vec![SessionByAgent {
+            agent_id: AgentId::new("omp"),
+            remote_connection: None,
+            sessions: vec![make_session(
+                "external-history",
+                Some("Imported history"),
+                Some(source_paths),
+                None,
+                None,
+            )],
+        }];
+
+        let result = collect_importable_threads(sessions_by_agent, existing);
+        let imported_paths = result[0].folder_paths().ordered_paths().collect::<Vec<_>>();
+
+        let history = katalyst_history_workspace();
+        let expected = history.ordered_paths().collect::<Vec<_>>();
+        assert_eq!(imported_paths, expected);
+    }
+
+    #[test]
+    fn test_collect_preserves_workspace_for_non_omp_agents() {
+        let existing = HashSet::default();
+        let source_paths = PathList::new(&[Path::new("/project")]);
+
+        let sessions_by_agent = vec![SessionByAgent {
+            agent_id: AgentId::new("claude-code"),
+            remote_connection: None,
+            sessions: vec![make_session(
+                "external-session",
+                Some("External session"),
+                Some(source_paths),
+                None,
+                None,
+            )],
+        }];
+
+        let result = collect_importable_threads(sessions_by_agent, existing);
+        let imported_paths = result[0].folder_paths().ordered_paths().collect::<Vec<_>>();
+
+        assert_eq!(imported_paths, vec![&PathBuf::from("/project")]);
     }
 
     #[test]
