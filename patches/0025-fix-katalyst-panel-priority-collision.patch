@@ -1,0 +1,26 @@
+From 3743935402f02cbddfbde0cd98b7419c8aa9a240 Mon Sep 17 00:00:00 2001
+From: Katalyst Maintainers <maintainers@katalyst.dev>
+Date: Sat, 12 Sep 2026 16:59:25 +0700
+Subject: [PATCH] fix(katalyst): avoid panel priority collision
+
+---
+ crates/agent_ui/src/agent_panel.rs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index efaf3bb4b6..6ba13b18a5 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -1305,7 +1305,9 @@ impl Panel for KatalystStatusPanel {
+     }
+ 
+     fn activation_priority(&self) -> u32 {
+-        4
++        // Keep this above the upstream panel priorities (1..6) so dock
++        // restoration cannot panic on duplicate activation ordering.
++        7
+     }
+ 
+     fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
+-- 
+2.50.1 (Apple Git-155)
