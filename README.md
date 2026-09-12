@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/katalyst-v020-ui.png" width="920" alt="Katalyst v0.2.0 desktop UI with OMP Agent Panel" />
+  <img src="assets/katalyst-v020-workspace-actual.png" width="920" alt="Katalyst workspace with task navigation and an OMP Agent Panel" />
 </p>
 
 ---
@@ -68,20 +68,23 @@ katalyst-session-sync status --json
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
 
-### v0.2.0 desktop UI
+### v0.2.x desktop UI
 
-The current desktop layout opens with the Katalyst task sidebar, project switcher, plan editor, and OMP Agent Panel together. The public preview uses only synthetic project names and example text; it contains no personal workspace, transcript, account, or provider data.
+Katalyst opens a workspace with task navigation on the left, the OMP conversation in the main area, and a live OMP status panel on the right. The status panel reports the connected state only after the local OMP ACP runtime is available; it does not invent a connection state.
 
-![Katalyst v0.2.0 desktop UI](assets/katalyst-v020-sidebar-ui.png)
+![Katalyst v0.2.x workspace](assets/katalyst-v020-workspace-actual.png)
+
+This is a screenshot from the Katalyst v0.2.x native build using an isolated demo profile and a synthetic workspace. It contains no personal project, transcript, account, credential, or provider data.
 
 The sidebar actions are intentionally visible from the first workspace:
 
-- **Open workspace** opens a directory as a workspace. Use this when starting a separate project.
+- **New task** starts an OMP conversation after a workspace is open.
+- **Open workspace** opens a directory as a separate workspace.
 - **Skills** lists reusable skills installed globally or for the current project.
 - **Import Cursor & Codex** previews and imports detected sessions without changing the original transcripts.
 - **MCP servers** shows configured tool providers and their connection status.
 
-The `+` beside **Projects** creates a project entry in the current workspace. **Open workspace** is the action to add or switch to a separate workspace directory.
+The `+` beside **Projects** adds a project to the current workspace. **Open workspace** is the action to create or switch to a separate workspace directory.
 
 ### Privacy boundary
 
