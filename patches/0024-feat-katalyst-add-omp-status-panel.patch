@@ -14,14 +14,14 @@ diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_pane
 index 33c33b3bd3..efaf3bb4b6 100644
 --- a/crates/agent_ui/src/agent_panel.rs
 +++ b/crates/agent_ui/src/agent_panel.rs
-@@ -37,7 +37,7 @@ use zed_actions::{
+@@ -38,7 +38,7 @@ use zed_actions::{
  
  use crate::ExpandMessageEditor;
+ use crate::plan_progress;
  use crate::ManageProfiles;
 -use crate::agent_connection_store::AgentConnectionStore;
 +use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
  use crate::completion_provider::{AgentContextSelection, AgentContextSource};
- use crate::plan_progress;
  use crate::terminal_thread_metadata_store::{
 @@ -1191,6 +1191,215 @@ pub struct AgentPanel {
      is_active: bool,
