@@ -1,13 +1,15 @@
+From 388b8b7c0fb9f65418c20256248b18e65fc90fa1 Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Mon, 14 Sep 2026 21:00:00 +0700
-Subject: [PATCH 0028/0028] feat(katalyst): add tahap 1-4 enhancements (diff co-editing, auto-revert, terminal badges)
-
-- Bi-directional diff editing: cursor anchor preservation during excerpt recomputation and toolbar editability hint.
-- Turn crash auto-revert: automatic rollback of working tree and index to pre-turn checkpoint upon unhandled turn errors.
-- Block-anchored command outputs: terminal execution compact chips with exit status badges and status coloring.
-- Regression test: test_auto_revert_on_turn_error_restores_working_tree added to acp_thread.
+Date: Mon, 14 Sep 2026 22:25:49 +0700
+Subject: [PATCH] feat(katalyst): add tahap 1-4 enhancements (diff co-editing,
+ auto-revert, terminal badges)
 
 ---
+ crates/acp_thread/src/acp_thread.rs           | 65 +++++++++++++++++++
+ crates/agent_ui/src/agent_diff.rs             | 23 +++++++
+ .../src/conversation_view/thread_view.rs      | 46 ++++++++++++-
+ 3 files changed, 132 insertions(+), 2 deletions(-)
+
 diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
 index 0858a3f42c..764dbb8675 100644
 --- a/crates/acp_thread/src/acp_thread.rs
@@ -217,3 +219,6 @@ index fdd848e166..91828c0669 100644
              .child(if has_location {
                  h_flex()
                      .id(("open-tool-call-location", entry_ix))
+-- 
+2.50.1 (Apple Git-155)
+
