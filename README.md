@@ -39,8 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/Envy-7z/katalyst/main/install.sh | 
 ```
 
 > [!TIP]
-> **Zero Manual Setup**: The installer detects Apple Silicon or Intel, verifies the matching prebuilt Katalyst release, installs OMP, and configures the local runtime without cloning source into your config directory.
-
+> **Apple Silicon (M1/M2/M3/M4)**: Supported out-of-the-box via prebuilt release assets with zero manual setup.  
+> **Intel Mac (x86_64)**: Prebuilt binary packaging is currently pending in CI. Intel Mac users can install immediately using the **Manual Clone Option** below.
 <details>
 <summary><strong>Manual Clone Option (for contributors & developers)</strong></summary>
 

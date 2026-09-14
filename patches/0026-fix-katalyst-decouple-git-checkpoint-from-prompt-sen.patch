@@ -1,5 +1,5 @@
 From 4cbdc5746d8e7c26bc71cf24a80299d9136bb3f7 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Mon, 14 Sep 2026 16:59:34 +0700
 Subject: [PATCH] fix(katalyst): decouple git checkpoint from prompt send and
  add worktree scan bounds and session fallback

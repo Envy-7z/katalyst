@@ -1,5 +1,5 @@
 From 8c86b3d33c0e338bff68a1e5a4e860ae09a22b7a Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Mon, 14 Sep 2026 09:55:37 +0700
 Subject: [PATCH] feat(katalyst): add OMP status panel with dedicated toggle
  action

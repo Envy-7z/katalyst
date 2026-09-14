@@ -157,8 +157,20 @@ else
   curl -fL "${RELEASE_BASE}/${RUNTIME_ASSET}" -o "$TEMP_DIR/${RUNTIME_ASSET}"
 fi
 
-curl -fL "${RELEASE_BASE}/SHA256SUMS" -o "$TEMP_DIR/SHA256SUMS"
-curl -fL "${RELEASE_BASE}/${APP_ASSET}" -o "$TEMP_DIR/${APP_ASSET}"
+if ! curl -fL "${RELEASE_BASE}/SHA256SUMS" -o "$TEMP_DIR/SHA256SUMS"; then
+  echo "Error: Failed to download release checksums from ${RELEASE_BASE}/SHA256SUMS." >&2
+  exit 1
+fi
+
+if ! curl -fL "${RELEASE_BASE}/${APP_ASSET}" -o "$TEMP_DIR/${APP_ASSET}"; then
+  echo "Error: Prebuilt binary for ${RELEASE_ARCH} (${APP_ASSET}) was not found in release v${KATALYST_VERSION}." >&2
+  if [[ "$RELEASE_ARCH" == "x86_64" ]]; then
+    echo "Notice: Prebuilt binaries are currently provided for Apple Silicon (arm64 - M1/M2/M3/M4)." >&2
+    echo "For Intel Mac (x86_64), install from source using the manual clone option:" >&2
+    echo "  git clone https://github.com/${KATALYST_REPOSITORY}.git && cd katalyst && ./install.sh" >&2
+  fi
+  exit 1
+fi
 (
   cd "$TEMP_DIR"
   for asset in "$APP_ASSET"; do
