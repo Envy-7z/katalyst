@@ -4942,8 +4942,6 @@ impl ThreadView {
         let output_max_label = crate::humanize_token_count(max_output_tokens);
 
         let used_for_chip = used.clone();
-        let max_for_chip = max.clone();
-        let cost_for_chip = cost_label.clone();
 
         let build_tooltip = {
             move |_window: &mut Window, cx: &mut App| {
@@ -5059,17 +5057,10 @@ impl ThreadView {
                         .progress_color(progress_color(progress_ratio)),
                     )
                     .child(
-                        Label::new(format!("{used_for_chip} / {max_for_chip}"))
+                        Label::new(used_for_chip)
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .when_some(cost_for_chip, |this, cost| {
-                        this.child(
-                            Label::new(format!("• {cost}"))
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted),
-                        )
-                    })
                     .hoverable_tooltip(build_tooltip)
                     .into_any_element(),
             )
@@ -6635,6 +6626,7 @@ impl ThreadView {
                 if is_blank {
                     Empty.into_any()
                 } else {
+                    let has_checkpoint = self.thread.read(cx).has_checkpoint();
                     v_flex()
                         .px_5()
                         .py_1p5()
@@ -6642,6 +6634,25 @@ impl ThreadView {
                         .w_full()
                         .text_ui(cx)
                         .child(self.render_message_context_menu(entry_ix, message_body, cx))
+                        .when(is_last && has_checkpoint, |this| {
+                            this.child(
+                                h_flex()
+                                    .pt_1()
+                                    .justify_end()
+                                    .child(
+                                        Button::new("revert_turn", "↩ Revert Turn")
+                                            .label_size(LabelSize::XSmall)
+                                            .style(ButtonStyle::Subtle)
+                                            .color(Color::Muted)
+                                            .tooltip(Tooltip::text("Revert working copy and timeline to pre-turn snapshot (⌥⌘Z)"))
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.thread.update(cx, |thread, cx| {
+                                                    thread.restore_last_checkpoint(cx).detach_and_log_err(cx);
+                                                });
+                                            })),
+                                    ),
+                            )
+                        })
                         .when_some(
                             self.entry_view_state
                                 .read(cx)
@@ -8526,7 +8537,7 @@ impl ThreadView {
             })
             .unwrap_or_else(|| (false, false, focus_handle.clone()));
 
-        let use_card_layout = needs_confirmation || is_edit || is_terminal_tool;
+        let use_card_layout = needs_confirmation;
 
         let has_image_content = tool_call.content.iter().any(|c| c.image().is_some());
 

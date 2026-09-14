@@ -1329,9 +1329,10 @@ impl RealGitRepository {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitRepositoryCheckpoint {
     pub commit_sha: Oid,
+    pub archive_shas: Option<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -3067,20 +3068,38 @@ impl GitRepository for RealGitRepository {
                 let mut git = git?.envs(checkpoint_author_envs());
                 git.with_temp_index(async |git| {
                     let head_sha = git.run(&["rev-parse", "HEAD"]).await.ok();
+                    let head = head_sha.as_deref().unwrap_or("");
+                    let staged_tree = git.run(&["write-tree"]).await.ok();
+                    let staged_sha = if let Some(staged_tree) = staged_tree.as_deref() {
+                        if head.is_empty() {
+                            git.run(&["commit-tree", staged_tree, "-m", "WIP staged"])
+                                .await
+                                .ok()
+                        } else {
+                            git.run(&["commit-tree", staged_tree, "-p", head, "-m", "WIP staged"])
+                                .await
+                                .ok()
+                        }
+                    } else {
+                        None
+                    };
 
                     git.run(&["add", "--update"]).await?;
                     let untracked_files = untracked_files_for_checkpoint(git).await?;
                     add_files_to_index(git, &untracked_files).await?;
                     let tree = git.run(&["write-tree"]).await?;
-                    let checkpoint_sha = if let Some(head_sha) = head_sha.as_deref() {
-                        git.run(&["commit-tree", &tree, "-p", head_sha, "-m", "Checkpoint"])
+                    let checkpoint_sha = if !head.is_empty() {
+                        git.run(&["commit-tree", &tree, "-p", head, "-m", "Checkpoint"])
                             .await?
                     } else {
                         git.run(&["commit-tree", &tree, "-m", "Checkpoint"]).await?
                     };
 
+                    let archive_shas = staged_sha.map(|s| (s, checkpoint_sha.clone()));
+
                     Ok(GitRepositoryCheckpoint {
                         commit_sha: checkpoint_sha.parse()?,
+                        archive_shas,
                     })
                 })
                 .await
@@ -3093,14 +3112,23 @@ impl GitRepository for RealGitRepository {
         self.executor
             .spawn(async move {
                 let git = git?;
-                git.run(&[
-                    "restore",
-                    "--source",
-                    &checkpoint.commit_sha.to_string(),
-                    "--worktree",
-                    ".",
-                ])
-                .await?;
+                if let Some((staged_sha, unstaged_sha)) = &checkpoint.archive_shas {
+                    git.run(&["read-tree", "--reset", "-u", unstaged_sha])
+                        .await
+                        .context("failed to restore working directory from unstaged commit")?;
+                    git.run(&["read-tree", staged_sha])
+                        .await
+                        .context("failed to restore index from staged commit")?;
+                } else {
+                    git.run(&[
+                        "restore",
+                        "--source",
+                        &checkpoint.commit_sha.to_string(),
+                        "--worktree",
+                        ".",
+                    ])
+                    .await?;
+                }
 
                 // TODO: We don't track binary and large files anymore,
                 //       so the following call would delete them.

@@ -256,6 +256,7 @@
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "agent::NewThread",
+      "cmd-alt-z": "agent::RevertLastTurn",
       "cmd-alt-c": "agent::OpenSettings",
       "cmd-alt-m": "agent::ToggleOptionsMenu",
       "cmd-alt-shift-n": "agent::ToggleNewThreadMenu",

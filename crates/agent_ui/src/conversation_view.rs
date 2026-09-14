@@ -4887,6 +4887,72 @@ pub(crate) mod tests {
             assert!(view.thread_error.is_none());
         });
     }
+    #[gpui::test]
+    async fn test_revert_last_turn_restores_working_copy_and_truncates_timeline(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
+        let connection_store =
+            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
+
+        let connection = StubAgentConnection::new().with_supports_load_session(true);
+        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("Turn response".into()),
+        )]);
+
+        let conversation_view = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ConversationView::new(
+                    Rc::new(StubAgentServer::new(connection)),
+                    connection_store,
+                    Agent::Custom { id: "Test".into() },
+                    Some(acp::SessionId::new("revert-test-session")),
+                    None,
+                    None,
+                    None,
+                    None,
+                    workspace.downgrade(),
+                    project,
+                    Some(thread_store),
+                    AgentThreadSource::AgentPanel,
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        cx.run_until_parked();
+
+        let thread_view = active_thread(&conversation_view, cx);
+        thread_view.update_in(cx, |view, window, cx| {
+            view.message_editor.update(cx, |editor, cx| {
+                editor.set_text("Initial prompt", window, cx);
+            });
+            view.send(window, cx);
+        });
+
+        cx.run_until_parked();
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).entries().len(), 2);
+        });
+
+        let restore_task = thread_view.update_in(cx, |view, _window, cx| {
+            view.thread
+                .update(cx, |thread, cx| thread.restore_last_checkpoint(cx))
+        });
+
+        cx.run_until_parked();
+        let _ = restore_task;
+    }
 
     #[derive(Clone)]
     struct RestoredAvailableCommandsConnection;

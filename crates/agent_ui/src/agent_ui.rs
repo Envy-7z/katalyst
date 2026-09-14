@@ -218,7 +218,8 @@ actions!(
         ToggleNewThreadMenu,
         /// Toggles focus on the Katalyst OMP status panel.
         ToggleStatusPanel,
-        /// Toggles the options menu for agent settings and preferences.
+        /// Reverts the working copy and timeline to before the last agent turn.
+        RevertLastTurn,
         ToggleOptionsMenu,
         /// Toggles the profile or mode selector for switching between agent profiles.
         ToggleProfileSelector,

@@ -4459,8 +4459,8 @@ impl GitStore {
 
         let checkpoint = GitRepositoryCheckpoint {
             commit_sha: Oid::from_bytes(&envelope.payload.commit_sha)?,
+            archive_shas: None,
         };
-
         repository_handle
             .update(&mut cx, |repository, _| {
                 repository.restore_checkpoint(checkpoint)
@@ -4499,11 +4499,12 @@ impl GitStore {
 
         let left = GitRepositoryCheckpoint {
             commit_sha: Oid::from_bytes(&envelope.payload.left_commit_sha)?,
+            archive_shas: None,
         };
         let right = GitRepositoryCheckpoint {
             commit_sha: Oid::from_bytes(&envelope.payload.right_commit_sha)?,
+            archive_shas: None,
         };
-
         let equal = repository_handle
             .update(&mut cx, |repository, _| {
                 repository.compare_checkpoints(left, right)
@@ -4523,11 +4524,12 @@ impl GitStore {
 
         let base = GitRepositoryCheckpoint {
             commit_sha: Oid::from_bytes(&envelope.payload.base_commit_sha)?,
+            archive_shas: None,
         };
         let target = GitRepositoryCheckpoint {
             commit_sha: Oid::from_bytes(&envelope.payload.target_commit_sha)?,
+            archive_shas: None,
         };
-
         let diff = repository_handle
             .update(&mut cx, |repository, _| {
                 repository.diff_checkpoints(base, target)
@@ -9871,6 +9873,7 @@ impl Repository {
 
                     Ok(GitRepositoryCheckpoint {
                         commit_sha: Oid::from_bytes(&response.commit_sha)?,
+                        archive_shas: None,
                     })
                 }
             }

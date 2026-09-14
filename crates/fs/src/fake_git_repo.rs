@@ -1342,7 +1342,10 @@ impl GitRepository for FakeGitRepository {
             let oid = git::Oid::random(&mut *executor.rng().lock());
             let entry = fs.entry(&repository_dir_path)?;
             checkpoints.lock().insert(oid, entry);
-            Ok(GitRepositoryCheckpoint { commit_sha: oid })
+            Ok(GitRepositoryCheckpoint {
+                commit_sha: oid,
+                archive_shas: None,
+            })
         }
         .boxed()
     }
@@ -1389,7 +1392,10 @@ impl GitRepository for FakeGitRepository {
         unstaged_sha: String,
     ) -> BoxFuture<'_, Result<()>> {
         match unstaged_sha.parse() {
-            Ok(commit_sha) => self.restore_checkpoint(GitRepositoryCheckpoint { commit_sha }),
+            Ok(commit_sha) => self.restore_checkpoint(GitRepositoryCheckpoint {
+                commit_sha,
+                archive_shas: None,
+            }),
             Err(error) => async move {
                 Err(anyhow::anyhow!(error).context("failed to parse unstaged SHA as Oid"))
             }

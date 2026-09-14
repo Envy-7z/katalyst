@@ -37,6 +37,7 @@ use zed_actions::{
 
 use crate::ExpandMessageEditor;
 use crate::ManageProfiles;
+use crate::RevertLastTurn;
 use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::plan_progress;
@@ -476,6 +477,25 @@ pub fn init(cx: &mut App) {
                         workspace.focus_panel::<AgentPanel>(window, cx);
                         panel.update(cx, |panel, cx| {
                             panel.toggle_new_thread_menu(&ToggleNewThreadMenu, window, cx);
+                        });
+                    }
+                })
+                .register_action(|workspace, _: &RevertLastTurn, _window, cx| {
+                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                        panel.update(cx, |panel, cx| {
+                            if let Some(active_view) = panel.active_conversation_view() {
+                                active_view.update(cx, |view, cx| {
+                                    if let Some(thread_entity) = view.active_thread() {
+                                        thread_entity.update(cx, |thread_view, cx| {
+                                            thread_view.thread.update(cx, |thread, cx| {
+                                                thread
+                                                    .restore_last_checkpoint(cx)
+                                                    .detach_and_log_err(cx);
+                                            });
+                                        });
+                                    }
+                                });
+                            }
                         });
                     }
                 })

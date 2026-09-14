@@ -4131,6 +4131,27 @@ impl AcpThread {
         })
     }
 
+    /// Restores the working tree and index to the most recent turn checkpoint.
+    pub fn restore_last_checkpoint(&mut self, cx: &mut Context<Self>) -> Task<Result<()>> {
+        if let Some((_, message)) = self.last_user_message() {
+            if let Some(client_id) = message.client_id.clone() {
+                return self.restore_checkpoint(client_id, cx);
+            }
+        }
+        Task::ready(Err(anyhow!("no previous turn checkpoint found to restore")))
+    }
+
+    pub fn has_checkpoint(&self) -> bool {
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                AgentThreadEntry::UserMessage(message) => Some(message.checkpoint.is_some()),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
     /// Rewinds this thread to before the entry at `index`, removing it and all
     /// subsequent entries while rejecting any action_log changes made from that point.
     /// Unlike `restore_checkpoint`, this method does not restore from git.
