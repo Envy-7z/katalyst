@@ -15,14 +15,14 @@ diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_pane
 index 33c33b3bd3..5068f8a38a 100644
 --- a/crates/agent_ui/src/agent_panel.rs
 +++ b/crates/agent_ui/src/agent_panel.rs
-@@ -37,7 +37,7 @@ use zed_actions::{
+@@ -38,7 +38,7 @@ use zed_actions::{
  
  use crate::ExpandMessageEditor;
+ use crate::plan_progress;
  use crate::ManageProfiles;
 -use crate::agent_connection_store::AgentConnectionStore;
 +use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
  use crate::completion_provider::{AgentContextSelection, AgentContextSource};
- use crate::plan_progress;
  use crate::terminal_thread_metadata_store::{
 @@ -1190,6 +1190,267 @@ pub struct AgentPanel {
  
@@ -178,7 +178,7 @@ index 33c33b3bd3..5068f8a38a 100644
 +    }
 +
 +    fn activation_priority(&self) -> u32 {
-+        7
++        4
 +    }
 +
 +    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
@@ -354,32 +354,6 @@ index 74ebc97130..ec00e0bf10 100644
                      appears_transparent: true,
                      traffic_light_position: Some(point(px(12.0), px(12.0))),
                  }),
-@@ -6494,9 +6494,7 @@ pub mod test {
-             .unwrap();
-     }
-     #[gpui::test]
--    async fn test_open_skills_settings_action_opens_skills_list(
--        cx: &mut gpui::TestAppContext,
--    ) {
-+    async fn test_open_skills_settings_action_opens_skills_list(cx: &mut gpui::TestAppContext) {
-         use project::Project;
- 
-         cx.update(|cx| {
-@@ -6554,7 +6552,13 @@ pub mod test {
-         // Dispatch the action the way the command palette does: on the
-         // workspace window.
-         multi_workspace.update_in(cx, |_multi_workspace, window, cx| {
--            window.dispatch_action(Box::new(zed_actions::OpenSettingsAt { path: AGENT_SKILLS_SETTINGS_PATH.to_string(), target: None }), cx);
-+            window.dispatch_action(
-+                Box::new(zed_actions::OpenSettingsAt {
-+                    path: AGENT_SKILLS_SETTINGS_PATH.to_string(),
-+                    target: None,
-+                }),
-+                cx,
-+            );
-         });
- 
-         cx.run_until_parked();
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
 index 696a2a2cc4..21d5f5df74 100644
 --- a/crates/zed/src/zed.rs
