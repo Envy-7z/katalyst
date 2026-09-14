@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.2.1] - 2026-09-14
+
+### Fixed
+- **Large Workspace & Chat Resilience (Codex Parity)**:
+  - Decoupled Git checkpointing from prompt sending: prompt dispatch is now instant (0ms wait) with checkpoint metadata resolving asynchronously in background.
+  - Added shallow initial scan depth (`depth = 3`) for non-git parent workspaces (e.g. umbrella directories containing multiple repositories), preventing recursive indexing runaway.
+  - Implemented default exclusion filters for build and cache directories (`node_modules`, `target`, `dist`, `build`, `.next`, `.cache`, `DerivedData`, `Library`, `coverage`, `tmp`, `logs`).
+  - Added 100k non-ignored file scan cap to worktree background scanner, safely downgrading excess folders to lazy unloaded directories without panic.
+  - Added 15s timeout with automatic fallback from `load_session` to `resume_session` in conversation view, preventing application freezes or crashes when continuing historical threads.
+
 
 ## [0.2.0] - 2026-09-11
 

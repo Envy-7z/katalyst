@@ -134,6 +134,7 @@ The repository contains generic defaults, example MCP configuration, release scr
 | **Answered Request Badges** | ❌ Takes up huge space | ✅ **Collapses into sleek 1-line status badges** |
 | **Daily Update Notifications** | ❌ No native alert | ✅ **macOS Notification Center banner at 09:00 AM** |
 | **Universal Skills Suite** | ❌ Empty | ✅ **Pre-loaded domain skills with zero-cognitive-load auto-routing** |
+| **Large Workspace & Chat Resilience** | ❌ Hangs or force-closes on massive umbrella folders (>100k files) or git locks | ✅ **Zero-wait prompt dispatch, shallow scan for parent roots, default artifact exclusions, and 15s session fallback (Codex parity)** |
 
 ---
 
