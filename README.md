@@ -27,7 +27,18 @@
 It gives you the best of both worlds:
 * **Zero Electron Bloat**: Sub-second cold starts, 60fps scrolling, minimal RAM footprint.
 * **Autonomous Engineering**: Autonomous agents that plan multi-step architecture, execute terminal commands safely, run tests, and refactor code without getting stuck.
+* **Calm, Native & Predictable**: Governed by our [25 Non-Negotiable Product Principles](PRINCIPLES.md) — prioritizing stability, low memory, zero UI blocking, and quiet focus over decorative AI widgets.
 
+---
+
+## 🧭 Architecture & Product Principles
+
+Katalyst is engineered under strict architectural constraints. Every patch, feature, and workflow must pass the **[25 Non-Negotiable Product Principles](PRINCIPLES.md)**:
+
+> **STABILITY > PERFORMANCE > UX POLISH > FEATURES**  
+> *"Katalyst disappears and lets me code."*
+
+Read the full charter: **[`PRINCIPLES.md`](PRINCIPLES.md)**.
 ---
 
 ## ⚡ 1-Line Quickstart (macOS)
