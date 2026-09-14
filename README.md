@@ -146,6 +146,11 @@ The repository contains generic defaults, example MCP configuration, release scr
 | **Daily Update Notifications** | ❌ No native alert | ✅ **macOS Notification Center banner at 09:00 AM** |
 | **Universal Skills Suite** | ❌ Empty | ✅ **Pre-loaded domain skills with zero-cognitive-load auto-routing** |
 | **Large Workspace & Chat Resilience** | ❌ Hangs or force-closes on massive umbrella folders (>100k files) or git locks | ✅ **Zero-wait prompt dispatch, shallow scan for parent roots, default artifact exclusions, and 15s session fallback (Codex parity)** |
+| **Lossless Git Checkpoint Revert** | ❌ Destructive / none | ✅ **Instant 1-click `[ ↩ Revert Turn ]` (`⌥⌘Z`) restoring tree & index without touching human work** |
+| **Bi-Directional Diff Co-Editing** | ⚠️ Read-only or jittery | ✅ **Anchor-stabilized inline typing in `AgentDiffPane` with interactive editability hints** |
+| **Turn Crash Auto-Revert** | ❌ Leaves working tree dirty | ✅ **Automatic rollback to pre-turn snapshot upon unhandled turn errors** |
+| **Block-Anchored Command Outputs** | ⚠️ Unformatted card bloat | ✅ **Compact chips with exit status badges (`exit 0`, `exit N`) and status-coded icons** |
+| **Pre-Prompt Secret Scrubber** | ❌ Leaks credentials | ✅ **Automatic Shannon entropy scanner ($H > 4.5$) & regex redactor for keys/tokens** |
 
 ---
 

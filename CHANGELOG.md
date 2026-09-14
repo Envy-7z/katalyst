@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.2.3] - 2026-09-14
+
+### Added
+- **Bi-Directional Diff Co-Editing (Windsurf Parity)**:
+  - Preserved cursor selection anchors during live excerpt recomputations in `AgentDiffPane`, eliminating cursor jumping while developers type in the diff buffer.
+  - Added contextual editability hint (`Type to edit · Enter to keep`) in the agent diff toolbar.
+- **Turn Crash Auto-Revert (Fearless Delegation)**:
+  - Automatically rolls back the working tree and git index to the pre-turn checkpoint upon unhandled agent turn failures (`Err(e)`), ensuring broken turns never leave dirty files.
+  - Added comprehensive regression test `test_auto_revert_on_turn_error_restores_working_tree`.
+- **Block-Anchored Command Outputs (Wave Terminal Feel)**:
+  - Completed terminal executions render as sleek single-line chips displaying exact exit codes (`exit 0` in success green, `failed / exit N` in error red).
+- **Pre-Prompt Secret Scrubber Hook**:
+  - Real-time Shannon entropy scanner ($H > 4.5$) and regex redactor for sensitive API keys, database URLs, and private keys before messages reach external models.
+- **ACI File-Read Paging**:
+  - Transparent 8,000-character truncation safeguard on unpaged file reads, protecting model context windows from massive terminal dumps.
+- **Session Memory Compaction (`/compact`)**:
+  - Structured compaction prompt prioritizing architectural decisions, modified file paths, and open tasks while purging raw tool execution noise.
+- **Codebase Intelligence & Workflow Skills**:
+  - Added 9 modular skill manifests under `~/.katalyst/skills/` (`repo-symbol-graph`, `blast-radius`, `fault-localization`, `parallel-agent-lanes`, `micro-commit`, `runtime-debug`, `stacked-review`, `semantic-anchor`, `remote-offload`).
+
 ## [0.2.2] - 2026-09-14
 
 ### Added

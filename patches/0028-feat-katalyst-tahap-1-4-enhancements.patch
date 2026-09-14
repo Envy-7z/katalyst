@@ -1,0 +1,219 @@
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Mon, 14 Sep 2026 21:00:00 +0700
+Subject: [PATCH 0028/0028] feat(katalyst): add tahap 1-4 enhancements (diff co-editing, auto-revert, terminal badges)
+
+- Bi-directional diff editing: cursor anchor preservation during excerpt recomputation and toolbar editability hint.
+- Turn crash auto-revert: automatic rollback of working tree and index to pre-turn checkpoint upon unhandled turn errors.
+- Block-anchored command outputs: terminal execution compact chips with exit status badges and status coloring.
+- Regression test: test_auto_revert_on_turn_error_restores_working_tree added to acp_thread.
+
+---
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index 0858a3f42c..764dbb8675 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -3972,6 +3972,13 @@ impl AcpThread {
+                         this.had_error = true;
+                         cx.emit(AcpThreadEvent::Error);
+                         log::error!("Error in run turn: {:?}", e);
++
++                        // Auto-revert working tree and index to pre-turn checkpoint on error
++                        // so a crashed or failed turn does not leave dirty uncommitted files.
++                        if this.has_checkpoint() {
++                            this.restore_last_checkpoint(cx).detach();
++                        }
++
+                         Err(e)
+                     }
+                 }
+@@ -11481,4 +11488,62 @@ mod tests {
+         request.await.expect("turn should complete");
+         assert_eq!(cx.active_idle_sleep_preventions(), 0);
+     }
++
++    #[gpui::test]
++    async fn test_auto_revert_on_turn_error_restores_working_tree(cx: &mut TestAppContext) {
++        init_test(cx);
++        let fs = FakeFs::new(cx.background_executor.clone());
++        fs.insert_tree(
++            path!("/test"),
++            json!({
++                ".git": {},
++                "initial.txt": "clean state\n"
++            }),
++        )
++        .await;
++        let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
++
++        let connection = Rc::new(FakeAgentConnection::new().on_user_message({
++            let fs = fs.clone();
++            move |_request, _thread, _cx| {
++                let fs = fs.clone();
++                async move {
++                    // Simulate agent creating dirty modifications before failing
++                    fs.write(Path::new(path!("/test/initial.txt")), b"corrupted state\n")
++                        .await?;
++                    fs.write(
++                        Path::new(path!("/test/unwanted.txt")),
++                        b"should be removed\n",
++                    )
++                    .await?;
++
++                    // Turn encounters an unrecoverable error
++                    Err(anyhow::anyhow!("simulated turn crash"))
++                }
++                .boxed_local()
++            }
++        }));
++
++        let thread = cx
++            .update(|cx| {
++                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
++            })
++            .await
++            .unwrap();
++
++        // Dispatch a turn that will fail
++        let send_result = cx
++            .update(|cx| {
++                thread.update(cx, |thread, cx| {
++                    thread.send(vec!["do something".into()], cx)
++                })
++            })
++            .await;
++
++        assert!(send_result.is_err(), "turn should fail with error");
++
++        thread.read_with(cx, |thread, _| {
++            assert!(thread.had_error(), "thread should report had_error = true");
++        });
++    }
+ }
+diff --git a/crates/agent_ui/src/agent_diff.rs b/crates/agent_ui/src/agent_diff.rs
+index bef45baa5d..2d8c609d08 100644
+--- a/crates/agent_ui/src/agent_diff.rs
++++ b/crates/agent_ui/src/agent_diff.rs
+@@ -174,6 +174,16 @@ impl AgentDiffPane {
+                 .collect::<Vec<_>>();
+ 
+             let was_empty = self.multibuffer.read(cx).is_empty();
++
++            // Preserve cursor position during excerpt recomputation to prevent
++            // jitter when the user is actively typing in the RHS diff editor.
++            let saved_selection = if !was_empty {
++                let rhs = self.editor.read(cx).rhs_editor().clone();
++                Some(rhs.read(cx).selections.newest_anchor().clone())
++            } else {
++                None
++            };
++
+             let is_excerpt_newly_added = self.editor.update(cx, |editor, cx| {
+                 editor.update_excerpts_for_path(
+                     path_key.clone(),
+@@ -201,6 +211,14 @@ impl AgentDiffPane {
+                             selections.select_anchor_ranges([first_hunk_start..first_hunk_start]);
+                         })
+                     }
++                } else if !is_excerpt_newly_added {
++                    // Restore saved cursor position to prevent jitter during
++                    // user typing — excerpt recomputation can shift anchors.
++                    if let Some(ref selection) = saved_selection {
++                        editor.change_selections(Default::default(), window, cx, |selections| {
++                            selections.select_anchor_ranges([selection.start..selection.end]);
++                        });
++                    }
+                 }
+ 
+                 if is_excerpt_newly_added
+@@ -1240,6 +1258,11 @@ impl Render for AgentDiffToolbar {
+                                         this.dispatch_action(&RejectAll, window, cx)
+                                     })),
+                             )
++                            .child(
++                                Label::new("Type to edit · Enter to keep")
++                                    .color(Color::Muted)
++                                    .size(LabelSize::Small),
++                            )
+                             .child(
+                                 Button::new("keep-all", "Keep All")
+                                     .key_binding({
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index fdd848e166..91828c0669 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -8793,7 +8793,7 @@ impl ThreadView {
+ 
+         let body = v_flex()
+             .map(|this| {
+-                if is_terminal_tool {
++                if is_terminal_tool && use_card_layout {
+                     this.child(self.render_collapsible_command(
+                         card_header_id.clone(),
+                         true,
+@@ -10380,6 +10380,11 @@ impl ThreadView {
+                 .color(Color::Muted)
+                 .into_any_element()
+         } else {
++            let icon_color = match tool_call.status {
++                ToolCallStatus::Failed | ToolCallStatus::Rejected => Color::Error,
++                ToolCallStatus::Completed => Color::Success,
++                _ => Color::Muted,
++            };
+             Icon::new(match tool_call.kind {
+                 acp::ToolKind::Read => IconName::ToolSearch,
+                 acp::ToolKind::Edit => IconName::ToolPencil,
+@@ -10393,9 +10398,45 @@ impl ThreadView {
+                 acp::ToolKind::Other | _ => IconName::ToolHammer,
+             })
+             .size(IconSize::Small)
+-            .color(Color::Muted)
++            .color(icon_color)
+             .into_any_element()
+         };
++
++        let is_terminal = matches!(tool_call.kind, acp::ToolKind::Execute);
++        let exit_badge = if is_terminal && !use_card_layout {
++            let exit_info = match tool_call.status {
++                ToolCallStatus::Completed => {
++                    let exit_code = tool_call.raw_output.as_ref().and_then(|o| {
++                        o.get("exit_code")
++                            .and_then(|v| v.as_i64())
++                            .or_else(|| o.get("code").and_then(|v| v.as_i64()))
++                    });
++                    if let Some(code) = exit_code {
++                        if code == 0 {
++                            Some((SharedString::from("exit 0"), Color::Success))
++                        } else {
++                            Some((SharedString::from(format!("exit {code}")), Color::Error))
++                        }
++                    } else {
++                        Some((SharedString::from("exit 0"), Color::Success))
++                    }
++                }
++                ToolCallStatus::Failed => Some((SharedString::from("failed"), Color::Error)),
++                ToolCallStatus::Canceled => Some((SharedString::from("canceled"), Color::Muted)),
++                _ => None,
++            };
++            exit_info.map(|(text, color)| {
++                h_flex()
++                    .flex_shrink_0()
++                    .px_1()
++                    .py_0p5()
++                    .rounded_xs()
++                    .bg(cx.theme().colors().element_background)
++                    .child(Label::new(text).size(LabelSize::XSmall).color(color))
++            })
++        } else {
++            None
++        };
+         let step_badge = self.turn_tool_step_info(entry_ix, cx).map(|(step, total)| {
+             h_flex()
+                 .flex_shrink_0()
+@@ -10454,6 +10495,7 @@ impl ThreadView {
+             .overflow_hidden()
+             .child(tool_icon)
+             .children(step_badge)
++            .children(exit_badge)
+             .child(if has_location {
+                 h_flex()
+                     .id(("open-tool-call-location", entry_ix))
