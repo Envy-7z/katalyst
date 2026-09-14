@@ -8793,7 +8793,7 @@ impl ThreadView {
 
         let body = v_flex()
             .map(|this| {
-                if is_terminal_tool {
+                if is_terminal_tool && use_card_layout {
                     this.child(self.render_collapsible_command(
                         card_header_id.clone(),
                         true,
@@ -10380,6 +10380,11 @@ impl ThreadView {
                 .color(Color::Muted)
                 .into_any_element()
         } else {
+            let icon_color = match tool_call.status {
+                ToolCallStatus::Failed | ToolCallStatus::Rejected => Color::Error,
+                ToolCallStatus::Completed => Color::Success,
+                _ => Color::Muted,
+            };
             Icon::new(match tool_call.kind {
                 acp::ToolKind::Read => IconName::ToolSearch,
                 acp::ToolKind::Edit => IconName::ToolPencil,
@@ -10393,8 +10398,44 @@ impl ThreadView {
                 acp::ToolKind::Other | _ => IconName::ToolHammer,
             })
             .size(IconSize::Small)
-            .color(Color::Muted)
+            .color(icon_color)
             .into_any_element()
+        };
+
+        let is_terminal = matches!(tool_call.kind, acp::ToolKind::Execute);
+        let exit_badge = if is_terminal && !use_card_layout {
+            let exit_info = match tool_call.status {
+                ToolCallStatus::Completed => {
+                    let exit_code = tool_call.raw_output.as_ref().and_then(|o| {
+                        o.get("exit_code")
+                            .and_then(|v| v.as_i64())
+                            .or_else(|| o.get("code").and_then(|v| v.as_i64()))
+                    });
+                    if let Some(code) = exit_code {
+                        if code == 0 {
+                            Some((SharedString::from("exit 0"), Color::Success))
+                        } else {
+                            Some((SharedString::from(format!("exit {code}")), Color::Error))
+                        }
+                    } else {
+                        Some((SharedString::from("exit 0"), Color::Success))
+                    }
+                }
+                ToolCallStatus::Failed => Some((SharedString::from("failed"), Color::Error)),
+                ToolCallStatus::Canceled => Some((SharedString::from("canceled"), Color::Muted)),
+                _ => None,
+            };
+            exit_info.map(|(text, color)| {
+                h_flex()
+                    .flex_shrink_0()
+                    .px_1()
+                    .py_0p5()
+                    .rounded_xs()
+                    .bg(cx.theme().colors().element_background)
+                    .child(Label::new(text).size(LabelSize::XSmall).color(color))
+            })
+        } else {
+            None
         };
         let step_badge = self.turn_tool_step_info(entry_ix, cx).map(|(step, total)| {
             h_flex()
@@ -10454,6 +10495,7 @@ impl ThreadView {
             .overflow_hidden()
             .child(tool_icon)
             .children(step_badge)
+            .children(exit_badge)
             .child(if has_location {
                 h_flex()
                     .id(("open-tool-call-location", entry_ix))

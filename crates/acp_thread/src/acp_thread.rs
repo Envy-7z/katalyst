@@ -3972,6 +3972,13 @@ impl AcpThread {
                         this.had_error = true;
                         cx.emit(AcpThreadEvent::Error);
                         log::error!("Error in run turn: {:?}", e);
+
+                        // Auto-revert working tree and index to pre-turn checkpoint on error
+                        // so a crashed or failed turn does not leave dirty uncommitted files.
+                        if this.has_checkpoint() {
+                            this.restore_last_checkpoint(cx).detach();
+                        }
+
                         Err(e)
                     }
                 }
@@ -11480,5 +11487,63 @@ mod tests {
             .expect("backend should still be running");
         request.await.expect("turn should complete");
         assert_eq!(cx.active_idle_sleep_preventions(), 0);
+    }
+
+    #[gpui::test]
+    async fn test_auto_revert_on_turn_error_restores_working_tree(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/test"),
+            json!({
+                ".git": {},
+                "initial.txt": "clean state\n"
+            }),
+        )
+        .await;
+        let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+
+        let connection = Rc::new(FakeAgentConnection::new().on_user_message({
+            let fs = fs.clone();
+            move |_request, _thread, _cx| {
+                let fs = fs.clone();
+                async move {
+                    // Simulate agent creating dirty modifications before failing
+                    fs.write(Path::new(path!("/test/initial.txt")), b"corrupted state\n")
+                        .await?;
+                    fs.write(
+                        Path::new(path!("/test/unwanted.txt")),
+                        b"should be removed\n",
+                    )
+                    .await?;
+
+                    // Turn encounters an unrecoverable error
+                    Err(anyhow::anyhow!("simulated turn crash"))
+                }
+                .boxed_local()
+            }
+        }));
+
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .unwrap();
+
+        // Dispatch a turn that will fail
+        let send_result = cx
+            .update(|cx| {
+                thread.update(cx, |thread, cx| {
+                    thread.send(vec!["do something".into()], cx)
+                })
+            })
+            .await;
+
+        assert!(send_result.is_err(), "turn should fail with error");
+
+        thread.read_with(cx, |thread, _| {
+            assert!(thread.had_error(), "thread should report had_error = true");
+        });
     }
 }

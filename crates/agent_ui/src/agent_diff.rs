@@ -174,6 +174,16 @@ impl AgentDiffPane {
                 .collect::<Vec<_>>();
 
             let was_empty = self.multibuffer.read(cx).is_empty();
+
+            // Preserve cursor position during excerpt recomputation to prevent
+            // jitter when the user is actively typing in the RHS diff editor.
+            let saved_selection = if !was_empty {
+                let rhs = self.editor.read(cx).rhs_editor().clone();
+                Some(rhs.read(cx).selections.newest_anchor().clone())
+            } else {
+                None
+            };
+
             let is_excerpt_newly_added = self.editor.update(cx, |editor, cx| {
                 editor.update_excerpts_for_path(
                     path_key.clone(),
@@ -200,6 +210,14 @@ impl AgentDiffPane {
                         editor.change_selections(Default::default(), window, cx, |selections| {
                             selections.select_anchor_ranges([first_hunk_start..first_hunk_start]);
                         })
+                    }
+                } else if !is_excerpt_newly_added {
+                    // Restore saved cursor position to prevent jitter during
+                    // user typing — excerpt recomputation can shift anchors.
+                    if let Some(ref selection) = saved_selection {
+                        editor.change_selections(Default::default(), window, cx, |selections| {
+                            selections.select_anchor_ranges([selection.start..selection.end]);
+                        });
                     }
                 }
 
@@ -1239,6 +1257,11 @@ impl Render for AgentDiffToolbar {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.dispatch_action(&RejectAll, window, cx)
                                     })),
+                            )
+                            .child(
+                                Label::new("Type to edit · Enter to keep")
+                                    .color(Color::Muted)
+                                    .size(LabelSize::Small),
                             )
                             .child(
                                 Button::new("keep-all", "Keep All")
