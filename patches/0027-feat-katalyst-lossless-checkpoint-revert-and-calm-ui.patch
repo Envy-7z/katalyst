@@ -67,11 +67,11 @@ index 5068f8a38a..99ad5f12e1 100644
 @@ -37,6 +37,7 @@ use zed_actions::{
  
  use crate::ExpandMessageEditor;
- use crate::ManageProfiles;
+ use crate::plan_progress;
 +use crate::RevertLastTurn;
+ use crate::ManageProfiles;
  use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
  use crate::completion_provider::{AgentContextSelection, AgentContextSource};
- use crate::plan_progress;
 @@ -479,6 +480,25 @@ pub fn init(cx: &mut App) {
                          });
                      }
