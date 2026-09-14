@@ -31,8 +31,20 @@ impl WorktreeSettings {
     }
 
     pub fn is_path_excluded(&self, path: &RelPath) -> bool {
-        path.ancestors()
-            .any(|ancestor| self.file_scan_exclusions.is_match(ancestor))
+        path.ancestors().any(|ancestor| {
+            self.file_scan_exclusions.is_match(ancestor)
+                || ancestor
+                    .file_name()
+                    .is_some_and(is_default_excluded_component)
+        })
+    }
+
+    pub fn is_path_default_excluded(&self, path: &RelPath) -> bool {
+        path.ancestors().any(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(is_default_excluded_component)
+        })
     }
 
     pub fn is_path_always_included(&self, path: &RelPath, is_dir: bool) -> bool {
@@ -55,6 +67,24 @@ impl WorktreeSettings {
     pub fn is_std_path_read_only(&self, path: &Path) -> bool {
         self.read_only_files.is_match_std_path(path)
     }
+}
+
+pub fn is_default_excluded_component(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".cache"
+            | "DerivedData"
+            | "Library"
+            | "coverage"
+            | "tmp"
+            | "logs"
+    )
 }
 
 impl Settings for WorktreeSettings {
@@ -108,4 +138,57 @@ fn path_matchers(mut values: Vec<String>, context: &'static str) -> anyhow::Resu
     values.sort();
     PathMatcher::new(values, PathStyle::local())
         .with_context(|| format!("Failed to parse globs from {}", context))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_file_scan_exclusions() {
+        let settings = WorktreeSettings {
+            prevent_sharing_in_public_channels: false,
+            file_scan_exclusions: PathMatcher::default(),
+            file_scan_inclusions: PathMatcher::default(),
+            parent_dir_scan_inclusions: PathMatcher::default(),
+            scan_symlinks: settings::ScanSymlinksSetting::Expanded,
+            file_scan_depth: Some(5),
+            private_files: PathMatcher::default(),
+            hidden_files: PathMatcher::default(),
+            read_only_files: PathMatcher::default(),
+        };
+
+        for name in &[
+            ".git",
+            "node_modules",
+            "target",
+            "dist",
+            "build",
+            ".next",
+            ".cache",
+            "DerivedData",
+            "Library",
+            "coverage",
+            "tmp",
+            "logs",
+        ] {
+            let path_str = format!("some/parent/{}", name);
+            let path = RelPath::from_unix_str(&path_str).unwrap();
+            assert!(
+                settings.is_path_excluded(&path),
+                "Expected {} to be excluded by default",
+                name
+            );
+            let child_str = format!("some/parent/{}/deep/file.txt", name);
+            let child = RelPath::from_unix_str(&child_str).unwrap();
+            assert!(
+                settings.is_path_excluded(&child),
+                "Expected child in {} to be excluded by default",
+                name
+            );
+        }
+
+        let normal_path = RelPath::from_unix_str("src/main.rs").unwrap();
+        assert!(!settings.is_path_excluded(&normal_path));
+    }
 }

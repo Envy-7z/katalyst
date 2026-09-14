@@ -3735,20 +3735,41 @@ impl AcpThread {
                 })
                 .ok();
 
-                let old_checkpoint = git_store
-                    .update(cx, |git, cx| git.checkpoint(cx))
-                    .await
-                    .context("failed to get old checkpoint")
-                    .log_err();
-                this.update(cx, |this, _cx| {
-                    if let Some((_ix, message)) = this.last_user_message() {
-                        message.checkpoint = old_checkpoint.map(|git_checkpoint| Checkpoint {
-                            git_checkpoint,
-                            show: false,
-                        });
+                let checkpoint_task = git_store.update(cx, |git, cx| git.checkpoint(cx));
+                let this_weak = this.clone();
+                cx.spawn(async move |cx| {
+                    let checkpoint_result = async {
+                        let timer = cx
+                            .background_executor()
+                            .timer(Duration::from_millis(3000))
+                            .fuse();
+                        futures::pin_mut!(timer);
+                        let checkpoint_fut = checkpoint_task.fuse();
+                        futures::pin_mut!(checkpoint_fut);
+                        futures::select_biased! {
+                            res = checkpoint_fut => res.ok(),
+                            _ = timer => {
+                                log::warn!("git_store checkpoint timed out in background; continuing without checkpoint");
+                                None
+                            }
+                        }
+                    }
+                    .await;
+
+                    if let Some(git_checkpoint) = checkpoint_result {
+                        this_weak
+                            .update(cx, |this, _cx| {
+                                if let Some((_ix, message)) = this.last_user_message() {
+                                    message.checkpoint = Some(Checkpoint {
+                                        git_checkpoint,
+                                        show: false,
+                                    });
+                                }
+                            })
+                            .ok();
                     }
                 })
-                .ok();
+                .detach();
             }
 
             this.update(cx, |this, cx| {

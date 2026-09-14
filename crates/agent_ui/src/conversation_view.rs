@@ -52,9 +52,10 @@ use rope::Point;
 use settings::{NotifyWhenAgentWaiting, Settings as _, SettingsStore};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
-use std::{rc::Rc, time::Duration};
 use terminal_view::terminal_panel::TerminalPanel;
 use text::Anchor;
 use theme_settings::{AgentBufferFontSize, AgentUiFontSize};
@@ -1136,8 +1137,8 @@ impl ConversationView {
                         connection.clone().load_session(
                             session_id,
                             project.clone(),
-                            session_work_dirs,
-                            title,
+                            session_work_dirs.clone(),
+                            title.clone(),
                             cx,
                         )
                     } else if connection.supports_resume_session() {
@@ -1145,8 +1146,8 @@ impl ConversationView {
                         connection.clone().resume_session(
                             session_id,
                             project.clone(),
-                            session_work_dirs,
-                            title,
+                            session_work_dirs.clone(),
+                            title.clone(),
                             cx,
                         )
                     } else {
@@ -1160,7 +1161,7 @@ impl ConversationView {
                 cx.update(|_, cx| {
                     connection
                         .clone()
-                        .new_session(project.clone(), session_work_dirs, cx)
+                        .new_session(project.clone(), session_work_dirs.clone(), cx)
                 })
                 .log_err()
             };
@@ -1169,8 +1170,19 @@ impl ConversationView {
                 return;
             };
 
-            let result = match result.await {
-                Err(e) => match e.downcast::<acp_thread::AuthRequired>() {
+            let timeout = cx.background_executor().timer(Duration::from_secs(15)).fuse();
+            futures::pin_mut!(timeout);
+            let result_fut = result.fuse();
+            futures::pin_mut!(result_fut);
+
+            let session_result = futures::select_biased! {
+                res = result_fut => Some(res),
+                _ = timeout => None,
+            };
+
+            let result = match session_result {
+                Some(Ok(thread)) => Ok(thread),
+                Some(Err(e)) => match e.downcast::<acp_thread::AuthRequired>() {
                     Ok(err) => {
                         cx.update(|window, cx| {
                             Self::handle_auth_required(this, err, connection, window, cx)
@@ -1178,9 +1190,39 @@ impl ConversationView {
                         .log_err();
                         return;
                     }
-                    Err(err) => Err(err),
+                    Err(err) => {
+                        if let Some(session_id) = resume_session_id.clone()
+                            && connection.supports_resume_session()
+                            && !resumed_without_history
+                        {
+                            log::warn!(
+                                "load_session failed for {session_id:?}: {err:#}; falling back to resume_session"
+                            );
+                            let fallback = cx
+                                .update(|_, cx| {
+                                    connection.clone().resume_session(
+                                        session_id,
+                                        project.clone(),
+                                        session_work_dirs,
+                                        title,
+                                        cx,
+                                    )
+                                })
+                                .log_err();
+                            if let Some(fallback_task) = fallback {
+                                resumed_without_history = true;
+                                 fallback_task.await.map_err(|e| anyhow!(e))
+                            } else {
+                                Err(err)
+                            }
+                        } else {
+                            Err(err)
+                        }
+                    }
                 },
-                Ok(thread) => Ok(thread),
+                None => Err(anyhow!(LoadError::Other(
+                    "Session restoration timed out. You can retry or send a message.".into()
+                ))),
             };
 
             this.update_in(cx, |this, window, cx| {
@@ -2922,7 +2964,7 @@ impl ConversationView {
         }
     }
 
-        fn notify_with_sound(
+    fn notify_with_sound(
         &mut self,
         caption: impl Into<SharedString>,
         icon: IconName,
@@ -3546,7 +3588,12 @@ impl Render for ConversationView {
                 this.children(request_elicitation_connection.as_ref().map_or_else(
                     Vec::new,
                     |connection| {
-                        self.render_request_elicitations(connection, cx.entity().downgrade(), window, cx)
+                        self.render_request_elicitations(
+                            connection,
+                            cx.entity().downgrade(),
+                            window,
+                            cx,
+                        )
                     },
                 ))
             })
@@ -4479,6 +4526,365 @@ pub(crate) mod tests {
             let state = view.active_thread().unwrap();
             assert!(state.read(cx).resumed_without_history);
             assert_eq!(state.read(cx).list_state.item_count(), 0);
+        });
+    }
+
+    #[derive(Clone)]
+    struct LoadFailsResumeSucceedsConnection;
+
+    impl AgentConnection for LoadFailsResumeSucceedsConnection {
+        fn agent_id(&self) -> AgentId {
+            AgentId::new("load-fails-resume-succeeds")
+        }
+
+        fn telemetry_id(&self) -> SharedString {
+            "load-fails-resume-succeeds".into()
+        }
+        fn into_any(self: Rc<Self>) -> Rc<dyn std::any::Any> {
+            self
+        }
+
+        fn new_session(
+            self: Rc<Self>,
+            project: Entity<Project>,
+            _work_dirs: PathList,
+            cx: &mut gpui::App,
+        ) -> Task<gpui::Result<Entity<AcpThread>>> {
+            let thread = build_test_thread(
+                self,
+                project,
+                "LoadFailsResumeSucceedsConnection",
+                acp::SessionId::new("new-session"),
+                cx,
+            );
+            Task::ready(Ok(thread))
+        }
+
+        fn supports_load_session(&self) -> bool {
+            true
+        }
+
+        fn load_session(
+            self: Rc<Self>,
+            _session_id: acp::SessionId,
+            _project: Entity<Project>,
+            _work_dirs: PathList,
+            _title: Option<SharedString>,
+            _cx: &mut App,
+        ) -> Task<gpui::Result<Entity<AcpThread>>> {
+            Task::ready(Err(anyhow!("simulated corrupt history or timeout")))
+        }
+
+        fn supports_resume_session(&self) -> bool {
+            true
+        }
+
+        fn resume_session(
+            self: Rc<Self>,
+            session_id: acp::SessionId,
+            project: Entity<Project>,
+            _work_dirs: PathList,
+            _title: Option<SharedString>,
+            cx: &mut App,
+        ) -> Task<gpui::Result<Entity<AcpThread>>> {
+            let thread = build_test_thread(
+                self,
+                project,
+                "LoadFailsResumeSucceedsConnection",
+                session_id,
+                cx,
+            );
+            Task::ready(Ok(thread))
+        }
+
+        fn auth_methods(&self) -> &[acp::AuthMethod] {
+            &[]
+        }
+
+        fn authenticate(
+            &self,
+            _method_id: acp::AuthMethodId,
+            _cx: &mut App,
+        ) -> Task<gpui::Result<()>> {
+            Task::ready(Ok(()))
+        }
+
+        fn prompt(
+            &self,
+            _params: acp::PromptRequest,
+            _cx: &mut App,
+        ) -> Task<gpui::Result<acp::PromptResponse>> {
+            Task::ready(Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)))
+        }
+
+        fn cancel(&self, _session_id: &acp::SessionId, _cx: &mut App) {}
+    }
+
+    #[gpui::test]
+    async fn test_load_error_falls_back_to_resume_session(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
+        let connection_store =
+            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
+
+        let conversation_view = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ConversationView::new(
+                    Rc::new(StubAgentServer::new(LoadFailsResumeSucceedsConnection)),
+                    connection_store,
+                    Agent::Custom { id: "Test".into() },
+                    Some(acp::SessionId::new("fallback-session")),
+                    None,
+                    None,
+                    None,
+                    None,
+                    workspace.downgrade(),
+                    project,
+                    Some(thread_store),
+                    AgentThreadSource::AgentPanel,
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        cx.run_until_parked();
+
+        conversation_view.read_with(cx, |view, cx| {
+            let state = view
+                .active_thread()
+                .expect("thread should open via resume_session fallback");
+            assert!(
+                state.read(cx).resumed_without_history,
+                "should have fallen back to resume_session"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_resume_thread_while_indexing_in_progress(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/test_repo",
+            serde_json::json!({
+                "src": {
+                    "main.rs": "fn main() {}",
+                    "lib.rs": "pub fn test() {}",
+                }
+            }),
+        )
+        .await;
+
+        let project = Project::test(fs, [Path::new("/test_repo")], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
+        let connection_store =
+            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
+
+        let connection = StubAgentConnection::new().with_supports_load_session(true);
+        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("Progress response".into()),
+        )]);
+        let conversation_view = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ConversationView::new(
+                    Rc::new(StubAgentServer::new(connection)),
+                    connection_store,
+                    Agent::Custom { id: "Test".into() },
+                    Some(acp::SessionId::new("indexing-session")),
+                    None,
+                    None,
+                    None,
+                    None,
+                    workspace.downgrade(),
+                    project,
+                    Some(thread_store),
+                    AgentThreadSource::AgentPanel,
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        cx.run_until_parked();
+
+        conversation_view.read_with(cx, |view, _cx| {
+            assert!(
+                view.active_thread().is_some(),
+                "Conversation view must open immediately regardless of indexing state"
+            );
+        });
+
+        let thread_view = active_thread(&conversation_view, cx);
+        thread_view.update_in(cx, |view, window, cx| {
+            view.message_editor.update(cx, |editor, cx| {
+                editor.set_text("Continue progress", window, cx);
+            });
+            view.send(window, cx);
+        });
+
+        cx.run_until_parked();
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).entries().len(), 2);
+            assert!(view.thread_error.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_indexing_error_in_worktree_does_not_panic(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [Path::new("/nonexistent_dir")], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
+        let connection_store =
+            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
+
+        let connection = StubAgentConnection::new().with_supports_load_session(true);
+        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("OK despite indexing error".into()),
+        )]);
+
+        let conversation_view = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ConversationView::new(
+                    Rc::new(StubAgentServer::new(connection)),
+                    connection_store,
+                    Agent::Custom { id: "Test".into() },
+                    Some(acp::SessionId::new("error-indexing-session")),
+                    None,
+                    None,
+                    None,
+                    None,
+                    workspace.downgrade(),
+                    project,
+                    Some(thread_store),
+                    AgentThreadSource::AgentPanel,
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        cx.run_until_parked();
+
+        let thread_view = active_thread(&conversation_view, cx);
+        thread_view.update_in(cx, |view, window, cx| {
+            view.message_editor.update(cx, |editor, cx| {
+                editor.set_text("Continue despite error", window, cx);
+            });
+            view.send(window, cx);
+        });
+
+        cx.run_until_parked();
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).entries().len(), 2);
+            assert!(view.thread_error.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_history_continue_does_not_panic_or_force_close(cx: &mut TestAppContext) {
+        use crate::thread_metadata_store::{ThreadId, ThreadMetadata, WorktreePaths};
+        use chrono::Utc;
+        use project::AgentId as ProjectAgentId;
+
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
+        let connection_store =
+            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
+
+        let session_id = acp::SessionId::new("history-continue-session");
+        let thread_id = ThreadId::new();
+
+        cx.update(|_window, cx| {
+            ThreadMetadataStore::global(cx).update(cx, |store, cx| {
+                store.save(
+                    ThreadMetadata {
+                        thread_id,
+                        session_id: Some(session_id.clone()),
+                        agent_id: ProjectAgentId::new("Test"),
+                        title: Some("Historic conversation".into()),
+                        title_override: None,
+                        updated_at: Utc::now(),
+                        created_at: Some(Utc::now()),
+                        interacted_at: None,
+                        worktree_paths: WorktreePaths::from_folder_paths(&PathList::default()),
+                        remote_connection: None,
+                        archived: false,
+                        pinned: false,
+                    },
+                    cx,
+                );
+            });
+        });
+
+        let connection = StubAgentConnection::new().with_supports_load_session(true);
+        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("Continued response".into()),
+        )]);
+
+        let conversation_view = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ConversationView::new(
+                    Rc::new(StubAgentServer::new(connection)),
+                    connection_store,
+                    Agent::Custom { id: "Test".into() },
+                    Some(session_id),
+                    Some(thread_id),
+                    None,
+                    Some("Historic conversation".into()),
+                    None,
+                    workspace.downgrade(),
+                    project,
+                    Some(thread_store),
+                    AgentThreadSource::Sidebar,
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        cx.run_until_parked();
+
+        let thread_view = active_thread(&conversation_view, cx);
+        thread_view.update_in(cx, |view, window, cx| {
+            view.message_editor.update(cx, |editor, cx| {
+                editor.set_text("Continue", window, cx);
+            });
+            view.send(window, cx);
+        });
+
+        cx.run_until_parked();
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).entries().len(), 2);
+            assert!(view.thread_error.is_none());
         });
     }
 

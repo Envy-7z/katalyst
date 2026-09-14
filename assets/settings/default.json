@@ -1729,6 +1729,17 @@
     "**/Thumbs.db",
     "**/.classpath",
     "**/.settings",
+    "**/node_modules",
+    "**/target",
+    "**/dist",
+    "**/build",
+    "**/.next",
+    "**/.cache",
+    "**/DerivedData",
+    "**/Library",
+    "**/coverage",
+    "**/tmp",
+    "**/logs"
   ],
   // Files or globs of files that will be included by Zed, even when ignored by git. This is useful
   // for files that are not tracked by git, but are still important to your project. Note that globs

@@ -2133,7 +2133,8 @@ impl GitStore {
     pub fn checkpoint(&self, cx: &mut App) -> Task<Result<GitStoreCheckpoint>> {
         let mut work_directory_abs_paths = Vec::new();
         let mut checkpoints = Vec::new();
-        for repository in self.repositories.values() {
+        // Cap the number of simultaneous checkpoints to avoid freezing large multi-repo workspaces
+        for repository in self.repositories.values().take(16) {
             repository.update(cx, |repository, _| {
                 work_directory_abs_paths.push(repository.snapshot.work_directory_abs_path.clone());
                 checkpoints.push(repository.checkpoint().map(|checkpoint| checkpoint?));
@@ -2141,12 +2142,15 @@ impl GitStore {
         }
 
         cx.background_executor().spawn(async move {
-            let checkpoints = future::try_join_all(checkpoints).await?;
+            let results = future::join_all(checkpoints).await;
+            let mut checkpoints_by_work_dir_abs_path = collections::HashMap::default();
+            for (path, res) in work_directory_abs_paths.into_iter().zip(results) {
+                if let Ok(checkpoint) = res {
+                    checkpoints_by_work_dir_abs_path.insert(path, checkpoint);
+                }
+            }
             Ok(GitStoreCheckpoint {
-                checkpoints_by_work_dir_abs_path: work_directory_abs_paths
-                    .into_iter()
-                    .zip(checkpoints)
-                    .collect(),
+                checkpoints_by_work_dir_abs_path,
             })
         })
     }

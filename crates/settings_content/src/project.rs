@@ -144,7 +144,18 @@ pub struct WorktreeSettingsContent {
     ///   "**/.DS_Store",
     ///   "**/Thumbs.db",
     ///   "**/.classpath",
-    ///   "**/.settings"
+    ///   "**/.settings",
+    ///   "**/node_modules",
+    ///   "**/target",
+    ///   "**/dist",
+    ///   "**/build",
+    ///   "**/.next",
+    ///   "**/.cache",
+    ///   "**/DerivedData",
+    ///   "**/Library",
+    ///   "**/coverage",
+    ///   "**/tmp",
+    ///   "**/logs"
     /// ]
     pub file_scan_exclusions: Option<SplicingVec>,
 

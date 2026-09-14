@@ -5437,14 +5437,25 @@ impl BackgroundScanner {
 
             if self.track_git_repositories {
                 if child_name == DOT_GIT {
-                    let mut state = self.state.lock().await;
-                    state
-                        .insert_git_repository(
-                            child_path.clone(),
-                            self.fs.as_ref(),
-                            self.watcher.as_ref(),
-                        )
-                        .await;
+                    let parent_dir = child_path.parent();
+                    let is_excluded = parent_dir.is_some_and(|p| self.settings.is_path_excluded(p));
+                    let beyond_scan_depth = {
+                        let state = self.state.lock().await;
+                        state.snapshot.root_repo_common_dir.is_none()
+                            && parent_dir.is_some_and(|p| {
+                                is_beyond_scan_depth(self.settings.file_scan_depth, p)
+                            })
+                    };
+                    if !is_excluded && !beyond_scan_depth {
+                        let mut state = self.state.lock().await;
+                        state
+                            .insert_git_repository(
+                                child_path.clone(),
+                                self.fs.as_ref(),
+                                self.watcher.as_ref(),
+                            )
+                            .await;
+                    }
                 } else if child_name == GITIGNORE {
                     match build_gitignore(&child_abs_path, self.fs.as_ref()).await {
                         Ok(ignore) => {
@@ -5588,12 +5599,20 @@ impl BackgroundScanner {
         }
 
         let mut state = self.state.lock().await;
+        let scan_limit_reached = state
+            .snapshot
+            .entries_by_path
+            .summary()
+            .non_ignored_file_count
+            >= 100_000;
         // Identify any subdirectories that should not be scanned.
         let mut job_ix = 0;
         for entry in &mut new_entries {
             state.reuse_entry_id(entry);
             if entry.is_dir() {
-                if !self.should_scan_directory(&state, entry, ignore_stack.repo_root.is_some()) {
+                if scan_limit_reached
+                    || !self.should_scan_directory(&state, entry, ignore_stack.repo_root.is_some())
+                {
                     log::debug!("defer scanning directory {:?}", entry.path);
                     entry.kind = EntryKind::UnloadedDir;
                     new_jobs[job_ix] = None;
@@ -6253,17 +6272,34 @@ impl BackgroundScanner {
         &self,
         state: &BackgroundScannerState,
         entry: &Entry,
-        in_repo: bool,
+        _in_repo: bool,
     ) -> bool {
-        let beyond_scan_depth =
-            !in_repo && is_beyond_scan_depth(self.settings.file_scan_depth, &entry.path);
+        if self.settings.is_path_excluded(&entry.path) && !entry.is_always_included {
+            return false;
+        }
+
+        let effective_depth = self.settings.file_scan_depth.or_else(|| {
+            if state.snapshot.root_repo_common_dir.is_none() {
+                // Non-git root workspace (e.g. massive parent folder containing multiple repos):
+                // Default to shallow initial scan depth (3) so we don't recursively traverse
+                // hundreds of thousands of files across nested repositories until user expands them.
+                Some(3)
+            } else {
+                None
+            }
+        });
+
+        let beyond_scan_depth = if state.snapshot.root_repo_common_dir.is_some() {
+            false
+        } else {
+            is_beyond_scan_depth(effective_depth, &entry.path)
+        };
         let scannable = state.scanning_enabled
             && (!entry.is_external
                 || self.settings.scan_symlinks == settings::ScanSymlinksSetting::Always)
             && (!(entry.is_ignored || beyond_scan_depth) || entry.is_always_included);
 
         scannable
-            || entry.path.file_name() == Some(DOT_GIT)
             || entry.path.file_name() == Some(local_settings_folder_name())
             || entry.path.file_name() == Some(local_vscode_folder_name())
             || state.scanned_dirs.contains(&entry.id) // If we've ever scanned it, keep scanning
