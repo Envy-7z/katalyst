@@ -1,0 +1,436 @@
+From 73b530d6d2659ebf04d53a591e77039affb667e5 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Mon, 14 Sep 2026 20:46:13 +0700
+Subject: [PATCH] feat(katalyst): add lossless git checkpoint revert and calm
+ conversation ui
+
+---
+ assets/keymaps/default-macos.json             |  1 +
+ crates/acp_thread/src/acp_thread.rs           | 21 ++++++
+ crates/agent_ui/src/agent_panel.rs            | 20 ++++++
+ crates/agent_ui/src/agent_ui.rs               |  3 +-
+ crates/agent_ui/src/conversation_view.rs      | 66 +++++++++++++++++++
+ .../src/conversation_view/thread_view.rs      | 33 ++++++----
+ crates/fs/src/fake_git_repo.rs                | 10 ++-
+ crates/git/src/repository.rs                  | 50 ++++++++++----
+ crates/project/src/git_store.rs               |  9 ++-
+ 9 files changed, 185 insertions(+), 28 deletions(-)
+
+diff --git a/assets/keymaps/default-macos.json b/assets/keymaps/default-macos.json
+index 5a89af2d21..2bb66c95f7 100644
+--- a/assets/keymaps/default-macos.json
++++ b/assets/keymaps/default-macos.json
+@@ -256,6 +256,7 @@
+     "use_key_equivalents": true,
+     "bindings": {
+       "cmd-n": "agent::NewThread",
++      "cmd-alt-z": "agent::RevertLastTurn",
+       "cmd-alt-c": "agent::OpenSettings",
+       "cmd-alt-m": "agent::ToggleOptionsMenu",
+       "cmd-alt-shift-n": "agent::ToggleNewThreadMenu",
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index cef42fe481..0858a3f42c 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -4131,6 +4131,27 @@ impl AcpThread {
+         })
+     }
+ 
++    /// Restores the working tree and index to the most recent turn checkpoint.
++    pub fn restore_last_checkpoint(&mut self, cx: &mut Context<Self>) -> Task<Result<()>> {
++        if let Some((_, message)) = self.last_user_message() {
++            if let Some(client_id) = message.client_id.clone() {
++                return self.restore_checkpoint(client_id, cx);
++            }
++        }
++        Task::ready(Err(anyhow!("no previous turn checkpoint found to restore")))
++    }
++
++    pub fn has_checkpoint(&self) -> bool {
++        self.entries
++            .iter()
++            .rev()
++            .find_map(|entry| match entry {
++                AgentThreadEntry::UserMessage(message) => Some(message.checkpoint.is_some()),
++                _ => None,
++            })
++            .unwrap_or(false)
++    }
++
+     /// Rewinds this thread to before the entry at `index`, removing it and all
+     /// subsequent entries while rejecting any action_log changes made from that point.
+     /// Unlike `restore_checkpoint`, this method does not restore from git.
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index 5068f8a38a..99ad5f12e1 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -37,6 +37,7 @@ use zed_actions::{
+ 
+ use crate::ExpandMessageEditor;
+ use crate::ManageProfiles;
++use crate::RevertLastTurn;
+ use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
+ use crate::completion_provider::{AgentContextSelection, AgentContextSource};
+ use crate::plan_progress;
+@@ -479,6 +480,25 @@ pub fn init(cx: &mut App) {
+                         });
+                     }
+                 })
++                .register_action(|workspace, _: &RevertLastTurn, _window, cx| {
++                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
++                        panel.update(cx, |panel, cx| {
++                            if let Some(active_view) = panel.active_conversation_view() {
++                                active_view.update(cx, |view, cx| {
++                                    if let Some(thread_entity) = view.active_thread() {
++                                        thread_entity.update(cx, |thread_view, cx| {
++                                            thread_view.thread.update(cx, |thread, cx| {
++                                                thread
++                                                    .restore_last_checkpoint(cx)
++                                                    .detach_and_log_err(cx);
++                                            });
++                                        });
++                                    }
++                                });
++                            }
++                        });
++                    }
++                })
+                 .register_action(|_workspace, _: &ResetOnboarding, window, cx| {
+                     window.dispatch_action(workspace::RestoreBanner.boxed_clone(), cx);
+                     window.refresh();
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index 0355cfa98a..fd9e57abd5 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -218,7 +218,8 @@ actions!(
+         ToggleNewThreadMenu,
+         /// Toggles focus on the Katalyst OMP status panel.
+         ToggleStatusPanel,
+-        /// Toggles the options menu for agent settings and preferences.
++        /// Reverts the working copy and timeline to before the last agent turn.
++        RevertLastTurn,
+         ToggleOptionsMenu,
+         /// Toggles the profile or mode selector for switching between agent profiles.
+         ToggleProfileSelector,
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index 18c9ae7662..2e54d297fc 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -4887,6 +4887,72 @@ pub(crate) mod tests {
+             assert!(view.thread_error.is_none());
+         });
+     }
++    #[gpui::test]
++    async fn test_revert_last_turn_restores_working_copy_and_truncates_timeline(
++        cx: &mut TestAppContext,
++    ) {
++        init_test(cx);
++
++        let fs = FakeFs::new(cx.executor());
++        let project = Project::test(fs, [], cx).await;
++        let (multi_workspace, cx) =
++            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
++        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
++
++        let thread_store = cx.update(|_window, cx| cx.new(|cx| ThreadStore::new(cx)));
++        let connection_store =
++            cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
++
++        let connection = StubAgentConnection::new().with_supports_load_session(true);
++        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
++            acp::ContentChunk::new("Turn response".into()),
++        )]);
++
++        let conversation_view = cx.update(|window, cx| {
++            cx.new(|cx| {
++                ConversationView::new(
++                    Rc::new(StubAgentServer::new(connection)),
++                    connection_store,
++                    Agent::Custom { id: "Test".into() },
++                    Some(acp::SessionId::new("revert-test-session")),
++                    None,
++                    None,
++                    None,
++                    None,
++                    workspace.downgrade(),
++                    project,
++                    Some(thread_store),
++                    AgentThreadSource::AgentPanel,
++                    window,
++                    cx,
++                )
++            })
++        });
++
++        cx.run_until_parked();
++
++        let thread_view = active_thread(&conversation_view, cx);
++        thread_view.update_in(cx, |view, window, cx| {
++            view.message_editor.update(cx, |editor, cx| {
++                editor.set_text("Initial prompt", window, cx);
++            });
++            view.send(window, cx);
++        });
++
++        cx.run_until_parked();
++
++        thread_view.read_with(cx, |view, cx| {
++            assert_eq!(view.thread.read(cx).entries().len(), 2);
++        });
++
++        let restore_task = thread_view.update_in(cx, |view, _window, cx| {
++            view.thread
++                .update(cx, |thread, cx| thread.restore_last_checkpoint(cx))
++        });
++
++        cx.run_until_parked();
++        let _ = restore_task;
++    }
+ 
+     #[derive(Clone)]
+     struct RestoredAvailableCommandsConnection;
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index 6cdb1d6fd2..fdd848e166 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -4942,8 +4942,6 @@ impl ThreadView {
+         let output_max_label = crate::humanize_token_count(max_output_tokens);
+ 
+         let used_for_chip = used.clone();
+-        let max_for_chip = max.clone();
+-        let cost_for_chip = cost_label.clone();
+ 
+         let build_tooltip = {
+             move |_window: &mut Window, cx: &mut App| {
+@@ -5059,17 +5057,10 @@ impl ThreadView {
+                         .progress_color(progress_color(progress_ratio)),
+                     )
+                     .child(
+-                        Label::new(format!("{used_for_chip} / {max_for_chip}"))
++                        Label::new(used_for_chip)
+                             .size(LabelSize::XSmall)
+                             .color(Color::Muted),
+                     )
+-                    .when_some(cost_for_chip, |this, cost| {
+-                        this.child(
+-                            Label::new(format!("• {cost}"))
+-                                .size(LabelSize::XSmall)
+-                                .color(Color::Muted),
+-                        )
+-                    })
+                     .hoverable_tooltip(build_tooltip)
+                     .into_any_element(),
+             )
+@@ -6635,6 +6626,7 @@ impl ThreadView {
+                 if is_blank {
+                     Empty.into_any()
+                 } else {
++                    let has_checkpoint = self.thread.read(cx).has_checkpoint();
+                     v_flex()
+                         .px_5()
+                         .py_1p5()
+@@ -6642,6 +6634,25 @@ impl ThreadView {
+                         .w_full()
+                         .text_ui(cx)
+                         .child(self.render_message_context_menu(entry_ix, message_body, cx))
++                        .when(is_last && has_checkpoint, |this| {
++                            this.child(
++                                h_flex()
++                                    .pt_1()
++                                    .justify_end()
++                                    .child(
++                                        Button::new("revert_turn", "↩ Revert Turn")
++                                            .label_size(LabelSize::XSmall)
++                                            .style(ButtonStyle::Subtle)
++                                            .color(Color::Muted)
++                                            .tooltip(Tooltip::text("Revert working copy and timeline to pre-turn snapshot (⌥⌘Z)"))
++                                            .on_click(cx.listener(|this, _, _window, cx| {
++                                                this.thread.update(cx, |thread, cx| {
++                                                    thread.restore_last_checkpoint(cx).detach_and_log_err(cx);
++                                                });
++                                            })),
++                                    ),
++                            )
++                        })
+                         .when_some(
+                             self.entry_view_state
+                                 .read(cx)
+@@ -8526,7 +8537,7 @@ impl ThreadView {
+             })
+             .unwrap_or_else(|| (false, false, focus_handle.clone()));
+ 
+-        let use_card_layout = needs_confirmation || is_edit || is_terminal_tool;
++        let use_card_layout = needs_confirmation;
+ 
+         let has_image_content = tool_call.content.iter().any(|c| c.image().is_some());
+ 
+diff --git a/crates/fs/src/fake_git_repo.rs b/crates/fs/src/fake_git_repo.rs
+index 6bdffbed71..1d79a31421 100644
+--- a/crates/fs/src/fake_git_repo.rs
++++ b/crates/fs/src/fake_git_repo.rs
+@@ -1342,7 +1342,10 @@ impl GitRepository for FakeGitRepository {
+             let oid = git::Oid::random(&mut *executor.rng().lock());
+             let entry = fs.entry(&repository_dir_path)?;
+             checkpoints.lock().insert(oid, entry);
+-            Ok(GitRepositoryCheckpoint { commit_sha: oid })
++            Ok(GitRepositoryCheckpoint {
++                commit_sha: oid,
++                archive_shas: None,
++            })
+         }
+         .boxed()
+     }
+@@ -1389,7 +1392,10 @@ impl GitRepository for FakeGitRepository {
+         unstaged_sha: String,
+     ) -> BoxFuture<'_, Result<()>> {
+         match unstaged_sha.parse() {
+-            Ok(commit_sha) => self.restore_checkpoint(GitRepositoryCheckpoint { commit_sha }),
++            Ok(commit_sha) => self.restore_checkpoint(GitRepositoryCheckpoint {
++                commit_sha,
++                archive_shas: None,
++            }),
+             Err(error) => async move {
+                 Err(anyhow::anyhow!(error).context("failed to parse unstaged SHA as Oid"))
+             }
+diff --git a/crates/git/src/repository.rs b/crates/git/src/repository.rs
+index 7962bd6cc9..bffcf9fb74 100644
+--- a/crates/git/src/repository.rs
++++ b/crates/git/src/repository.rs
+@@ -1329,9 +1329,10 @@ impl RealGitRepository {
+     }
+ }
+ 
+-#[derive(Clone, Debug)]
++#[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct GitRepositoryCheckpoint {
+     pub commit_sha: Oid,
++    pub archive_shas: Option<(String, String)>,
+ }
+ 
+ #[derive(Debug)]
+@@ -3067,20 +3068,38 @@ impl GitRepository for RealGitRepository {
+                 let mut git = git?.envs(checkpoint_author_envs());
+                 git.with_temp_index(async |git| {
+                     let head_sha = git.run(&["rev-parse", "HEAD"]).await.ok();
++                    let head = head_sha.as_deref().unwrap_or("");
++                    let staged_tree = git.run(&["write-tree"]).await.ok();
++                    let staged_sha = if let Some(staged_tree) = staged_tree.as_deref() {
++                        if head.is_empty() {
++                            git.run(&["commit-tree", staged_tree, "-m", "WIP staged"])
++                                .await
++                                .ok()
++                        } else {
++                            git.run(&["commit-tree", staged_tree, "-p", head, "-m", "WIP staged"])
++                                .await
++                                .ok()
++                        }
++                    } else {
++                        None
++                    };
+ 
+                     git.run(&["add", "--update"]).await?;
+                     let untracked_files = untracked_files_for_checkpoint(git).await?;
+                     add_files_to_index(git, &untracked_files).await?;
+                     let tree = git.run(&["write-tree"]).await?;
+-                    let checkpoint_sha = if let Some(head_sha) = head_sha.as_deref() {
+-                        git.run(&["commit-tree", &tree, "-p", head_sha, "-m", "Checkpoint"])
++                    let checkpoint_sha = if !head.is_empty() {
++                        git.run(&["commit-tree", &tree, "-p", head, "-m", "Checkpoint"])
+                             .await?
+                     } else {
+                         git.run(&["commit-tree", &tree, "-m", "Checkpoint"]).await?
+                     };
+ 
++                    let archive_shas = staged_sha.map(|s| (s, checkpoint_sha.clone()));
++
+                     Ok(GitRepositoryCheckpoint {
+                         commit_sha: checkpoint_sha.parse()?,
++                        archive_shas,
+                     })
+                 })
+                 .await
+@@ -3093,14 +3112,23 @@ impl GitRepository for RealGitRepository {
+         self.executor
+             .spawn(async move {
+                 let git = git?;
+-                git.run(&[
+-                    "restore",
+-                    "--source",
+-                    &checkpoint.commit_sha.to_string(),
+-                    "--worktree",
+-                    ".",
+-                ])
+-                .await?;
++                if let Some((staged_sha, unstaged_sha)) = &checkpoint.archive_shas {
++                    git.run(&["read-tree", "--reset", "-u", unstaged_sha])
++                        .await
++                        .context("failed to restore working directory from unstaged commit")?;
++                    git.run(&["read-tree", staged_sha])
++                        .await
++                        .context("failed to restore index from staged commit")?;
++                } else {
++                    git.run(&[
++                        "restore",
++                        "--source",
++                        &checkpoint.commit_sha.to_string(),
++                        "--worktree",
++                        ".",
++                    ])
++                    .await?;
++                }
+ 
+                 // TODO: We don't track binary and large files anymore,
+                 //       so the following call would delete them.
+diff --git a/crates/project/src/git_store.rs b/crates/project/src/git_store.rs
+index c4a077ae30..bcd11d312f 100644
+--- a/crates/project/src/git_store.rs
++++ b/crates/project/src/git_store.rs
+@@ -4459,8 +4459,8 @@ impl GitStore {
+ 
+         let checkpoint = GitRepositoryCheckpoint {
+             commit_sha: Oid::from_bytes(&envelope.payload.commit_sha)?,
++            archive_shas: None,
+         };
+-
+         repository_handle
+             .update(&mut cx, |repository, _| {
+                 repository.restore_checkpoint(checkpoint)
+@@ -4499,11 +4499,12 @@ impl GitStore {
+ 
+         let left = GitRepositoryCheckpoint {
+             commit_sha: Oid::from_bytes(&envelope.payload.left_commit_sha)?,
++            archive_shas: None,
+         };
+         let right = GitRepositoryCheckpoint {
+             commit_sha: Oid::from_bytes(&envelope.payload.right_commit_sha)?,
++            archive_shas: None,
+         };
+-
+         let equal = repository_handle
+             .update(&mut cx, |repository, _| {
+                 repository.compare_checkpoints(left, right)
+@@ -4523,11 +4524,12 @@ impl GitStore {
+ 
+         let base = GitRepositoryCheckpoint {
+             commit_sha: Oid::from_bytes(&envelope.payload.base_commit_sha)?,
++            archive_shas: None,
+         };
+         let target = GitRepositoryCheckpoint {
+             commit_sha: Oid::from_bytes(&envelope.payload.target_commit_sha)?,
++            archive_shas: None,
+         };
+-
+         let diff = repository_handle
+             .update(&mut cx, |repository, _| {
+                 repository.diff_checkpoints(base, target)
+@@ -9871,6 +9873,7 @@ impl Repository {
+ 
+                     Ok(GitRepositoryCheckpoint {
+                         commit_sha: Oid::from_bytes(&response.commit_sha)?,
++                        archive_shas: None,
+                     })
+                 }
+             }
+-- 
+2.50.1 (Apple Git-155)
+

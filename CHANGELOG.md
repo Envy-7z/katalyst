@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.2.2] - 2026-09-14
+
+### Added
+- **Lossless Git Checkpoint Revert (`⌥⌘Z` / Codex Parity)**:
+  - Upgraded Git repository checkpoints to track archive tree SHAs using low-overhead git plumbing (`write-tree`, `commit-tree`).
+  - Added "Revert Turn" action and header button to assistant turns, providing one-click rollback of all agent edits and timeline truncation.
+  - User uncommitted work present before agent turn is preserved while rolling back files touched by the agent.
+- **Calm Conversation UI**:
+  - Completed tool executions collapse into compact 24px single-line status chips, keeping long agent turns legible and distraction-free.
+  - Progressive disclosure for token usage: minimal calm count (`14k`) in composer footer, with granular prompt/cache/completion breakdown and session cost on hover tooltip.
+
 ## [0.2.1] - 2026-09-14
 
 ### Fixed
