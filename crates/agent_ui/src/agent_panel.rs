@@ -37,7 +37,7 @@ use zed_actions::{
 
 use crate::ExpandMessageEditor;
 use crate::ManageProfiles;
-use crate::agent_connection_store::AgentConnectionStore;
+use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::plan_progress;
 use crate::terminal_thread_metadata_store::{
@@ -1189,6 +1189,267 @@ pub struct AgentPanel {
     last_context_source: Option<AgentContextSource>,
 
     is_active: bool,
+}
+/// A compact, read-only view of the currently available Katalyst agent
+/// capabilities. It lives in the workspace's right dock, leaving the primary
+/// agent panel focused on the conversation itself.
+pub struct KatalystStatusPanel {
+    focus_handle: FocusHandle,
+    agent_panel: Option<WeakEntity<AgentPanel>>,
+    _agent_panel_observation: Option<Subscription>,
+}
+
+impl KatalystStatusPanel {
+    pub fn new(agent_panel: Option<Entity<AgentPanel>>, cx: &mut Context<Self>) -> Self {
+        let agent_panel_observation = agent_panel
+            .as_ref()
+            .map(|agent_panel| cx.observe(agent_panel, |_, _, cx| cx.notify()));
+
+        Self {
+            focus_handle: cx.focus_handle(),
+            agent_panel: agent_panel.map(|agent_panel| agent_panel.downgrade()),
+            _agent_panel_observation: agent_panel_observation,
+        }
+    }
+
+    fn status_row(label: &'static str, available: bool) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                Icon::new(if available {
+                    IconName::Check
+                } else {
+                    IconName::Circle
+                })
+                .size(IconSize::Small)
+                .color(if available {
+                    Color::Success
+                } else {
+                    Color::Muted
+                }),
+            )
+            .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
+    }
+
+    fn capability_row(label: &'static str) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                Icon::new(IconName::Sparkle)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new(label)
+                    .size(LabelSize::Small)
+                    .color(Color::Default),
+            )
+    }
+
+    fn connection_state(&self, cx: &App) -> (SharedString, IconName, Color, bool) {
+        let Some(agent_panel) = self.agent_panel.as_ref().and_then(WeakEntity::upgrade) else {
+            return (
+                "Not configured".into(),
+                IconName::Circle,
+                Color::Muted,
+                false,
+            );
+        };
+
+        let (agent, connection_store) = agent_panel.read_with(cx, |agent_panel, cx| {
+            (
+                agent_panel.selected_agent(cx),
+                agent_panel.connection_store().clone(),
+            )
+        });
+
+        if !matches!(agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
+            return (
+                format!("{} selected", agent.label()).into(),
+                IconName::Circle,
+                Color::Muted,
+                false,
+            );
+        }
+
+        match connection_store.read(cx).connection_status(&agent, cx) {
+            AgentConnectionStatus::Connected => {
+                ("Connected".into(), IconName::Check, Color::Success, true)
+            }
+            AgentConnectionStatus::Connecting => (
+                "Starting".into(),
+                IconName::ArrowCircle,
+                Color::Muted,
+                false,
+            ),
+            AgentConnectionStatus::Disconnected => (
+                "Not configured".into(),
+                IconName::Circle,
+                Color::Muted,
+                false,
+            ),
+        }
+    }
+}
+
+impl Focusable for KatalystStatusPanel {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl EventEmitter<PanelEvent> for KatalystStatusPanel {}
+
+impl Panel for KatalystStatusPanel {
+    fn persistent_name() -> &'static str {
+        "KatalystStatusPanel"
+    }
+
+    fn panel_key() -> &'static str {
+        "katalyst_status_panel"
+    }
+
+    fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
+        DockPosition::Right
+    }
+
+    fn position_is_valid(&self, position: DockPosition) -> bool {
+        position == DockPosition::Right
+    }
+
+    fn set_position(
+        &mut self,
+        _position: DockPosition,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
+        px(320.)
+    }
+
+    fn min_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
+        Some(px(260.))
+    }
+
+    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
+        false
+    }
+
+    fn activation_priority(&self) -> u32 {
+        7
+    }
+
+    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
+        Some(IconName::ZedAssistant)
+    }
+
+    fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
+        Some("OMP Agent Panel")
+    }
+
+    fn toggle_action(&self) -> Box<dyn Action> {
+        Box::new(crate::ToggleStatusPanel)
+    }
+}
+
+impl Render for KatalystStatusPanel {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (connection_label, connection_icon, connection_color, connected) =
+            self.connection_state(cx);
+        let card = |children: Vec<AnyElement>| {
+            v_flex()
+                .gap_3()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().colors().border)
+                .bg(cx.theme().colors().element_background)
+                .children(children)
+        };
+
+        v_flex()
+            .size_full()
+            .p_3()
+            .gap_3()
+            .bg(cx.theme().colors().panel_background)
+            .track_focus(&self.focus_handle)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(Label::new("OMP Agent Panel").size(LabelSize::Default))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                Icon::new(connection_icon)
+                                    .size(IconSize::Small)
+                                    .color(connection_color),
+                            )
+                            .child(
+                                Label::new(connection_label)
+                                    .size(LabelSize::Small)
+                                    .color(connection_color),
+                            ),
+                    ),
+            )
+            .child(card(vec![
+                Label::new("Agent status")
+                    .size(LabelSize::Small)
+                    .into_any_element(),
+                Self::status_row("Core agent services", connected).into_any_element(),
+                Self::status_row("Tooling and execution", connected).into_any_element(),
+                Self::status_row("Context access", connected).into_any_element(),
+                Self::status_row("Planning and reasoning", connected).into_any_element(),
+            ]))
+            .child(card(vec![
+                Label::new("Current capabilities")
+                    .size(LabelSize::Small)
+                    .into_any_element(),
+                Self::capability_row("Code generation").into_any_element(),
+                Self::capability_row("Code review").into_any_element(),
+                Self::capability_row("Refactoring").into_any_element(),
+                Self::capability_row("Debugging").into_any_element(),
+                Self::capability_row("Documentation").into_any_element(),
+                Self::capability_row("Task planning").into_any_element(),
+            ]))
+            .child(
+                div()
+                    .id("katalyst-agent-settings")
+                    .h(px(40.))
+                    .px_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(
+                            Box::new(zed_actions::OpenSettingsAt {
+                                path: "agent".to_string(),
+                                target: None,
+                            }),
+                            cx,
+                        );
+                    }))
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .justify_between()
+                            .items_center()
+                            .child(Label::new("Agent settings").size(LabelSize::Small))
+                            .child(
+                                Icon::new(IconName::ChevronRight)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    ),
+            )
+    }
 }
 
 impl AgentPanel {
@@ -5945,7 +6206,11 @@ impl AgentPanel {
                         .gap_2()
                         .items_center()
                         .child(Icon::new(icon).color(Color::Muted).size(IconSize::Small))
-                        .child(Label::new(label).size(LabelSize::Small).color(Color::Default)),
+                        .child(
+                            Label::new(label)
+                                .size(LabelSize::Small)
+                                .color(Color::Default),
+                        ),
                 )
         };
 

@@ -901,7 +901,7 @@ fn open_settings_editor_with(
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Zed — Settings".into()),
+                    title: Some("Katalyst — Settings".into()),
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(12.0), px(12.0))),
                 }),
@@ -6494,9 +6494,7 @@ pub mod test {
             .unwrap();
     }
     #[gpui::test]
-    async fn test_open_skills_settings_action_opens_skills_list(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    async fn test_open_skills_settings_action_opens_skills_list(cx: &mut gpui::TestAppContext) {
         use project::Project;
 
         cx.update(|cx| {
@@ -6554,7 +6552,13 @@ pub mod test {
         // Dispatch the action the way the command palette does: on the
         // workspace window.
         multi_workspace.update_in(cx, |_multi_workspace, window, cx| {
-            window.dispatch_action(Box::new(zed_actions::OpenSettingsAt { path: AGENT_SKILLS_SETTINGS_PATH.to_string(), target: None }), cx);
+            window.dispatch_action(
+                Box::new(zed_actions::OpenSettingsAt {
+                    path: AGENT_SKILLS_SETTINGS_PATH.to_string(),
+                    target: None,
+                }),
+                cx,
+            );
         });
 
         cx.run_until_parked();

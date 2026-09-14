@@ -72,8 +72,8 @@ use workspace::{OpenOptions, Workspace};
 use crate::agent_configuration::ManageProfilesModal;
 pub use crate::agent_connection_store::{ActiveAcpConnection, AgentConnectionStore};
 pub use crate::agent_panel::{
-    AgentPanel, AgentPanelEvent, AgentPanelTerminalInfo, MaxIdleRetainedThreads, TerminalId,
-    ThreadTitleRegenerationResult,
+    AgentPanel, AgentPanelEvent, AgentPanelTerminalInfo, KatalystStatusPanel,
+    MaxIdleRetainedThreads, TerminalId, ThreadTitleRegenerationResult,
 };
 use crate::agent_registry_ui::AgentRegistryPage;
 pub use crate::inline_assistant::InlineAssistant;
@@ -216,6 +216,8 @@ actions!(
     [
         /// Toggles the menu to create new agent threads.
         ToggleNewThreadMenu,
+        /// Toggles focus on the Katalyst OMP status panel.
+        ToggleStatusPanel,
         /// Toggles the options menu for agent settings and preferences.
         ToggleOptionsMenu,
         /// Toggles the profile or mode selector for switching between agent profiles.
@@ -1273,10 +1275,7 @@ mod tests {
 
     #[test]
     fn test_katalyst_default_agent_is_omp() {
-        assert_eq!(
-            katalyst_default_agent(),
-            Agent::Custom { id: "omp".into() }
-        );
+        assert_eq!(katalyst_default_agent(), Agent::Custom { id: "omp".into() });
     }
 
     #[test]

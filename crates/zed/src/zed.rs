@@ -808,8 +808,13 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             initialize_agent_panel(workspace_handle.clone(), cx.clone()).map(|r| r.log_err()),
         );
 
-        workspace_handle.update(cx, |workspace, cx| {
+        workspace_handle.update_in(cx, |workspace, window, cx| {
             workspace.finish_dock_restoration(cx);
+            if workspace.panel::<agent_ui::KatalystStatusPanel>(cx).is_none() {
+                let agent_panel = workspace.panel::<agent_ui::AgentPanel>(cx);
+                let panel = cx.new(|cx| agent_ui::KatalystStatusPanel::new(agent_panel, cx));
+                workspace.add_panel(panel, window, cx);
+            }
         })?;
 
         anyhow::Ok(())
@@ -1304,6 +1309,16 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &agent_ui::ToggleStatusPanel,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                if !workspace.toggle_panel_focus::<agent_ui::KatalystStatusPanel>(window, cx) {
+                    workspace.close_panel::<agent_ui::KatalystStatusPanel>(window, cx);
+                }
             },
         )
         .register_action(
