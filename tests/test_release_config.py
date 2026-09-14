@@ -47,8 +47,8 @@ class ReleaseConfigTests(unittest.TestCase):
 
         patch_0024 = (ROOT / "patches/0024-feat-katalyst-add-omp-status-panel.patch").read_text()
         self.assertIn("+use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};", patch_0024)
-        self.assertIn("use crate::plan_progress;\n use crate::ManageProfiles;", patch_0024)
-
+        self.assertIn("ToggleStatusPanel", patch_0024)
+        self.assertIn("toggle_panel_focus::<agent_ui::KatalystStatusPanel>", patch_0024)
 
 if __name__ == "__main__":
     unittest.main()
