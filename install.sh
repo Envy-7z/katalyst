@@ -56,6 +56,8 @@ UPDATE_AGENT_WAS_LOADED=0
 if [[ "${KATALYST_SKIP_LAUNCHCTL:-0}" != "1" ]]; then
   launchctl print "gui/$(id -u)/dev.katalyst.session-sync" >/dev/null 2>&1 && SYNC_AGENT_WAS_LOADED=1
   launchctl print "gui/$(id -u)/dev.katalyst.update-check" >/dev/null 2>&1 && UPDATE_AGENT_WAS_LOADED=1
+  launchctl bootout "gui/$(id -u)/com.katalyst.update-check" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/com.katalyst.update-check.plist"
 fi
 touch "$USER_BACKUP_MANIFEST"
 backup_user_path() {

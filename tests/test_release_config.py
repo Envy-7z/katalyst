@@ -35,6 +35,20 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertNotIn("plan-auto-open", installer)
         self.assertIn("katalyst-migrate-profile", installer)
 
+    def test_patch_series_sequence_and_integrity(self) -> None:
+        patches = sorted((ROOT / "patches").glob("*.patch"))
+        self.assertGreaterEqual(len(patches), 25)
+        for i, patch in enumerate(patches, start=1):
+            self.assertTrue(patch.name.startswith(f"{i:04d}-"), f"Patch out of order: {patch.name}")
+            content = patch.read_text(encoding="utf-8")
+            self.assertIn("diff --git", content, f"Patch missing diff: {patch.name}")
+            self.assertNotIn("<<<<<<<", content)
+            self.assertNotIn(">>>>>>>", content)
+
+        patch_0024 = (ROOT / "patches/0024-feat-katalyst-add-omp-status-panel.patch").read_text()
+        self.assertIn("+use crate::agent_connection_store::{AgentConnectionStatus, AgentConnectionStore};", patch_0024)
+        self.assertIn("ToggleStatusPanel", patch_0024)
+        self.assertIn("toggle_panel_focus::<agent_ui::KatalystStatusPanel>", patch_0024)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,17 +1,18 @@
-From b91b29ad7cfc0d01e148d547c998a1b2eb5780f1 Mon Sep 17 00:00:00 2001
-From: Katalyst Maintainers <maintainers@katalyst.dev>
-Date: Sat, 12 Sep 2026 13:51:01 +0700
-Subject: [PATCH] feat(katalyst): add OMP status panel
+From 8c86b3d33c0e338bff68a1e5a4e860ae09a22b7a Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Mon, 14 Sep 2026 09:55:37 +0700
+Subject: [PATCH] feat(katalyst): add OMP status panel with dedicated toggle
+ action
 
 ---
- crates/agent_ui/src/agent_panel.rs    | 251 +++++++++++++++++++++-----
- crates/agent_ui/src/agent_ui.rs       |   4 +-
- crates/settings_ui/src/settings_ui.rs |   2 +-
- crates/zed/src/zed.rs                 |  12 +-
- 4 files changed, 224 insertions(+), 45 deletions(-)
+ crates/agent_ui/src/agent_panel.rs    | 269 +++++++++++++++++++++++++-
+ crates/agent_ui/src/agent_ui.rs       |  11 +-
+ crates/settings_ui/src/settings_ui.rs |  14 +-
+ crates/zed/src/zed.rs                 |  17 +-
+ 4 files changed, 297 insertions(+), 14 deletions(-)
 
 diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
-index 33c33b3bd3..efaf3bb4b6 100644
+index 33c33b3bd3..5068f8a38a 100644
 --- a/crates/agent_ui/src/agent_panel.rs
 +++ b/crates/agent_ui/src/agent_panel.rs
 @@ -37,7 +37,7 @@ use zed_actions::{
@@ -23,10 +24,10 @@ index 33c33b3bd3..efaf3bb4b6 100644
  use crate::completion_provider::{AgentContextSelection, AgentContextSource};
  use crate::plan_progress;
  use crate::terminal_thread_metadata_store::{
-@@ -1191,6 +1191,215 @@ pub struct AgentPanel {
+@@ -1190,6 +1190,267 @@ pub struct AgentPanel {
+ 
      is_active: bool,
  }
- 
 +/// A compact, read-only view of the currently available Katalyst agent
 +/// capabilities. It lives in the workspace's right dock, leaving the primary
 +/// agent panel focused on the conversation itself.
@@ -38,9 +39,9 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +
 +impl KatalystStatusPanel {
 +    pub fn new(agent_panel: Option<Entity<AgentPanel>>, cx: &mut Context<Self>) -> Self {
-+        let agent_panel_observation = agent_panel.as_ref().map(|agent_panel| {
-+            cx.observe(agent_panel, |_, _, cx| cx.notify())
-+        });
++        let agent_panel_observation = agent_panel
++            .as_ref()
++            .map(|agent_panel| cx.observe(agent_panel, |_, _, cx| cx.notify()));
 +
 +        Self {
 +            focus_handle: cx.focus_handle(),
@@ -54,9 +55,17 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +            .gap_2()
 +            .items_center()
 +            .child(
-+                Icon::new(if available { IconName::Check } else { IconName::Circle })
-+                    .size(IconSize::Small)
-+                    .color(if available { Color::Success } else { Color::Muted }),
++                Icon::new(if available {
++                    IconName::Check
++                } else {
++                    IconName::Circle
++                })
++                .size(IconSize::Small)
++                .color(if available {
++                    Color::Success
++                } else {
++                    Color::Muted
++                }),
 +            )
 +            .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
 +    }
@@ -65,17 +74,33 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +        h_flex()
 +            .gap_2()
 +            .items_center()
-+            .child(Icon::new(IconName::Sparkle).size(IconSize::Small).color(Color::Muted))
-+            .child(Label::new(label).size(LabelSize::Small).color(Color::Default))
++            .child(
++                Icon::new(IconName::Sparkle)
++                    .size(IconSize::Small)
++                    .color(Color::Muted),
++            )
++            .child(
++                Label::new(label)
++                    .size(LabelSize::Small)
++                    .color(Color::Default),
++            )
 +    }
 +
 +    fn connection_state(&self, cx: &App) -> (SharedString, IconName, Color, bool) {
 +        let Some(agent_panel) = self.agent_panel.as_ref().and_then(WeakEntity::upgrade) else {
-+            return ("Not configured".into(), IconName::Circle, Color::Muted, false);
++            return (
++                "Not configured".into(),
++                IconName::Circle,
++                Color::Muted,
++                false,
++            );
 +        };
 +
 +        let (agent, connection_store) = agent_panel.read_with(cx, |agent_panel, cx| {
-+            (agent_panel.selected_agent(cx), agent_panel.connection_store().clone())
++            (
++                agent_panel.selected_agent(cx),
++                agent_panel.connection_store().clone(),
++            )
 +        });
 +
 +        if !matches!(agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
@@ -91,12 +116,18 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +            AgentConnectionStatus::Connected => {
 +                ("Connected".into(), IconName::Check, Color::Success, true)
 +            }
-+            AgentConnectionStatus::Connecting => {
-+                ("Starting".into(), IconName::ArrowCircle, Color::Muted, false)
-+            }
-+            AgentConnectionStatus::Disconnected => {
-+                ("Not configured".into(), IconName::Circle, Color::Muted, false)
-+            }
++            AgentConnectionStatus::Connecting => (
++                "Starting".into(),
++                IconName::ArrowCircle,
++                Color::Muted,
++                false,
++            ),
++            AgentConnectionStatus::Disconnected => (
++                "Not configured".into(),
++                IconName::Circle,
++                Color::Muted,
++                false,
++            ),
 +        }
 +    }
 +}
@@ -126,7 +157,13 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +        position == DockPosition::Right
 +    }
 +
-+    fn set_position(&mut self, _position: DockPosition, _window: &mut Window, _cx: &mut Context<Self>) {}
++    fn set_position(
++        &mut self,
++        _position: DockPosition,
++        _window: &mut Window,
++        _cx: &mut Context<Self>,
++    ) {
++    }
 +
 +    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
 +        px(320.)
@@ -137,11 +174,11 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +    }
 +
 +    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
-+        true
++        false
 +    }
 +
 +    fn activation_priority(&self) -> u32 {
-+        4
++        7
 +    }
 +
 +    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
@@ -153,13 +190,14 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +    }
 +
 +    fn toggle_action(&self) -> Box<dyn Action> {
-+        Box::new(ToggleFocus)
++        Box::new(crate::ToggleStatusPanel)
 +    }
 +}
 +
 +impl Render for KatalystStatusPanel {
 +    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-+        let (connection_label, connection_icon, connection_color, connected) = self.connection_state(cx);
++        let (connection_label, connection_icon, connection_color, connected) =
++            self.connection_state(cx);
 +        let card = |children: Vec<AnyElement>| {
 +            v_flex()
 +                .gap_3()
@@ -185,19 +223,31 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +                        h_flex()
 +                            .gap_1()
 +                            .items_center()
-+                            .child(Icon::new(connection_icon).size(IconSize::Small).color(connection_color))
-+                            .child(Label::new(connection_label).size(LabelSize::Small).color(connection_color)),
++                            .child(
++                                Icon::new(connection_icon)
++                                    .size(IconSize::Small)
++                                    .color(connection_color),
++                            )
++                            .child(
++                                Label::new(connection_label)
++                                    .size(LabelSize::Small)
++                                    .color(connection_color),
++                            ),
 +                    ),
 +            )
 +            .child(card(vec![
-+                Label::new("Agent status").size(LabelSize::Small).into_any_element(),
++                Label::new("Agent status")
++                    .size(LabelSize::Small)
++                    .into_any_element(),
 +                Self::status_row("Core agent services", connected).into_any_element(),
 +                Self::status_row("Tooling and execution", connected).into_any_element(),
 +                Self::status_row("Context access", connected).into_any_element(),
 +                Self::status_row("Planning and reasoning", connected).into_any_element(),
 +            ]))
 +            .child(card(vec![
-+                Label::new("Current capabilities").size(LabelSize::Small).into_any_element(),
++                Label::new("Current capabilities")
++                    .size(LabelSize::Small)
++                    .into_any_element(),
 +                Self::capability_row("Code generation").into_any_element(),
 +                Self::capability_row("Code review").into_any_element(),
 +                Self::capability_row("Refactoring").into_any_element(),
@@ -230,64 +280,33 @@ index 33c33b3bd3..efaf3bb4b6 100644
 +                            .justify_between()
 +                            .items_center()
 +                            .child(Label::new("Agent settings").size(LabelSize::Small))
-+                            .child(Icon::new(IconName::ChevronRight).size(IconSize::Small).color(Color::Muted)),
++                            .child(
++                                Icon::new(IconName::ChevronRight)
++                                    .size(IconSize::Small)
++                                    .color(Color::Muted),
++                            ),
 +                    ),
 +            )
 +    }
 +}
-+
+ 
  impl AgentPanel {
      fn serialize(&mut self, cx: &mut App) {
-         let Some(workspace_id) = self.workspace_id else {
-@@ -5966,46 +6175,6 @@ impl AgentPanel {
-                             .color(Color::Muted),
-                     ),
-             )
--            .child(
--                v_flex()
--                    .w_full()
--                    .max_w(px(520.))
--                    .gap_2()
--                    .p_3()
--                    .rounded_md()
--                    .border_1()
--                    .border_color(cx.theme().colors().border)
--                    .bg(cx.theme().colors().element_background)
--                    .child(
--                        h_flex()
--                            .justify_between()
--                            .child(Label::new("OMP Agent Panel").size(LabelSize::Default))
--                            .child(
--                                Label::new(if matches!(self.selected_agent, Agent::Custom { ref id } if id.as_ref() == "omp") {
--                                    "OMP ACP"
--                                } else {
--                                    "Agent picker"
--                                })
--                                .size(LabelSize::Small)
--                                .color(Color::Muted),
--                            ),
--                    )
--                    .child(
--                        h_flex()
--                            .gap_2()
--                            .child(Icon::new(IconName::Check).color(Color::Success))
--                            .child(
--                                Label::new("Agent ready for your workspace")
--                                    .size(LabelSize::Small)
--                                    .color(Color::Muted),
--                            ),
--                    )
--                    .child(
--                        Label::new("Planning · coding · review · debugging · documentation")
--                            .size(LabelSize::Small)
--                            .color(Color::Muted),
--                    ),
--            )
-             .child(
-                 h_flex()
-                     .w_full()
+@@ -5945,7 +6206,11 @@ impl AgentPanel {
+                         .gap_2()
+                         .items_center()
+                         .child(Icon::new(icon).color(Color::Muted).size(IconSize::Small))
+-                        .child(Label::new(label).size(LabelSize::Small).color(Color::Default)),
++                        .child(
++                            Label::new(label)
++                                .size(LabelSize::Small)
++                                .color(Color::Default),
++                        ),
+                 )
+         };
+ 
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index 5769530d36..87496f10f3 100644
+index 5769530d36..0355cfa98a 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
 @@ -72,8 +72,8 @@ use workspace::{OpenOptions, Workspace};
@@ -301,8 +320,29 @@ index 5769530d36..87496f10f3 100644
  };
  use crate::agent_registry_ui::AgentRegistryPage;
  pub use crate::inline_assistant::InlineAssistant;
+@@ -216,6 +216,8 @@ actions!(
+     [
+         /// Toggles the menu to create new agent threads.
+         ToggleNewThreadMenu,
++        /// Toggles focus on the Katalyst OMP status panel.
++        ToggleStatusPanel,
+         /// Toggles the options menu for agent settings and preferences.
+         ToggleOptionsMenu,
+         /// Toggles the profile or mode selector for switching between agent profiles.
+@@ -1273,10 +1275,7 @@ mod tests {
+ 
+     #[test]
+     fn test_katalyst_default_agent_is_omp() {
+-        assert_eq!(
+-            katalyst_default_agent(),
+-            Agent::Custom { id: "omp".into() }
+-        );
++        assert_eq!(katalyst_default_agent(), Agent::Custom { id: "omp".into() });
+     }
+ 
+     #[test]
 diff --git a/crates/settings_ui/src/settings_ui.rs b/crates/settings_ui/src/settings_ui.rs
-index 74ebc97130..532825d530 100644
+index 74ebc97130..ec00e0bf10 100644
 --- a/crates/settings_ui/src/settings_ui.rs
 +++ b/crates/settings_ui/src/settings_ui.rs
 @@ -901,7 +901,7 @@ fn open_settings_editor_with(
@@ -314,22 +354,37 @@ index 74ebc97130..532825d530 100644
                      appears_transparent: true,
                      traffic_light_position: Some(point(px(12.0), px(12.0))),
                  }),
+@@ -6494,9 +6494,7 @@ pub mod test {
+             .unwrap();
+     }
+     #[gpui::test]
+-    async fn test_open_skills_settings_action_opens_skills_list(
+-        cx: &mut gpui::TestAppContext,
+-    ) {
++    async fn test_open_skills_settings_action_opens_skills_list(cx: &mut gpui::TestAppContext) {
+         use project::Project;
+ 
+         cx.update(|cx| {
+@@ -6554,7 +6552,13 @@ pub mod test {
+         // Dispatch the action the way the command palette does: on the
+         // workspace window.
+         multi_workspace.update_in(cx, |_multi_workspace, window, cx| {
+-            window.dispatch_action(Box::new(zed_actions::OpenSettingsAt { path: AGENT_SKILLS_SETTINGS_PATH.to_string(), target: None }), cx);
++            window.dispatch_action(
++                Box::new(zed_actions::OpenSettingsAt {
++                    path: AGENT_SKILLS_SETTINGS_PATH.to_string(),
++                    target: None,
++                }),
++                cx,
++            );
+         });
+ 
+         cx.run_until_parked();
 diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
-index 696a2a2cc4..3f916ad1b6 100644
+index 696a2a2cc4..21d5f5df74 100644
 --- a/crates/zed/src/zed.rs
 +++ b/crates/zed/src/zed.rs
-@@ -540,6 +540,10 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
-                         cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
-                     multi_workspace_handle.update(cx, |multi_workspace, cx| {
-                         multi_workspace.register_sidebar(sidebar, cx);
-+                        // Katalyst's task navigation is a primary workspace surface.
-+                        // Open it with each new workspace rather than inheriting the
-+                        // upstream empty-window default of a collapsed sidebar.
-+                        multi_workspace.open_sidebar(cx);
-                     });
-                 })
-                 .ok();
-@@ -808,8 +812,14 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
+@@ -808,8 +808,13 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
              initialize_agent_panel(workspace_handle.clone(), cx.clone()).map(|r| r.log_err()),
          );
  
@@ -341,9 +396,26 @@ index 696a2a2cc4..3f916ad1b6 100644
 +                let panel = cx.new(|cx| agent_ui::KatalystStatusPanel::new(agent_panel, cx));
 +                workspace.add_panel(panel, window, cx);
 +            }
-+            workspace.reveal_panel::<agent_ui::KatalystStatusPanel>(window, cx);
          })?;
  
          anyhow::Ok(())
+@@ -1306,6 +1311,16 @@ fn register_actions(
+                 workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
+             },
+         )
++        .register_action(
++            |workspace: &mut Workspace,
++             _: &agent_ui::ToggleStatusPanel,
++             window: &mut Window,
++             cx: &mut Context<Workspace>| {
++                if !workspace.toggle_panel_focus::<agent_ui::KatalystStatusPanel>(window, cx) {
++                    workspace.close_panel::<agent_ui::KatalystStatusPanel>(window, cx);
++                }
++            },
++        )
+         .register_action(
+             |workspace: &mut Workspace,
+              _: &outline_panel::ToggleFocus,
 -- 
 2.50.1 (Apple Git-155)
+
