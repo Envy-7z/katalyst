@@ -97,7 +97,7 @@ impl PtySender {
             .0
             .send(Msg::Resize(window_size_from_terminal_bounds(bounds)))
         {
-            log::error!("failed to resize alacritty pty: {error}");
+            log::debug!("failed to resize alacritty pty: {error}");
         }
     }
 

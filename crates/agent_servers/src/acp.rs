@@ -1280,6 +1280,12 @@ impl AcpConnection {
                         )
                     });
 
+                    // Suppress resolve_locations during history replay to avoid
+                    // opening hundreds of single-file worktrees on session load.
+                    cx.update(|cx| {
+                        thread.update(cx, |t, _cx| t.set_loading_session(true));
+                    });
+
                     // Register the session before awaiting the RPC so that any
                     // `session/update` notifications that arrive during the call
                     // (e.g. history replay during `session/load`) can find the thread.
@@ -1287,7 +1293,6 @@ impl AcpConnection {
                     cx.update(|cx| {
                         this.register_session(session_id.clone(), &thread, None, None, cx)
                     });
-
                     let response =
                         match rpc_call(this.connection.clone(), session_id.clone(), directories)
                             .await
@@ -1299,6 +1304,9 @@ impl AcpConnection {
                                 return Err(Arc::new(err));
                             }
                         };
+                    cx.update(|cx| {
+                        thread.update(cx, |t, _cx| t.set_loading_session(false));
+                    });
 
                     let (modes, config_options) =
                         config_state(response.modes, response.config_options);

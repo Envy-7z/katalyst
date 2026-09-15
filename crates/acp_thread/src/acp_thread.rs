@@ -1132,10 +1132,30 @@ impl ToolCall {
         project: WeakEntity<Project>,
         cx: &mut AsyncApp,
     ) -> Option<ResolvedLocation> {
-        // Skip directory paths or wildcard/semicolon patterns to avoid attempting
-        // to read directory bytes as a file buffer.
-        if location.path.is_dir() || location.path.to_string_lossy().contains(';') {
+        // Skip directory paths, glob wildcards, semicolons, colons (selectors/URIs), queries,
+        // or non-existent files to avoid attempting to canonicalize or read invalid paths as buffers.
+        let path_str = location.path.to_string_lossy();
+        if location.path.is_dir()
+            || path_str.contains(';')
+            || path_str.contains('*')
+            || path_str.contains('?')
+            || path_str.contains(':')
+            || path_str.ends_with("-wal")
+            || path_str.ends_with("-shm")
+            || !location.path.is_file()
+        {
             return None;
+        }
+
+        // Skip binary files, archives, and database files that cannot be opened as text buffers.
+        if let Some(ext) = location.path.extension().and_then(|e| e.to_str()) {
+            match ext.to_ascii_lowercase().as_str() {
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" | "icns" | "pdf" | "zip"
+                | "tar" | "gz" | "bz2" | "xz" | "dylib" | "so" | "a" | "o" | "rlib" | "bin"
+                | "dmg" | "db" | "sqlite" | "sqlite3" | "db3" | "vscdb" | "wal" | "shm"
+                | "lock" => return None,
+                _ => {}
+            }
         }
 
         let buffer = project
@@ -2121,6 +2141,10 @@ pub struct AcpThread {
     pending_terminal_output: HashMap<acp::TerminalId, Vec<Vec<u8>>>,
     pending_terminal_exit: HashMap<acp::TerminalId, acp::TerminalExitStatus>,
     had_error: bool,
+    /// Set to `true` while a session is being loaded/resumed (history replay).
+    /// `resolve_locations` is skipped during this window to avoid opening
+    /// hundreds of single-file worktrees and spiking memory on startup.
+    is_loading_session: bool,
     /// The user's unsent prompt text, persisted so it can be restored when reloading the thread.
     draft_prompt: Option<Vec<acp::ContentBlock>>,
     /// The initial scroll position for the thread view, set during session registration.
@@ -2374,11 +2398,15 @@ impl AcpThread {
             pending_terminal_output: HashMap::default(),
             pending_terminal_exit: HashMap::default(),
             had_error: false,
+            is_loading_session: false,
             draft_prompt: None,
             ui_scroll_position: None,
             streaming_text_buffer: None,
             idle_sleep_prevention: IdleSleepPrevention::Inactive,
         }
+    }
+    pub fn set_loading_session(&mut self, loading: bool) {
+        self.is_loading_session = loading;
     }
 
     pub fn parent_session_id(&self) -> Option<&acp::SessionId> {
@@ -3379,6 +3407,9 @@ impl AcpThread {
     }
 
     pub fn resolve_locations(&mut self, id: acp::ToolCallId, cx: &mut Context<Self>) {
+        if self.is_loading_session {
+            return;
+        }
         let project = self.project.clone();
         let should_update_agent_location = self.parent_session_id.is_none();
         let Some((_, tool_call)) = self.tool_call_mut(&id) else {
