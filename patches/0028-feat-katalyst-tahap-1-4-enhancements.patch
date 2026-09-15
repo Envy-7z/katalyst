@@ -1,4 +1,4 @@
-From 388b8b7c0fb9f65418c20256248b18e65fc90fa1 Mon Sep 17 00:00:00 2001
+From e5db3f7b1e51a86152e3f398d14ce59c4d53d50c Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Mon, 14 Sep 2026 22:25:49 +0700
 Subject: [PATCH] feat(katalyst): add tahap 1-4 enhancements (diff co-editing,
@@ -8,7 +8,8 @@ Subject: [PATCH] feat(katalyst): add tahap 1-4 enhancements (diff co-editing,
  crates/acp_thread/src/acp_thread.rs           | 65 +++++++++++++++++++
  crates/agent_ui/src/agent_diff.rs             | 23 +++++++
  .../src/conversation_view/thread_view.rs      | 46 ++++++++++++-
- 3 files changed, 132 insertions(+), 2 deletions(-)
+ crates/zed/src/zed.rs                         |  2 +-
+ 4 files changed, 133 insertions(+), 3 deletions(-)
 
 diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
 index 0858a3f42c..764dbb8675 100644
@@ -219,6 +220,19 @@ index fdd848e166..91828c0669 100644
              .child(if has_location {
                  h_flex()
                      .id(("open-tool-call-location", entry_ix))
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 21d5f5df74..6167ae91a9 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1561,7 +1561,7 @@ fn open_about_window(cx: &mut App) {
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+ 
+-            let katalyst_version = "0.2.0";
++            let katalyst_version = "0.2.3";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+             let commit_prefix = if commit_short.len() >= 8 {
 -- 
 2.50.1 (Apple Git-155)
 
