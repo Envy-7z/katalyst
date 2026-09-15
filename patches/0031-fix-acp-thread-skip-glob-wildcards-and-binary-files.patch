@@ -1,0 +1,48 @@
+From af637ebfc78490d26db520f9a73ce3aabb250131 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Tue, 15 Sep 2026 17:29:43 +0700
+Subject: [PATCH] fix(acp_thread): skip glob wildcards and binary file
+ extensions in resolve_location
+
+---
+ crates/acp_thread/src/acp_thread.rs | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index a85cb4b3bd..dcd07547ae 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -1132,12 +1132,27 @@ impl ToolCall {
+         project: WeakEntity<Project>,
+         cx: &mut AsyncApp,
+     ) -> Option<ResolvedLocation> {
+-        // Skip directory paths or wildcard/semicolon patterns to avoid attempting
+-        // to read directory bytes as a file buffer.
+-        if location.path.is_dir() || location.path.to_string_lossy().contains(';') {
++        // Skip directory paths, glob wildcards, or semicolon lists to avoid attempting
++        // to canonicalize or read non-files as buffers.
++        let path_str = location.path.to_string_lossy();
++        if location.path.is_dir()
++            || path_str.contains(';')
++            || path_str.contains('*')
++            || path_str.contains('?')
++        {
+             return None;
+         }
+ 
++        // Skip binary files and archives that cannot be opened as text buffers.
++        if let Some(ext) = location.path.extension().and_then(|e| e.to_str()) {
++            match ext.to_ascii_lowercase().as_str() {
++                "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" | "icns" | "pdf" | "zip"
++                | "tar" | "gz" | "bz2" | "xz" | "dylib" | "so" | "a" | "o" | "rlib" | "bin"
++                | "dmg" => return None,
++                _ => {}
++            }
++        }
++
+         let buffer = project
+             .update(cx, |project, cx| {
+                 if let Some(path) = project.project_path_for_absolute_path(&location.path, cx) {
+-- 
+2.50.1 (Apple Git-155)
+
