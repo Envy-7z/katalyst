@@ -6640,7 +6640,7 @@ impl ThreadView {
                                     .pt_1()
                                     .justify_end()
                                     .child(
-                                        Button::new("revert_turn", "↩ Revert Turn")
+                                        Button::new(SharedString::from(format!("revert_turn_{entry_ix}")), "↩ Revert Turn")
                                             .label_size(LabelSize::XSmall)
                                             .style(ButtonStyle::Subtle)
                                             .color(Color::Muted)
@@ -8698,13 +8698,16 @@ impl ThreadView {
                                 .border_color(self.tool_card_border_color(cx))
                                 .child(input_output_header("Raw Input:".into()))
                                 .children(tool_call.raw_input_markdown.clone().map(|input| {
-                                    div().id(("tool-call-raw-input-markdown", entry_ix)).child(
-                                        self.render_markdown(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "tool-call-raw-input-markdown-{entry_ix}-{}",
+                                            tool_call.id.0
+                                        )))
+                                        .child(self.render_markdown(
                                             input,
                                             MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
                                             cx,
-                                        ),
-                                    )
+                                        ))
                                 }))
                                 .child(input_output_header("Output:".into())),
                         )
@@ -8872,7 +8875,7 @@ impl ThreadView {
                                                     if is_cancelled_edit && !has_revealed_diff {
                                                         this.child(
                                                             div()
-                                                                .id(entry_ix)
+                                                                .id(SharedString::from(format!("interrupted-edit-{entry_ix}-{}", tool_call.id.0)))
                                                                 .tooltip(Tooltip::text(
                                                                     "Interrupted Edit",
                                                                 ))
@@ -8998,7 +9001,10 @@ impl ThreadView {
                 if layout == ToolCallLayout::Floating {
                     this.child(
                         div()
-                            .id(("floating-tool-call-body", entry_ix))
+                            .id(SharedString::from(format!(
+                                "floating-tool-call-body-{entry_ix}-{}",
+                                tool_call.id.0
+                            )))
                             .max_h_40()
                             .overflow_y_scroll()
                             .child(body),
@@ -10083,10 +10089,12 @@ impl ThreadView {
                                         match selection {
                                             Some(PermissionSelection::SelectedPatterns(_)) => {
                                                 // Already in pattern mode — toggle.
-                                                this.permission_selections
+                                                if let Some(s) = this
+                                                    .permission_selections
                                                     .get_mut(&tool_call_id_for_pattern)
-                                                    .expect("just matched above")
-                                                    .toggle_pattern(pattern_index);
+                                                {
+                                                    s.toggle_pattern(pattern_index);
+                                                }
                                             }
                                             _ => {
                                                 // First click: activate pattern mode
@@ -10228,7 +10236,7 @@ impl ThreadView {
                             return this;
                         }
 
-                        seen_kinds.push(option.kind).unwrap();
+                        let _ = seen_kinds.push(option.kind);
 
                         this.key_binding(
                             KeyBinding::for_action_in(action, focus_handle, cx)
@@ -10354,7 +10362,10 @@ impl ThreadView {
 
         let tool_icon = if is_file && has_failed && has_revealed_diff {
             div()
-                .id(entry_ix)
+                .id(SharedString::from(format!(
+                    "interrupted-edit-icon-{entry_ix}-{}",
+                    tool_call.id.0
+                )))
                 .tooltip(Tooltip::text("Interrupted Edit"))
                 .child(DecoratedIcon::new(
                     file_icon,
@@ -10498,7 +10509,10 @@ impl ThreadView {
             .children(exit_badge)
             .child(if has_location {
                 h_flex()
-                    .id(("open-tool-call-location", entry_ix))
+                    .id(SharedString::from(format!(
+                        "open-tool-call-location-{entry_ix}-{}",
+                        tool_call.id.0
+                    )))
                     .w_full()
                     .map(|this| {
                         if use_card_layout {
