@@ -3744,6 +3744,8 @@ impl ThreadView {
 
     fn render_inline_plan_card(
         &self,
+        entry_ix: usize,
+        chunk_ix: usize,
         info: crate::plan_progress::PlanProposalInfo,
         _window: &Window,
         cx: &Context<Self>,
@@ -3753,6 +3755,9 @@ impl ThreadView {
         let summary = info.summary;
 
         v_flex()
+            .id(SharedString::from(format!(
+                "inline-plan-card-{entry_ix}-{chunk_ix}"
+            )))
             .w_full()
             .my_2()
             .p_3()
@@ -3794,41 +3799,49 @@ impl ThreadView {
                     .justify_end()
                     .gap_2()
                     .child(
-                        Button::new("inline-open-plan", "Open Plan")
-                            .label_size(LabelSize::Small)
-                            .size(ButtonSize::Compact)
-                            .style(ButtonStyle::Subtle)
-                            .on_click({
-                                let plan_path = plan_path.clone();
-                                let workspace = self.workspace.clone();
-                                move |_event, window, cx| {
-                                    if let Some(workspace) = workspace.upgrade() {
-                                        workspace.update(cx, |ws, cx| {
-                                            let _ = ws.open_abs_path(
-                                                plan_path.clone(),
-                                                workspace::OpenOptions::default(),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
+                        Button::new(
+                            SharedString::from(format!("inline-open-plan-{entry_ix}-{chunk_ix}")),
+                            "Open Plan",
+                        )
+                        .label_size(LabelSize::Small)
+                        .size(ButtonSize::Compact)
+                        .style(ButtonStyle::Subtle)
+                        .on_click({
+                            let plan_path = plan_path.clone();
+                            let workspace = self.workspace.clone();
+                            move |_event, window, cx| {
+                                if let Some(workspace) = workspace.upgrade() {
+                                    workspace.update(cx, |ws, cx| {
+                                        let _ = ws.open_abs_path(
+                                            plan_path.clone(),
+                                            workspace::OpenOptions::default(),
+                                            window,
+                                            cx,
+                                        );
+                                    });
                                 }
-                            }),
+                            }
+                        }),
                     )
                     .child(
-                        Button::new("inline-build-plan", "Build Locally")
-                            .label_size(LabelSize::Small)
-                            .size(ButtonSize::Compact)
-                            .style(ButtonStyle::Filled)
-                            .start_icon(
-                                Icon::new(IconName::PlayOutlined)
-                                    .size(IconSize::Small)
-                                    .color(Color::Accent),
-                            )
-                            .on_click(cx.listener(move |this, _event, window, cx| {
+                        Button::new(
+                            SharedString::from(format!("inline-build-plan-{entry_ix}-{chunk_ix}")),
+                            "Build Locally",
+                        )
+                        .label_size(LabelSize::Small)
+                        .size(ButtonSize::Compact)
+                        .style(ButtonStyle::Filled)
+                        .start_icon(
+                            Icon::new(IconName::PlayOutlined)
+                                .size(IconSize::Small)
+                                .color(Color::Accent),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, window, cx| {
                                 let cmd = format!("/go {}", plan_path.display());
                                 this.submit_slash_command(&cmd, window, cx);
-                            })),
+                            },
+                        )),
                     ),
             )
             .into_any_element()
@@ -6390,7 +6403,7 @@ impl ThreadView {
                                 .gap_2()
                                 .child(Divider::horizontal())
                                 .child(
-                                    Button::new("restore-checkpoint", "Restore Checkpoint")
+                                    Button::new(SharedString::from(format!("restore-checkpoint-{entry_ix}")), "Restore Checkpoint")
                                         .start_icon(Icon::new(IconName::Undo).size(IconSize::XSmall).color(Color::Muted))
                                         .label_size(LabelSize::XSmall)
                                         .color(Color::Muted)
@@ -6555,11 +6568,17 @@ impl ThreadView {
 
                                     if active_skills.is_some() || plan_proposal.is_some() {
                                         let container = v_flex()
+                                            .id(SharedString::from(format!(
+                                                "assistant-msg-extra-{entry_ix}-{chunk_ix}"
+                                            )))
                                             .w_full()
                                             .gap_2()
                                             .when_some(active_skills, |this, (skills_text, _)| {
                                                 this.child(
                                                     h_flex()
+                                                        .id(SharedString::from(format!(
+                                                            "active-skills-badge-{entry_ix}-{chunk_ix}"
+                                                        )))
                                                         .gap_1p5()
                                                         .items_center()
                                                         .px_2()
@@ -6589,7 +6608,13 @@ impl ThreadView {
                                             .child(md_element)
                                             .when_some(plan_proposal, |this, info| {
                                                 this.child(
-                                                    self.render_inline_plan_card(info, window, cx),
+                                                    self.render_inline_plan_card(
+                                                        entry_ix,
+                                                        chunk_ix,
+                                                        info,
+                                                        window,
+                                                        cx,
+                                                    ),
                                                 )
                                             });
                                         Some(container.into_any_element())
