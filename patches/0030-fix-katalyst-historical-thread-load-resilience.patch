@@ -1,0 +1,115 @@
+From e73c55d1e5bfa150444e0a454d0512f5fb80fab5 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Tue, 15 Sep 2026 16:14:35 +0700
+Subject: [PATCH] fix(katalyst): add timeout fallback to resume_session,
+ directory guard, and sidebar active entry reset
+
+---
+ crates/acp_thread/src/acp_thread.rs      |  6 ++++
+ crates/agent_ui/src/conversation_view.rs | 36 ++++++++++++++++++++++--
+ crates/sidebar/src/sidebar.rs            | 15 ++++++----
+ 3 files changed, 48 insertions(+), 9 deletions(-)
+
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index 764dbb8675..a85cb4b3bd 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -1132,6 +1132,12 @@ impl ToolCall {
+         project: WeakEntity<Project>,
+         cx: &mut AsyncApp,
+     ) -> Option<ResolvedLocation> {
++        // Skip directory paths or wildcard/semicolon patterns to avoid attempting
++        // to read directory bytes as a file buffer.
++        if location.path.is_dir() || location.path.to_string_lossy().contains(';') {
++            return None;
++        }
++
+         let buffer = project
+             .update(cx, |project, cx| {
+                 if let Some(path) = project.project_path_for_absolute_path(&location.path, cx) {
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index 2e54d297fc..cc360e8b01 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -1220,9 +1220,39 @@ impl ConversationView {
+                         }
+                     }
+                 },
+-                None => Err(anyhow!(LoadError::Other(
+-                    "Session restoration timed out. You can retry or send a message.".into()
+-                ))),
++                None => {
++                    if let Some(session_id) = resume_session_id.clone()
++                        && connection.supports_resume_session()
++                        && !resumed_without_history
++                    {
++                        log::warn!(
++                            "load_session timed out after 15s for {session_id:?}; falling back to resume_session"
++                        );
++                        let fallback = cx
++                            .update(|_, cx| {
++                                connection.clone().resume_session(
++                                    session_id,
++                                    project.clone(),
++                                    session_work_dirs,
++                                    title,
++                                    cx,
++                                )
++                            })
++                            .log_err();
++                        if let Some(fallback_task) = fallback {
++                            resumed_without_history = true;
++                            fallback_task.await.map_err(|e| anyhow!(e))
++                        } else {
++                            Err(anyhow!(LoadError::Other(
++                                "Session restoration timed out. You can retry or send a message.".into()
++                            )))
++                        }
++                    } else {
++                        Err(anyhow!(LoadError::Other(
++                            "Session restoration timed out. You can retry or send a message.".into()
++                        )))
++                    }
++                }
+             };
+ 
+             this.update_in(cx, |this, window, cx| {
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index a8e1b67ad5..e633daadcb 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -66,11 +66,10 @@ use unicode_segmentation::UnicodeSegmentation as _;
+ use util::ResultExt as _;
+ use util::path_list::PathList;
+ use workspace::{
+-    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
+-    MultiWorkspace, MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject,
+-    PreviousThread, ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar,
+-    SidebarSide, Toast, ToggleWorkspaceSidebar, Workspace, notifications::NotificationId,
+-    sidebar_side_context_menu,
++    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp, MultiWorkspace,
++    MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject, PreviousThread,
++    ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar, SidebarSide, Toast,
++    ToggleWorkspaceSidebar, Workspace, notifications::NotificationId, sidebar_side_context_menu,
+ };
+ 
+ use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
+@@ -4443,10 +4442,14 @@ impl Sidebar {
+             remote_connection::dismiss_connection_modal(&modal_workspace, cx);
+ 
+             if result.is_err() {
+-                this.update(cx, |this, _cx| {
++                this.update(cx, |this, cx| {
+                     if this.pending_thread_activation == Some(pending_thread_id) {
+                         this.pending_thread_activation = None;
+                     }
++                    if matches!(&this.active_entry, Some(ActiveEntry::Thread { thread_id, .. }) if *thread_id == pending_thread_id) {
++                        this.active_entry = None;
++                    }
++                    this.update_entries(cx);
+                 })
+                 .ok();
+             }
+-- 
+2.50.1 (Apple Git-155)
+

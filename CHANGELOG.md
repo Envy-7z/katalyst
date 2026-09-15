@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codebase Intelligence & Workflow Skills**:
   - Added 9 modular skill manifests under `~/.katalyst/skills/` (`repo-symbol-graph`, `blast-radius`, `fault-localization`, `parallel-agent-lanes`, `micro-commit`, `runtime-debug`, `stacked-review`, `semantic-anchor`, `remote-offload`).
 
+
+### Fixed
+- **Historical Session Restoration Resilience**:
+  - Added automatic fallback to `resume_session` when `load_session` times out after 15s on massive historical sessions (>100 turns), connecting instantly without memory bloat.
+  - Added directory guard in `resolve_location` (`!location.path.is_dir()`), eliminating buffer read errors when tool calls reference directory paths.
+  - Fixed sidebar active entry state leaking when workspace opening fails, preventing invalid UI state dereferencing.
 ## [0.2.2] - 2026-09-14
 
 ### Added
