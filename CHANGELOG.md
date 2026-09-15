@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Filtered out glob wildcards (`*`, `?`), selectors and URIs (`:`), database files (`.db`, `.sqlite`, `.sqlite3`, `.db3`, `.vscdb`, `-wal`, `-shm`), and binary file extensions (`.png`, `.icns`, `.zip`, `.pdf`) in ACP location resolution, preventing crashes, buffer read errors, and lock contention.
   - Suppressed location resolution during historical session replay (`is_loading_session`), preventing startup storm of hundreds of concurrent worktree allocations.
   - Demoted Alacritty PTY resize error to debug log level.
+  - Scoped inline plan card action button IDs (`inline-open-plan`, `inline-build-plan`) and checkpoint button IDs by message entry and chunk indices, eliminating GPUI duplicate element ID crashes during plan reviews.
 ## [0.2.2] - 2026-09-14
 
 ### Added
