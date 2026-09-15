@@ -1220,9 +1220,39 @@ impl ConversationView {
                         }
                     }
                 },
-                None => Err(anyhow!(LoadError::Other(
-                    "Session restoration timed out. You can retry or send a message.".into()
-                ))),
+                None => {
+                    if let Some(session_id) = resume_session_id.clone()
+                        && connection.supports_resume_session()
+                        && !resumed_without_history
+                    {
+                        log::warn!(
+                            "load_session timed out after 15s for {session_id:?}; falling back to resume_session"
+                        );
+                        let fallback = cx
+                            .update(|_, cx| {
+                                connection.clone().resume_session(
+                                    session_id,
+                                    project.clone(),
+                                    session_work_dirs,
+                                    title,
+                                    cx,
+                                )
+                            })
+                            .log_err();
+                        if let Some(fallback_task) = fallback {
+                            resumed_without_history = true;
+                            fallback_task.await.map_err(|e| anyhow!(e))
+                        } else {
+                            Err(anyhow!(LoadError::Other(
+                                "Session restoration timed out. You can retry or send a message.".into()
+                            )))
+                        }
+                    } else {
+                        Err(anyhow!(LoadError::Other(
+                            "Session restoration timed out. You can retry or send a message.".into()
+                        )))
+                    }
+                }
             };
 
             this.update_in(cx, |this, window, cx| {

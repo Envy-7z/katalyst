@@ -66,11 +66,10 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use util::ResultExt as _;
 use util::path_list::PathList;
 use workspace::{
-    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp,
-    MultiWorkspace, MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject,
-    PreviousThread, ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar,
-    SidebarSide, Toast, ToggleWorkspaceSidebar, Workspace, notifications::NotificationId,
-    sidebar_side_context_menu,
+    CloseWindow, FocusWorkspaceSidebar, MoveProjectDown, MoveProjectUp, MultiWorkspace,
+    MultiWorkspaceEvent, NextProject, NextThread, Open, OpenMode, PreviousProject, PreviousThread,
+    ProjectGroupKey, RemovalIntent, SaveIntent, Sidebar as WorkspaceSidebar, SidebarSide, Toast,
+    ToggleWorkspaceSidebar, Workspace, notifications::NotificationId, sidebar_side_context_menu,
 };
 
 use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
@@ -4443,10 +4442,14 @@ impl Sidebar {
             remote_connection::dismiss_connection_modal(&modal_workspace, cx);
 
             if result.is_err() {
-                this.update(cx, |this, _cx| {
+                this.update(cx, |this, cx| {
                     if this.pending_thread_activation == Some(pending_thread_id) {
                         this.pending_thread_activation = None;
                     }
+                    if matches!(&this.active_entry, Some(ActiveEntry::Thread { thread_id, .. }) if *thread_id == pending_thread_id) {
+                        this.active_entry = None;
+                    }
+                    this.update_entries(cx);
                 })
                 .ok();
             }

@@ -1132,6 +1132,12 @@ impl ToolCall {
         project: WeakEntity<Project>,
         cx: &mut AsyncApp,
     ) -> Option<ResolvedLocation> {
+        // Skip directory paths or wildcard/semicolon patterns to avoid attempting
+        // to read directory bytes as a file buffer.
+        if location.path.is_dir() || location.path.to_string_lossy().contains(';') {
+            return None;
+        }
+
         let buffer = project
             .update(cx, |project, cx| {
                 if let Some(path) = project.project_path_for_absolute_path(&location.path, cx) {
