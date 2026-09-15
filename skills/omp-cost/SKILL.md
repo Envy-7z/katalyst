@@ -11,7 +11,7 @@ description: >-
 
 `omp-cost` inspects detailed token usage, prompt caching efficiency, and API costs broken down by calendar month for individual profiles or all profiles. It queries local session transcripts and SQLite databases managed by Oh My Pi.
 
-Binary location: `/Users/wisnuu/.local/bin/omp-cost` (in `$PATH`).
+Binary location: `~/.local/bin/omp-cost` (or `omp-cost` in `$PATH`).
 
 ## Quick Invocations
 
