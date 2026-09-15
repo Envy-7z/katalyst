@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added automatic fallback to `resume_session` when `load_session` times out after 15s on massive historical sessions (>100 turns), connecting instantly without memory bloat.
   - Added directory guard in `resolve_location` (`!location.path.is_dir()`), eliminating buffer read errors when tool calls reference directory paths.
   - Fixed sidebar active entry state leaking when workspace opening fails, preventing invalid UI state dereferencing.
-  - Filtered out glob wildcards (`*`, `?`) and binary file extensions (`.png`, `.icns`, `.zip`, `.pdf`) in ACP location resolution, eliminating "Binary files are not supported" errors during session replay.
+  - Filtered out glob wildcards (`*`, `?`), selectors and URIs (`:`), database files (`.db`, `.sqlite`, `.sqlite3`, `.db3`, `.vscdb`, `-wal`, `-shm`), and binary file extensions (`.png`, `.icns`, `.zip`, `.pdf`) in ACP location resolution, preventing crashes, buffer read errors, and lock contention.
+  - Suppressed location resolution during historical session replay (`is_loading_session`), preventing startup storm of hundreds of concurrent worktree allocations.
+  - Demoted Alacritty PTY resize error to debug log level.
 ## [0.2.2] - 2026-09-14
 
 ### Added
