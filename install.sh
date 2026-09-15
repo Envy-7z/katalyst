@@ -272,10 +272,8 @@ materialize_config() {
 materialize_config "$KATALYST_DATA_HOME/config/zed/keymap.json" "$HOME/.config/zed/keymap.json" "$TEMP_DIR/config-snapshot/zed-keymap.json"
 materialize_config "$KATALYST_DATA_HOME/config/omp/config.yml" "$HOME/.omp/agent/config.yml" "$TEMP_DIR/config-snapshot/omp-config.yml"
 materialize_config "$KATALYST_DATA_HOME/config/omp/mcp.json.example" "$HOME/.omp/agent/mcp.json" "$TEMP_DIR/config-snapshot/omp-mcp.json"
-rm -rf "$KATALYST_STATE_HOME/skills.new"
-ditto "$KATALYST_DATA_HOME/skills" "$KATALYST_STATE_HOME/skills.new"
-rm -rf "$KATALYST_STATE_HOME/skills"
-mv "$KATALYST_STATE_HOME/skills.new" "$KATALYST_STATE_HOME/skills"
+mkdir -p "$KATALYST_STATE_HOME/skills"
+ditto "$KATALYST_DATA_HOME/skills" "$KATALYST_STATE_HOME/skills"
 if [[ -d "$HOME/.omp/agent/skills" && ! -L "$HOME/.omp/agent/skills" ]]; then
   for skill in "$HOME/.omp/agent/skills"/*; do
     [[ -e "$skill" ]] && ditto "$skill" "$KATALYST_STATE_HOME/skills/$(basename "$skill")"

@@ -58,6 +58,11 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("if [[ \"$INSTALL_COMPLETE\" -ne 1 ]]", installer)
         self.assertIn('mv "$KATALYST_APPLICATIONS_HOME/Katalyst.app.previous" "$KATALYST_APPLICATIONS_HOME/Katalyst.app"', installer)
 
+    def test_skills_update_merges_without_wiping_custom_user_skills(self) -> None:
+        installer = (ROOT / "install.sh").read_text()
+        self.assertNotIn('rm -rf "$KATALYST_STATE_HOME/skills"\n', installer)
+        self.assertIn('ditto "$KATALYST_DATA_HOME/skills" "$KATALYST_STATE_HOME/skills"', installer)
+
     @unittest.skipUnless(sys.platform == "darwin", "installer integration requires macOS ditto")
     def test_v01_late_upgrade_failure_restores_all_user_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
