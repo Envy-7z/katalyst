@@ -1,15 +1,15 @@
-From 29bf8a9760a90911276ad72217b266e4afb93d63 Mon Sep 17 00:00:00 2001
+From 0da23ae174eb3452cb08f6935389ebd40e9b5087 Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Tue, 15 Sep 2026 14:34:47 +0700
-Subject: [PATCH] fix(katalyst): resolve duplicate element ID panic in thread
- view
+Date: Tue, 15 Sep 2026 15:14:34 +0700
+Subject: [PATCH] fix(katalyst): resolve duplicate element ID and permission
+ capacity panic in thread view
 
 ---
- .../src/conversation_view/thread_view.rs      | 30 +++++++++++++------
- 1 file changed, 21 insertions(+), 9 deletions(-)
+ .../src/conversation_view/thread_view.rs      | 40 +++++++++++++------
+ 1 file changed, 27 insertions(+), 13 deletions(-)
 
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index 91828c0669..0a664ad768 100644
+index 91828c0669..ba661731c7 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -6640,7 +6640,7 @@ impl ThreadView {
@@ -63,7 +63,32 @@ index 91828c0669..0a664ad768 100644
                              .max_h_40()
                              .overflow_y_scroll()
                              .child(body),
-@@ -10354,7 +10360,10 @@ impl ThreadView {
+@@ -10083,10 +10089,12 @@ impl ThreadView {
+                                         match selection {
+                                             Some(PermissionSelection::SelectedPatterns(_)) => {
+                                                 // Already in pattern mode — toggle.
+-                                                this.permission_selections
++                                                if let Some(s) = this
++                                                    .permission_selections
+                                                     .get_mut(&tool_call_id_for_pattern)
+-                                                    .expect("just matched above")
+-                                                    .toggle_pattern(pattern_index);
++                                                {
++                                                    s.toggle_pattern(pattern_index);
++                                                }
+                                             }
+                                             _ => {
+                                                 // First click: activate pattern mode
+@@ -10228,7 +10236,7 @@ impl ThreadView {
+                             return this;
+                         }
+ 
+-                        seen_kinds.push(option.kind).unwrap();
++                        let _ = seen_kinds.push(option.kind);
+ 
+                         this.key_binding(
+                             KeyBinding::for_action_in(action, focus_handle, cx)
+@@ -10354,7 +10362,10 @@ impl ThreadView {
  
          let tool_icon = if is_file && has_failed && has_revealed_diff {
              div()
@@ -75,7 +100,7 @@ index 91828c0669..0a664ad768 100644
                  .tooltip(Tooltip::text("Interrupted Edit"))
                  .child(DecoratedIcon::new(
                      file_icon,
-@@ -10498,7 +10507,10 @@ impl ThreadView {
+@@ -10498,7 +10509,10 @@ impl ThreadView {
              .children(exit_badge)
              .child(if has_location {
                  h_flex()
