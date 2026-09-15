@@ -36,7 +36,7 @@ jobs:
           # Note: macos-15-intel requires GitHub Actions Larger Runners (paid).
           # Intel Mac users install via manual clone per README.
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - name: Resolve release version
