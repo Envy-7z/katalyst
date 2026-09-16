@@ -1522,7 +1522,7 @@ fn session_directories_from_work_dirs(
     let cwd = ordered_paths
         .next()
         .cloned()
-        .ok_or_else(|| anyhow!("Working directory cannot be empty"))?;
+        .unwrap_or_else(|| util::paths::home_dir().join(".katalyst/history"));
     let additional_directories = if supports_additional_directories {
         ordered_paths.cloned().collect()
     } else {
@@ -1792,13 +1792,33 @@ impl AgentConnection for AcpConnection {
             title,
             move |connection, session_id, directories| {
                 Box::pin(async move {
-                    let response = connection
-                        .send_request(
-                            directories.into_load_session_request(session_id.clone(), mcp_servers),
-                        )
-                        .block_task()
-                        .await
-                        .map_err(map_acp_error)?;
+                    let request = directories
+                        .clone()
+                        .into_load_session_request(session_id.clone(), mcp_servers.clone());
+                    let result = connection.send_request(request).block_task().await;
+                    let response =
+                        match result {
+                            Ok(response) => response,
+                            Err(err) => {
+                                let history_dir = util::paths::home_dir().join(".katalyst/history");
+                                if directories.cwd != history_dir {
+                                    let fallback_dirs = SessionDirectories {
+                                        cwd: history_dir,
+                                        additional_directories: vec![directories.cwd],
+                                    };
+                                    connection
+                                        .send_request(fallback_dirs.into_load_session_request(
+                                            session_id.clone(),
+                                            mcp_servers,
+                                        ))
+                                        .block_task()
+                                        .await
+                                        .map_err(map_acp_error)?
+                                } else {
+                                    return Err(map_acp_error(err));
+                                }
+                            }
+                        };
                     Ok(SessionConfigResponse {
                         modes: response.modes,
                         config_options: response.config_options,
@@ -1836,14 +1856,32 @@ impl AgentConnection for AcpConnection {
             title,
             move |connection, session_id, directories| {
                 Box::pin(async move {
-                    let response = connection
-                        .send_request(
-                            directories
-                                .into_resume_session_request(session_id.clone(), mcp_servers),
-                        )
-                        .block_task()
-                        .await
-                        .map_err(map_acp_error)?;
+                    let request = directories
+                        .clone()
+                        .into_resume_session_request(session_id.clone(), mcp_servers.clone());
+                    let result = connection.send_request(request).block_task().await;
+                    let response = match result {
+                        Ok(response) => response,
+                        Err(err) => {
+                            let history_dir = util::paths::home_dir().join(".katalyst/history");
+                            if directories.cwd != history_dir {
+                                let fallback_dirs = SessionDirectories {
+                                    cwd: history_dir,
+                                    additional_directories: vec![directories.cwd],
+                                };
+                                connection
+                                    .send_request(fallback_dirs.into_resume_session_request(
+                                        session_id.clone(),
+                                        mcp_servers,
+                                    ))
+                                    .block_task()
+                                    .await
+                                    .map_err(map_acp_error)?
+                            } else {
+                                return Err(map_acp_error(err));
+                            }
+                        }
+                    };
                     Ok(SessionConfigResponse {
                         modes: response.modes,
                         config_options: response.config_options,

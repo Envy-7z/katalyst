@@ -1170,7 +1170,7 @@ impl ConversationView {
                 return;
             };
 
-            let timeout = cx.background_executor().timer(Duration::from_secs(15)).fuse();
+            let timeout = cx.background_executor().timer(Duration::from_secs(60)).fuse();
             futures::pin_mut!(timeout);
             let result_fut = result.fuse();
             futures::pin_mut!(result_fut);
@@ -1599,7 +1599,7 @@ impl ConversationView {
         // This handles the case where a thread is restored before authentication completes.
         let should_retry = match &self.server_state {
             ServerState::Loading { .. } => false,
-            ServerState::LoadError { .. } => true,
+            ServerState::LoadError { error } => matches!(error, LoadError::Exited { .. }),
             ServerState::Connected(connected) => {
                 connected.auth_state.is_ok() && connected.has_thread_error(cx)
             }
