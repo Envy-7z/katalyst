@@ -1,0 +1,34 @@
+From 879ad112cca1e0fb24c76cfdebdd0a85f7c30c73 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Wed, 16 Sep 2026 13:42:21 +0700
+Subject: [PATCH] feat(zed): default user-data-dir to ~/.katalyst when
+ launching as standalone app
+
+---
+ crates/zed/src/main.rs | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/crates/zed/src/main.rs b/crates/zed/src/main.rs
+index 67555b9c73..5e62e19790 100644
+--- a/crates/zed/src/main.rs
++++ b/crates/zed/src/main.rs
+@@ -265,7 +265,15 @@ fn main() {
+             directory.as_os_str().to_owned(),
+         ]
+     } else {
+-        Vec::new()
++        let default_dir = std::env::var("KATALYST_STATE_HOME")
++            .ok()
++            .map(std::path::PathBuf::from)
++            .unwrap_or_else(|| paths::home_dir().join(".katalyst"));
++        let directory = paths::set_custom_data_dir(&default_dir.to_string_lossy());
++        vec![
++            std::ffi::OsString::from("--user-data-dir"),
++            directory.as_os_str().to_owned(),
++        ]
+     };
+ 
+     #[cfg(target_os = "windows")]
+-- 
+2.50.1 (Apple Git-155)
+
