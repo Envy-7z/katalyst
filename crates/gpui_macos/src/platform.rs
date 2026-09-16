@@ -97,6 +97,10 @@ unsafe fn build_classes() {
                 should_handle_reopen as extern "C" fn(&mut Object, Sel, id, bool),
             );
             decl.add_method(
+                sel!(applicationShouldTerminateAfterLastWindowClosed:),
+                should_terminate_after_last_window_closed as extern "C" fn(&mut Object, Sel, id) -> bool,
+            );
+            decl.add_method(
                 sel!(applicationWillTerminate:),
                 will_terminate as extern "C" fn(&mut Object, Sel, id),
             );
@@ -1354,6 +1358,10 @@ extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, has_open_wi
             platform.0.lock().reopen.get_or_insert(callback);
         }
     }
+}
+
+extern "C" fn should_terminate_after_last_window_closed(_: &mut Object, _: Sel, _: id) -> bool {
+    false
 }
 
 extern "C" fn will_terminate(this: &mut Object, _: Sel, _: id) {
