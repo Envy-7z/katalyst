@@ -1,0 +1,131 @@
+From b36f8853bd389a875c347398f68c4af5e0474ced Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Wed, 16 Sep 2026 13:30:05 +0700
+Subject: [PATCH] fix(acp): add CWD history fallback and extend session load
+ timeout to 60s
+
+---
+ crates/agent_servers/src/acp.rs          | 70 ++++++++++++++++++------
+ crates/agent_ui/src/conversation_view.rs |  4 +-
+ 2 files changed, 56 insertions(+), 18 deletions(-)
+
+diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
+index 56d47bfd1d..cfb3922723 100644
+--- a/crates/agent_servers/src/acp.rs
++++ b/crates/agent_servers/src/acp.rs
+@@ -1522,7 +1522,7 @@ fn session_directories_from_work_dirs(
+     let cwd = ordered_paths
+         .next()
+         .cloned()
+-        .ok_or_else(|| anyhow!("Working directory cannot be empty"))?;
++        .unwrap_or_else(|| util::paths::home_dir().join(".katalyst/history"));
+     let additional_directories = if supports_additional_directories {
+         ordered_paths.cloned().collect()
+     } else {
+@@ -1792,13 +1792,33 @@ impl AgentConnection for AcpConnection {
+             title,
+             move |connection, session_id, directories| {
+                 Box::pin(async move {
+-                    let response = connection
+-                        .send_request(
+-                            directories.into_load_session_request(session_id.clone(), mcp_servers),
+-                        )
+-                        .block_task()
+-                        .await
+-                        .map_err(map_acp_error)?;
++                    let request = directories
++                        .clone()
++                        .into_load_session_request(session_id.clone(), mcp_servers.clone());
++                    let result = connection.send_request(request).block_task().await;
++                    let response =
++                        match result {
++                            Ok(response) => response,
++                            Err(err) => {
++                                let history_dir = util::paths::home_dir().join(".katalyst/history");
++                                if directories.cwd != history_dir {
++                                    let fallback_dirs = SessionDirectories {
++                                        cwd: history_dir,
++                                        additional_directories: vec![directories.cwd],
++                                    };
++                                    connection
++                                        .send_request(fallback_dirs.into_load_session_request(
++                                            session_id.clone(),
++                                            mcp_servers,
++                                        ))
++                                        .block_task()
++                                        .await
++                                        .map_err(map_acp_error)?
++                                } else {
++                                    return Err(map_acp_error(err));
++                                }
++                            }
++                        };
+                     Ok(SessionConfigResponse {
+                         modes: response.modes,
+                         config_options: response.config_options,
+@@ -1836,14 +1856,32 @@ impl AgentConnection for AcpConnection {
+             title,
+             move |connection, session_id, directories| {
+                 Box::pin(async move {
+-                    let response = connection
+-                        .send_request(
+-                            directories
+-                                .into_resume_session_request(session_id.clone(), mcp_servers),
+-                        )
+-                        .block_task()
+-                        .await
+-                        .map_err(map_acp_error)?;
++                    let request = directories
++                        .clone()
++                        .into_resume_session_request(session_id.clone(), mcp_servers.clone());
++                    let result = connection.send_request(request).block_task().await;
++                    let response = match result {
++                        Ok(response) => response,
++                        Err(err) => {
++                            let history_dir = util::paths::home_dir().join(".katalyst/history");
++                            if directories.cwd != history_dir {
++                                let fallback_dirs = SessionDirectories {
++                                    cwd: history_dir,
++                                    additional_directories: vec![directories.cwd],
++                                };
++                                connection
++                                    .send_request(fallback_dirs.into_resume_session_request(
++                                        session_id.clone(),
++                                        mcp_servers,
++                                    ))
++                                    .block_task()
++                                    .await
++                                    .map_err(map_acp_error)?
++                            } else {
++                                return Err(map_acp_error(err));
++                            }
++                        }
++                    };
+                     Ok(SessionConfigResponse {
+                         modes: response.modes,
+                         config_options: response.config_options,
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index cc360e8b01..bf7d01da92 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -1170,7 +1170,7 @@ impl ConversationView {
+                 return;
+             };
+ 
+-            let timeout = cx.background_executor().timer(Duration::from_secs(15)).fuse();
++            let timeout = cx.background_executor().timer(Duration::from_secs(60)).fuse();
+             futures::pin_mut!(timeout);
+             let result_fut = result.fuse();
+             futures::pin_mut!(result_fut);
+@@ -1599,7 +1599,7 @@ impl ConversationView {
+         // This handles the case where a thread is restored before authentication completes.
+         let should_retry = match &self.server_state {
+             ServerState::Loading { .. } => false,
+-            ServerState::LoadError { .. } => true,
++            ServerState::LoadError { error } => matches!(error, LoadError::Exited { .. }),
+             ServerState::Connected(connected) => {
+                 connected.auth_state.is_ok() && connected.has_thread_error(cx)
+             }
+-- 
+2.50.1 (Apple Git-155)
+

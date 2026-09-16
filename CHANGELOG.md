@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Suppressed location resolution during historical session replay (`is_loading_session`), preventing startup storm of hundreds of concurrent worktree allocations.
   - Demoted Alacritty PTY resize error to debug log level.
   - Scoped inline plan card action button IDs (`inline-open-plan`, `inline-build-plan`) and checkpoint button IDs by message entry and chunk indices, eliminating GPUI duplicate element ID crashes during plan reviews.
+  - Added automatic working directory fallback to `~/.katalyst/history` in `session/load` and `session/resume`, allowing seamless thread switching between project workspaces and imported/historical sessions without ACP cancellation errors.
+  - Extended ACP `session/load` timeout from 15s to 60s for multi-megabyte sessions, and prevented infinite reconnect storms on load errors.
 ## [0.2.2] - 2026-09-14
 
 ### Added
