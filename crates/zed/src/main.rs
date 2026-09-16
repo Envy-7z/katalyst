@@ -932,14 +932,23 @@ fn main() {
             .ok()
             .and_then(|request| OpenRequest::parse(request, cx).log_err())
         {
-            Some(request) if request.is_focus_app_only() => cx.spawn({
-                let app_state = app_state.clone();
-                async move |cx| {
-                    if let Err(e) = restore_or_create_workspace(app_state, cx).await {
-                        fail_to_open_window_async(e, cx)
+            Some(request)
+                if request.is_focus_app_only()
+                    || (request.open_paths.is_empty()
+                        && request.diff_paths.is_empty()
+                        && request.remote_connection.is_none()
+                        && request.join_channel.is_none()
+                        && request.open_channel_notes.is_empty()) =>
+            {
+                cx.spawn({
+                    let app_state = app_state.clone();
+                    async move |cx| {
+                        if let Err(e) = restore_or_create_workspace(app_state, cx).await {
+                            fail_to_open_window_async(e, cx)
+                        }
                     }
-                }
-            }),
+                })
+            }
             Some(request) => {
                 handle_open_request(request, app_state.clone(), cx);
                 Task::ready(())
