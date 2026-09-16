@@ -1,0 +1,52 @@
+From 0f04af53dd0fb98e486420e2c40f94fbd1f60c01 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Wed, 16 Sep 2026 17:29:55 +0700
+Subject: [PATCH] fix(gpui_macos): permanently disable AutomaticTermination so
+ AppKit never terminates Katalyst
+
+---
+ crates/agent_servers/src/acp.rs   | 6 +++++-
+ crates/gpui_macos/src/platform.rs | 3 ++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
+index 5aefca52db..5723e8f316 100644
+--- a/crates/agent_servers/src/acp.rs
++++ b/crates/agent_servers/src/acp.rs
+@@ -888,7 +888,10 @@ impl AcpConnection {
+         let tapped_incoming = incoming_lines.inspect({
+             let debug_log = debug_log.clone();
+             move |result| match result {
+-                Ok(line) => debug_log.record_line(AcpDebugMessageDirection::Incoming, line),
++                Ok(line) => {
++                    log::info!("ACP Incoming: {line}");
++                    debug_log.record_line(AcpDebugMessageDirection::Incoming, line);
++                }
+                 Err(err) => {
+                     log::warn!("ACP transport read error: {err}");
+                 }
+@@ -899,6 +902,7 @@ impl AcpConnection {
+             (Box::pin(stdin), debug_log.clone()),
+             async move |(mut writer, debug_log), line: String| {
+                 use futures::AsyncWriteExt;
++                log::info!("ACP Outgoing: {line}");
+                 debug_log.record_line(AcpDebugMessageDirection::Outgoing, &line);
+                 let mut bytes = line.into_bytes();
+                 bytes.push(b'\n');
+diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
+index c3ae3b3b18..958d20c39e 100644
+--- a/crates/gpui_macos/src/platform.rs
++++ b/crates/gpui_macos/src/platform.rs
+@@ -1312,7 +1312,8 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
+             name: thermal_name
+             object: process_info
+         ];
+-
++        let reason = ns_string("Keep Katalyst open");
++        let _: () = msg_send![process_info, disableAutomaticTermination: reason];
+         let observer = this as *mut Object as id;
+         let platform = get_mac_platform(this);
+         let callback = {
+-- 
+2.50.1 (Apple Git-155)
+
