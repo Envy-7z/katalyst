@@ -1,0 +1,39 @@
+From cdd7373e654e2456bb10355f1f36241db93fdd7d Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Wed, 16 Sep 2026 17:33:15 +0700
+Subject: [PATCH] fix(gpui_macos): implement
+ applicationShouldTerminateAfterLastWindowClosed returning NO
+
+---
+ crates/gpui_macos/src/platform.rs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
+index 958d20c39e..521a6009e7 100644
+--- a/crates/gpui_macos/src/platform.rs
++++ b/crates/gpui_macos/src/platform.rs
+@@ -96,6 +96,10 @@ unsafe fn build_classes() {
+                 sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+                 should_handle_reopen as extern "C" fn(&mut Object, Sel, id, bool),
+             );
++            decl.add_method(
++                sel!(applicationShouldTerminateAfterLastWindowClosed:),
++                should_terminate_after_last_window_closed as extern "C" fn(&mut Object, Sel, id) -> bool,
++            );
+             decl.add_method(
+                 sel!(applicationWillTerminate:),
+                 will_terminate as extern "C" fn(&mut Object, Sel, id),
+@@ -1356,6 +1360,10 @@ extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, has_open_wi
+     }
+ }
+ 
++extern "C" fn should_terminate_after_last_window_closed(_: &mut Object, _: Sel, _: id) -> bool {
++    false
++}
++
+ extern "C" fn will_terminate(this: &mut Object, _: Sel, _: id) {
+     let platform = unsafe { get_mac_platform(this) };
+     let mut lock = platform.0.lock();
+-- 
+2.50.1 (Apple Git-155)
+
