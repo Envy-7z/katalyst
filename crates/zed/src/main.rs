@@ -264,16 +264,14 @@ fn main() {
             std::ffi::OsString::from("--user-data-dir"),
             directory.as_os_str().to_owned(),
         ]
-    } else {
-        let default_dir = std::env::var("KATALYST_STATE_HOME")
-            .ok()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| paths::home_dir().join(".katalyst"));
-        let directory = paths::set_custom_data_dir(&default_dir.to_string_lossy());
+    } else if let Ok(custom_dir) = std::env::var("KATALYST_STATE_HOME") {
+        let directory = paths::set_custom_data_dir(&custom_dir);
         vec![
             std::ffi::OsString::from("--user-data-dir"),
             directory.as_os_str().to_owned(),
         ]
+    } else {
+        Vec::new()
     };
 
     #[cfg(target_os = "windows")]
