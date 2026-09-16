@@ -1,0 +1,38 @@
+From 36023926f2fc7f18f6414cecf5a111518c5e842c Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Wed, 16 Sep 2026 14:08:21 +0700
+Subject: [PATCH] fix(zed): preserve standard Application Support data dir so
+ existing threads load
+
+---
+ crates/zed/src/main.rs | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/crates/zed/src/main.rs b/crates/zed/src/main.rs
+index 5e62e19790..915d4413db 100644
+--- a/crates/zed/src/main.rs
++++ b/crates/zed/src/main.rs
+@@ -264,16 +264,14 @@ fn main() {
+             std::ffi::OsString::from("--user-data-dir"),
+             directory.as_os_str().to_owned(),
+         ]
+-    } else {
+-        let default_dir = std::env::var("KATALYST_STATE_HOME")
+-            .ok()
+-            .map(std::path::PathBuf::from)
+-            .unwrap_or_else(|| paths::home_dir().join(".katalyst"));
+-        let directory = paths::set_custom_data_dir(&default_dir.to_string_lossy());
++    } else if let Ok(custom_dir) = std::env::var("KATALYST_STATE_HOME") {
++        let directory = paths::set_custom_data_dir(&custom_dir);
+         vec![
+             std::ffi::OsString::from("--user-data-dir"),
+             directory.as_os_str().to_owned(),
+         ]
++    } else {
++        Vec::new()
+     };
+ 
+     #[cfg(target_os = "windows")]
+-- 
+2.50.1 (Apple Git-155)
+
