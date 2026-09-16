@@ -1,0 +1,48 @@
+From 8e87bb982369351be948ffcd91922233cd76301e Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Wed, 16 Sep 2026 16:58:20 +0700
+Subject: [PATCH] fix(zed): restore workspace on cold launch without paths to
+ prevent automatic termination
+
+---
+ crates/zed/src/main.rs | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
+
+diff --git a/crates/zed/src/main.rs b/crates/zed/src/main.rs
+index 915d4413db..45f31df764 100644
+--- a/crates/zed/src/main.rs
++++ b/crates/zed/src/main.rs
+@@ -932,14 +932,23 @@ fn main() {
+             .ok()
+             .and_then(|request| OpenRequest::parse(request, cx).log_err())
+         {
+-            Some(request) if request.is_focus_app_only() => cx.spawn({
+-                let app_state = app_state.clone();
+-                async move |cx| {
+-                    if let Err(e) = restore_or_create_workspace(app_state, cx).await {
+-                        fail_to_open_window_async(e, cx)
++            Some(request)
++                if request.is_focus_app_only()
++                    || (request.open_paths.is_empty()
++                        && request.diff_paths.is_empty()
++                        && request.remote_connection.is_none()
++                        && request.join_channel.is_none()
++                        && request.open_channel_notes.is_empty()) =>
++            {
++                cx.spawn({
++                    let app_state = app_state.clone();
++                    async move |cx| {
++                        if let Err(e) = restore_or_create_workspace(app_state, cx).await {
++                            fail_to_open_window_async(e, cx)
++                        }
+                     }
+-                }
+-            }),
++                })
++            }
+             Some(request) => {
+                 handle_open_request(request, app_state.clone(), cx);
+                 Task::ready(())
+-- 
+2.50.1 (Apple Git-155)
+
