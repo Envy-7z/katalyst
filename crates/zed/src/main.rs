@@ -265,7 +265,15 @@ fn main() {
             directory.as_os_str().to_owned(),
         ]
     } else {
-        Vec::new()
+        let default_dir = std::env::var("KATALYST_STATE_HOME")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| paths::home_dir().join(".katalyst"));
+        let directory = paths::set_custom_data_dir(&default_dir.to_string_lossy());
+        vec![
+            std::ffi::OsString::from("--user-data-dir"),
+            directory.as_os_str().to_owned(),
+        ]
     };
 
     #[cfg(target_os = "windows")]
