@@ -1796,33 +1796,73 @@ impl AgentConnection for AcpConnection {
                         .clone()
                         .into_load_session_request(session_id.clone(), mcp_servers.clone());
                     let result = connection.send_request(request).block_task().await;
-                    let response =
-                        match result {
-                            Ok(response) => response,
-                            Err(err) => {
-                                let history_dir = util::paths::home_dir().join(".katalyst/history");
-                                if directories.cwd != history_dir {
-                                    let fallback_dirs = SessionDirectories {
-                                        cwd: history_dir,
-                                        additional_directories: vec![directories.cwd],
-                                    };
-                                    connection
-                                        .send_request(fallback_dirs.into_load_session_request(
+                    let response = match result {
+                        Ok(response) => SessionConfigResponse {
+                            modes: response.modes,
+                            config_options: response.config_options,
+                        },
+                        Err(err) => {
+                            let history_dir = util::paths::home_dir().join(".katalyst/history");
+                            let retry_result = if directories.cwd != history_dir {
+                                let fallback_dirs = SessionDirectories {
+                                    cwd: history_dir.clone(),
+                                    additional_directories: vec![directories.cwd.clone()],
+                                };
+                                connection
+                                    .send_request(fallback_dirs.into_load_session_request(
+                                        session_id.clone(),
+                                        mcp_servers.clone(),
+                                    ))
+                                    .block_task()
+                                    .await
+                            } else {
+                                Err(err)
+                            };
+
+                            match retry_result {
+                                Ok(response) => SessionConfigResponse {
+                                    modes: response.modes,
+                                    config_options: response.config_options,
+                                },
+                                Err(load_err) => {
+                                    log::warn!(
+                                        "load_session failed for {session_id:?}: {load_err:?}; falling back to resume_session"
+                                    );
+                                    let resume_req = directories
+                                        .clone()
+                                        .into_resume_session_request(
                                             session_id.clone(),
-                                            mcp_servers,
-                                        ))
-                                        .block_task()
-                                        .await
-                                        .map_err(map_acp_error)?
-                                } else {
-                                    return Err(map_acp_error(err));
+                                            mcp_servers.clone(),
+                                        );
+                                    match connection.send_request(resume_req).block_task().await {
+                                        Ok(res) => SessionConfigResponse {
+                                            modes: res.modes,
+                                            config_options: res.config_options,
+                                        },
+                                        Err(_) => {
+                                            let fallback_dirs = SessionDirectories {
+                                                cwd: history_dir,
+                                                additional_directories: vec![directories.cwd],
+                                            };
+                                            let fallback_resume = connection
+                                                .send_request(fallback_dirs.into_resume_session_request(
+                                                    session_id.clone(),
+                                                    mcp_servers,
+                                                ))
+                                                .block_task()
+                                                .await
+                                                .map_err(map_acp_error)?;
+                                            SessionConfigResponse {
+                                                modes: fallback_resume.modes,
+                                                config_options: fallback_resume.config_options,
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        };
-                    Ok(SessionConfigResponse {
-                        modes: response.modes,
-                        config_options: response.config_options,
-                    })
+                        }
+                    };
+                    Ok(response)
                 })
             },
             cx,
