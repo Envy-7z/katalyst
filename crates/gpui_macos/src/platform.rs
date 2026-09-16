@@ -68,6 +68,7 @@ use std::{
 const NSUTF8StringEncoding: NSUInteger = 4;
 
 const MAC_PLATFORM_IVAR: &str = "platform";
+static mut INTENTIONAL_QUIT: bool = false;
 static mut APP_CLASS: *const Class = ptr::null();
 static mut APP_DELEGATE_CLASS: *const Class = ptr::null();
 
@@ -77,6 +78,10 @@ unsafe fn build_classes() {
         APP_CLASS = {
             let mut decl = ClassDecl::new("GPUIApplication", class!(NSApplication)).unwrap();
             decl.add_ivar::<*mut c_void>(MAC_PLATFORM_IVAR);
+            decl.add_method(
+                sel!(terminate:),
+                app_terminate as extern "C" fn(&mut Object, Sel, id),
+            );
             decl.register()
         }
     };
@@ -99,6 +104,10 @@ unsafe fn build_classes() {
             decl.add_method(
                 sel!(applicationShouldTerminateAfterLastWindowClosed:),
                 should_terminate_after_last_window_closed as extern "C" fn(&mut Object, Sel, id) -> bool,
+            );
+            decl.add_method(
+                sel!(applicationShouldTerminate:),
+                should_terminate as extern "C" fn(&mut Object, Sel, id) -> NSUInteger,
             );
             decl.add_method(
                 sel!(applicationWillTerminate:),
@@ -527,19 +536,13 @@ impl Platform for MacPlatform {
     }
 
     fn quit(&self) {
-        // Quitting the app causes us to close windows, which invokes `Window::on_close` callbacks
-        // synchronously before this method terminates. If we call `Platform::quit` while holding a
-        // borrow of the app state (which most of the time we will do), we will end up
-        // double-borrowing the app state in the `on_close` callbacks for our open windows. To solve
-        // this, we make quitting the application asynchronous so that we aren't holding borrows to
-        // the app state on the stack when we actually terminate the app.
-
         unsafe {
             DispatchQueue::main().exec_async_f(ptr::null_mut(), quit);
         }
 
         extern "C" fn quit(_: *mut c_void) {
             unsafe {
+                INTENTIONAL_QUIT = true;
                 let app = NSApplication::sharedApplication(nil);
                 let _: () = msg_send![app, terminate: nil];
             }
@@ -548,7 +551,6 @@ impl Platform for MacPlatform {
 
     fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
         use std::os::unix::process::CommandExt as _;
-
         let app_pid = std::process::id().to_string();
         let app_path = binary_path
             .or_else(|| {
@@ -1359,9 +1361,32 @@ extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, has_open_wi
         }
     }
 }
-
 extern "C" fn should_terminate_after_last_window_closed(_: &mut Object, _: Sel, _: id) -> bool {
     false
+}
+
+extern "C" fn should_terminate(_: &mut Object, _: Sel, _: id) -> NSUInteger {
+    const NS_TERMINATE_CANCEL: NSUInteger = 0;
+    const NS_TERMINATE_NOW: NSUInteger = 1;
+    unsafe {
+        if INTENTIONAL_QUIT {
+            NS_TERMINATE_NOW
+        } else {
+            log::warn!("Cancelled unintended AppKit automatic termination attempt");
+            NS_TERMINATE_CANCEL
+        }
+    }
+}
+
+extern "C" fn app_terminate(this: &mut Object, _: Sel, sender: id) {
+    unsafe {
+        if INTENTIONAL_QUIT {
+            let superclass = class!(NSApplication);
+            let () = msg_send![super(this, superclass), terminate: sender];
+        } else {
+            log::warn!("Ignored unintended AppKit automatic termination attempt (sender: {:?})", sender);
+        }
+    }
 }
 
 extern "C" fn will_terminate(this: &mut Object, _: Sel, _: id) {
