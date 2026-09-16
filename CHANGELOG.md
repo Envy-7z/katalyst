@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Scoped inline plan card action button IDs (`inline-open-plan`, `inline-build-plan`) and checkpoint button IDs by message entry and chunk indices, eliminating GPUI duplicate element ID crashes during plan reviews.
   - Added automatic working directory fallback to `~/.katalyst/history` in `session/load` and `session/resume`, allowing seamless thread switching between project workspaces and imported/historical sessions without ACP cancellation errors.
   - Extended ACP `session/load` timeout from 15s to 60s for multi-megabyte sessions, and prevented infinite reconnect storms on load errors.
-  - Defaulted application user data directory to `~/.katalyst` when launched standalone from macOS Finder/Dock, ensuring all workspaces, settings, and threads load correctly without requiring terminal CLI arguments.
+  - Added compile-time `CARGO_MANIFEST_DIR` and `ZED_REPO_ROOT` fallback to `dev_repo_root()` in `util.rs` (Patch 0035), preventing asset loading panics when launched outside the checkout.
+  - Preserved standard macOS Application Support data directory and restored all 92 sidebar threads while respecting `KATALYST_STATE_HOME` overrides (Patch 0036).
 ## [0.2.2] - 2026-09-14
 
 ### Added
