@@ -888,7 +888,10 @@ impl AcpConnection {
         let tapped_incoming = incoming_lines.inspect({
             let debug_log = debug_log.clone();
             move |result| match result {
-                Ok(line) => debug_log.record_line(AcpDebugMessageDirection::Incoming, line),
+                Ok(line) => {
+                    log::info!("ACP Incoming: {line}");
+                    debug_log.record_line(AcpDebugMessageDirection::Incoming, line);
+                }
                 Err(err) => {
                     log::warn!("ACP transport read error: {err}");
                 }
@@ -899,6 +902,7 @@ impl AcpConnection {
             (Box::pin(stdin), debug_log.clone()),
             async move |(mut writer, debug_log), line: String| {
                 use futures::AsyncWriteExt;
+                log::info!("ACP Outgoing: {line}");
                 debug_log.record_line(AcpDebugMessageDirection::Outgoing, &line);
                 let mut bytes = line.into_bytes();
                 bytes.push(b'\n');

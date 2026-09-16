@@ -1312,7 +1312,8 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
             name: thermal_name
             object: process_info
         ];
-
+        let reason = ns_string("Keep Katalyst open");
+        let _: () = msg_send![process_info, disableAutomaticTermination: reason];
         let observer = this as *mut Object as id;
         let platform = get_mac_platform(this);
         let callback = {
