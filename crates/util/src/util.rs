@@ -659,9 +659,11 @@ pub fn dev_repo_root() -> Option<&'static std::path::Path> {
     ROOT.get_or_init(|| {
         let exe = std::env::current_exe().ok();
         let candidates = [
+            std::env::var_os("ZED_REPO_ROOT").map(PathBuf::from),
             exe.clone(),
             exe.and_then(|exe| exe.canonicalize().ok()),
             std::env::current_dir().ok(),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
         ];
         candidates.into_iter().flatten().find_map(|start| {
             Some(
