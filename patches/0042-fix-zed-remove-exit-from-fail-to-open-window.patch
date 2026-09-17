@@ -1,0 +1,65 @@
+From a16206e5d31f23b28933522922f8ac400352bff0 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Thu, 17 Sep 2026 13:25:06 +0700
+Subject: [PATCH] fix(zed): remove process::exit(1) from fail_to_open_window to
+ prevent unexpected shutdown
+
+---
+ crates/zed/src/main.rs | 41 +----------------------------------------
+ 1 file changed, 1 insertion(+), 40 deletions(-)
+
+diff --git a/crates/zed/src/main.rs b/crates/zed/src/main.rs
+index 45f31df764..2d330e50eb 100644
+--- a/crates/zed/src/main.rs
++++ b/crates/zed/src/main.rs
+@@ -154,46 +154,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
+ }
+ 
+ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
+-    eprintln!(
+-        "Zed failed to open a window: {e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
+-    );
+-    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+-    {
+-        process::exit(1);
+-    }
+-
+-    // Maybe unify this with gpui::platform::linux::platform::ResultExt::notify_err(..)?
+-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+-    {
+-        use ashpd::desktop::notification::{Notification, NotificationProxy, Priority};
+-        _cx.spawn(async move |_cx| {
+-            let Ok(proxy) = NotificationProxy::new().await else {
+-                process::exit(1);
+-            };
+-
+-            let notification_id = "dev.zed.Oops";
+-            proxy
+-                .add_notification(
+-                    notification_id,
+-                    Notification::new("Zed failed to launch")
+-                        .body(Some(
+-                            format!(
+-                                "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
+-                            )
+-                            .as_str(),
+-                        ))
+-                        .priority(Priority::High)
+-                        .icon(ashpd::desktop::Icon::with_names(&[
+-                            "dialog-question-symbolic",
+-                        ])),
+-                )
+-                .await
+-                .ok();
+-
+-            process::exit(1);
+-        })
+-        .detach();
+-    }
++    log::error!("Zed failed to open a window: {e:#?}");
+ }
+ static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
+ 
+-- 
+2.50.1 (Apple Git-155)
+
