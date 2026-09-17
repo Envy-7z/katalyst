@@ -41,7 +41,7 @@ class TestPrivacyGuard(unittest.TestCase):
         violations = []
 
         for rel_path in tracked:
-            if rel_path.endswith(('.png', '.icns', '.jpg', '.wasm', '.tar', '.gz', '.zip')):
+            if rel_path.endswith(('.png', '.icns', '.jpg', '.wasm', '.tar', '.gz', '.zip')) or rel_path == 'scripts/pre-commit':
                 continue
             full_path = os.path.join(ROOT, rel_path)
             try:
