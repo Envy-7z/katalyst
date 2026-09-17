@@ -1,0 +1,60 @@
+From 9953b6ad5665ef960c11ec8d93c0d6aa8678d4a7 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Thu, 17 Sep 2026 13:34:27 +0700
+Subject: [PATCH] fix(gpui_macos): intercept _terminateWithStatus: to
+ completely block AppKit automatic termination
+
+---
+ crates/gpui_macos/src/platform.rs | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
+index 8585b65368..0a1882b258 100644
+--- a/crates/gpui_macos/src/platform.rs
++++ b/crates/gpui_macos/src/platform.rs
+@@ -82,6 +82,10 @@ unsafe fn build_classes() {
+                 sel!(terminate:),
+                 app_terminate as extern "C" fn(&mut Object, Sel, id),
+             );
++            decl.add_method(
++                sel!(_terminateWithStatus:),
++                app_terminate_with_status as extern "C" fn(&mut Object, Sel, i64),
++            );
+             decl.register()
+         }
+     };
+@@ -1318,8 +1322,11 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
+             name: thermal_name
+             object: process_info
+         ];
+-        let reason = ns_string("Keep Katalyst open");
+-        let _: () = msg_send![process_info, disableAutomaticTermination: reason];
++        let _: () = msg_send![process_info, setAutomaticTerminationSupportEnabled: NO];
++        for _ in 0..10 {
++            let reason = ns_string("Keep Katalyst open");
++            let _: () = msg_send![process_info, disableAutomaticTermination: reason];
++        }
+         let observer = this as *mut Object as id;
+         let platform = get_mac_platform(this);
+         let callback = {
+@@ -1389,6 +1396,17 @@ extern "C" fn app_terminate(this: &mut Object, _: Sel, sender: id) {
+     }
+ }
+ 
++extern "C" fn app_terminate_with_status(this: &mut Object, _: Sel, status: i64) {
++    unsafe {
++        if INTENTIONAL_QUIT {
++            let superclass = class!(NSApplication);
++            let () = msg_send![super(this, superclass), _terminateWithStatus: status];
++        } else {
++            log::warn!("Cancelled internal AppKit _terminateWithStatus attempt (status: {status})");
++        }
++    }
++}
++
+ extern "C" fn will_terminate(this: &mut Object, _: Sel, _: id) {
+     let platform = unsafe { get_mac_platform(this) };
+     let mut lock = platform.0.lock();
+-- 
+2.50.1 (Apple Git-155)
+
