@@ -82,6 +82,10 @@ unsafe fn build_classes() {
                 sel!(terminate:),
                 app_terminate as extern "C" fn(&mut Object, Sel, id),
             );
+            decl.add_method(
+                sel!(_terminateWithStatus:),
+                app_terminate_with_status as extern "C" fn(&mut Object, Sel, i64),
+            );
             decl.register()
         }
     };
@@ -1318,8 +1322,11 @@ extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
             name: thermal_name
             object: process_info
         ];
-        let reason = ns_string("Keep Katalyst open");
-        let _: () = msg_send![process_info, disableAutomaticTermination: reason];
+        let _: () = msg_send![process_info, setAutomaticTerminationSupportEnabled: NO];
+        for _ in 0..10 {
+            let reason = ns_string("Keep Katalyst open");
+            let _: () = msg_send![process_info, disableAutomaticTermination: reason];
+        }
         let observer = this as *mut Object as id;
         let platform = get_mac_platform(this);
         let callback = {
@@ -1385,6 +1392,17 @@ extern "C" fn app_terminate(this: &mut Object, _: Sel, sender: id) {
             let () = msg_send![super(this, superclass), terminate: sender];
         } else {
             log::warn!("Ignored unintended AppKit automatic termination attempt (sender: {:?})", sender);
+        }
+    }
+}
+
+extern "C" fn app_terminate_with_status(this: &mut Object, _: Sel, status: i64) {
+    unsafe {
+        if INTENTIONAL_QUIT {
+            let superclass = class!(NSApplication);
+            let () = msg_send![super(this, superclass), _terminateWithStatus: status];
+        } else {
+            log::warn!("Cancelled internal AppKit _terminateWithStatus attempt (status: {status})");
         }
     }
 }
