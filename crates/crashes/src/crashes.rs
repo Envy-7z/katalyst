@@ -32,6 +32,8 @@ pub fn force_backtrace() {
     let old_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         unsafe { env::set_var("RUST_BACKTRACE", "1") };
+        log::error!("CRITICAL RUST PANIC: {info:#?}");
+        let _ = std::fs::write("/tmp/katalyst-panic.log", format!("{info:#?}\n"));
         old_hook(info);
         // prevent the macOS crash dialog from popping up
         if cfg!(target_os = "macos") {
