@@ -10,7 +10,7 @@ use std::process::Stdio;
 /// process exits for any reason (including crashes), since the OS closes
 /// its handles, so spawned process trees can never outlive Zed.
 pub struct Child {
-    process: smol::process::Child,
+    process: std::mem::ManuallyDrop<smol::process::Child>,
     #[cfg(windows)]
     job: Option<windows_job::JobObject>,
 }
@@ -50,7 +50,7 @@ impl Child {
                     crate::redact::redact_command(&format!("{command:?}"))
                 )
             })?;
-        Ok(Self { process })
+        Ok(Self { process: std::mem::ManuallyDrop::new(process) })
     }
 
     #[cfg(windows)]
@@ -98,17 +98,15 @@ impl Child {
             })
             .ok();
 
-        Ok(Self { process, job })
+        Ok(Self { process: std::mem::ManuallyDrop::new(process), job })
     }
 
     /// Consumes the child, draining its stdout/stderr and waiting for it to
     /// exit, then returns the collected output.
-    pub async fn output(self) -> Result<std::process::Output> {
-        // NOTE: Keep `self` alive across this await, do not destructure it to
-        // pull `process` out first. On Windows that drops the job object early,
-        // which triggers `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and kills the
-        // child before `output()` finishes collecting its stdout/stderr.
-        Ok(self.process.output().await?)
+    pub async fn output(mut self) -> Result<std::process::Output> {
+        let process = unsafe { std::mem::ManuallyDrop::take(&mut self.process) };
+        std::mem::forget(self);
+        Ok(process.output().await?)
     }
 
     #[cfg(not(windows))]
@@ -116,6 +114,24 @@ impl Child {
         let pid = self.process.id();
         unsafe {
             libc::killpg(pid as i32, libc::SIGKILL);
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    pub fn terminate_gracefully(&mut self, grace_period: std::time::Duration) -> Result<()> {
+        let pid = self.process.id() as i32;
+        unsafe {
+            libc::killpg(pid, libc::SIGTERM);
+        }
+        let deadline = std::time::Instant::now() + grace_period;
+        while std::time::Instant::now() < deadline {
+            if let Ok(Some(_)) = self.process.try_status() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
         }
         Ok(())
     }
@@ -127,6 +143,16 @@ impl Child {
         } else {
             self.process.kill()?;
             Ok(())
+        }
+    }
+}
+
+#[cfg(not(windows))]
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ = self.terminate_gracefully(std::time::Duration::from_secs(2));
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.process);
         }
     }
 }

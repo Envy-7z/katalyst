@@ -748,7 +748,45 @@ impl Render for AgentDiffPane {
                         ),
                 )
             })
-            .when(!is_empty, |el| el.child(self.editor.clone()))
+            .when(!is_empty, |el| {
+                el.child(self.editor.clone()).child(
+                    h_flex()
+                        .absolute()
+                        .bottom_4()
+                        .p_1p5()
+                        .gap_2()
+                        .items_center()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(cx.theme().colors().border)
+                        .bg(cx.theme().colors().elevated_surface_background)
+                        .shadow_md()
+                        .child(
+                            Button::new("diff-revert-turn", "Revert Turn")
+                                .label_size(LabelSize::Small)
+                                .size(ButtonSize::Compact)
+                                .style(ButtonStyle::Subtle)
+                                .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.reject_all(&RejectAll, window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("diff-keep-all", "Keep All (Enter)")
+                                .label_size(LabelSize::Small)
+                                .size(ButtonSize::Compact)
+                                .style(ButtonStyle::Filled)
+                                .start_icon(
+                                    Icon::new(IconName::Check)
+                                        .size(IconSize::Small)
+                                        .color(Color::Success),
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.keep_all(&KeepAll, window, cx);
+                                })),
+                        ),
+                )
+            })
     }
 }
 

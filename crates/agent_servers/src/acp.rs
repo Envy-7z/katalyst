@@ -884,7 +884,45 @@ impl AcpConnection {
         // closures to the !Send foreground thread.
         let (dispatch_tx, dispatch_rx) = mpsc::unbounded::<ForegroundWork>();
 
-        let incoming_lines = futures::io::BufReader::new(stdout).lines();
+        let incoming_lines = futures::stream::unfold(
+            (futures::io::BufReader::new(stdout), String::new()),
+            async move |(mut reader, mut buf)| {
+                use futures::AsyncBufReadExt;
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => {
+                            if !buf.is_empty() {
+                                let remaining = std::mem::take(&mut buf);
+                                return Some((Ok(remaining), (reader, buf)));
+                            }
+                            return None;
+                        }
+                        Ok(_) => {
+                            buf.push_str(&line);
+                            if buf.ends_with('\n') {
+                                let mut complete = std::mem::take(&mut buf);
+                                if complete.ends_with('\n') {
+                                    complete.pop();
+                                    if complete.ends_with('\r') {
+                                        complete.pop();
+                                    }
+                                }
+                                if !complete.trim().is_empty() {
+                                    return Some((Ok(complete), (reader, buf)));
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            if err.kind() == std::io::ErrorKind::Interrupted {
+                                continue;
+                            }
+                            return Some((Err(err), (reader, buf)));
+                        }
+                    }
+                }
+            },
+        );
         let tapped_incoming = incoming_lines.inspect({
             let debug_log = debug_log.clone();
             move |result| match result {

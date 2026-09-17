@@ -2265,6 +2265,31 @@ pub enum ThreadStatus {
     Generating,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CanonicalAgentState {
+    Idle,
+    Planning,
+    PlanReady,
+    Approved,
+    Executing,
+    AwaitingInput,
+    ChangesReady,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlanExecutionProgress {
+    pub current_phase: Option<SharedString>,
+    pub current_step: usize,
+    pub total_steps: usize,
+    pub step_status: SharedString,
+    pub pending_approval: bool,
+    pub checkpoint: Option<String>,
+    pub error: Option<SharedString>,
+}
+
 #[derive(Debug, Clone)]
 pub enum LoadError {
     Unsupported {
@@ -2586,6 +2611,52 @@ impl AcpThread {
         }
 
         false
+    }
+
+    pub fn canonical_state(&self) -> CanonicalAgentState {
+        if self.is_waiting_for_confirmation() {
+            CanonicalAgentState::AwaitingInput
+        } else if self.running_turn.is_some() {
+            if !self.plan.is_empty() && self.plan.stats().in_progress_entry.is_some() {
+                CanonicalAgentState::Executing
+            } else {
+                CanonicalAgentState::Planning
+            }
+        } else if self.had_error {
+            CanonicalAgentState::Failed
+        } else if !self.plan.is_empty() && self.plan.stats().completed as usize == self.plan.entries.len() && !self.plan.entries.is_empty() {
+            CanonicalAgentState::Completed
+        } else if !self.plan.is_empty() && self.plan.stats().completed == 0 && self.plan.stats().in_progress_entry.is_none() {
+            CanonicalAgentState::PlanReady
+        } else if self.has_pending_edit_tool_calls() {
+            CanonicalAgentState::ChangesReady
+        } else {
+            CanonicalAgentState::Idle
+        }
+    }
+    pub fn plan_execution_progress(&self, cx: &App) -> Option<PlanExecutionProgress> {
+        if self.plan.is_empty() {
+            return None;
+        }
+        let stats = self.plan.stats();
+        let total_steps = self.plan.entries.len();
+        let current_step = (stats.completed as usize + (if stats.in_progress_entry.is_some() { 1 } else { 0 })).min(total_steps);
+        let step_status: SharedString = if let Some(in_progress) = stats.in_progress_entry {
+            in_progress.content.read(cx).source().clone()
+        } else if stats.pending == 0 && stats.completed > 0 {
+            "All tasks completed".into()
+        } else {
+            "Pending approval".into()
+        };
+        Some(PlanExecutionProgress {
+            current_phase: None,
+            current_step,
+            total_steps,
+            step_status,
+            pending_approval: self.is_waiting_for_confirmation(),
+            checkpoint: None,
+            error: if self.had_error { Some("Execution error encountered".into()) } else { None },
+        })
     }
 
     pub fn has_in_progress_tool_calls(&self) -> bool {

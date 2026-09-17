@@ -5876,6 +5876,45 @@ impl Sidebar {
         );
     }
 
+    fn delete_thread_permanently(
+        &mut self,
+        thread_id: ThreadId,
+        session_id: Option<&acp::SessionId>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session_id) = session_id {
+            let session_id_str = session_id.to_string();
+            cx.background_spawn(async move {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let omp_sessions = std::path::PathBuf::from(home).join(".omp/agent/sessions");
+                    if omp_sessions.is_dir() {
+                        if let Ok(entries) = std::fs::read_dir(&omp_sessions) {
+                            for entry in entries.flatten() {
+                                if entry.path().is_dir() {
+                                    if let Ok(sub_entries) = std::fs::read_dir(entry.path()) {
+                                        for sub_entry in sub_entries.flatten() {
+                                            if sub_entry.file_name().to_string_lossy().contains(&session_id_str) {
+                                                let _ = std::fs::remove_file(sub_entry.path());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }).detach();
+        }
+
+        let store = ThreadMetadataStore::global(cx);
+        store.update(cx, |store, cx| {
+            store.delete(thread_id, cx);
+        });
+
+        self.update_entries(cx);
+    }
+
     /// Archive a thread and activate the nearest neighbor or a draft.
     ///
     /// IMPORTANT: when activating a neighbor or creating a fallback draft,
@@ -6775,27 +6814,43 @@ impl Sidebar {
                                 .into_any_element(),
                         ),
                         None => Some(
-                            IconButton::new("archive-thread", IconName::Archive)
-                                .icon_size(IconSize::Small)
-                                .tooltip({
-                                    let focus_handle = focus_handle.clone();
-                                    move |_window, cx| {
-                                        Tooltip::for_action_in(
-                                            "Archive Thread",
-                                            &ArchiveSelectedThread,
-                                            &focus_handle,
-                                            cx,
-                                        )
-                                    }
-                                })
-                                .on_click({
-                                    let session_id = session_id_for_delete.clone();
-                                    cx.listener(move |this, _, window, cx| {
-                                        if let Some(ref session_id) = session_id {
-                                            this.archive_thread(session_id, window, cx);
-                                        }
-                                    })
-                                })
+                            h_flex()
+                                .gap_0p5()
+                                .child(
+                                    IconButton::new("archive-thread", IconName::Archive)
+                                        .icon_size(IconSize::Small)
+                                        .tooltip({
+                                            let focus_handle = focus_handle.clone();
+                                            move |_window, cx| {
+                                                Tooltip::for_action_in(
+                                                    "Archive Thread",
+                                                    &ArchiveSelectedThread,
+                                                    &focus_handle,
+                                                    cx,
+                                                )
+                                            }
+                                        })
+                                        .on_click({
+                                            let session_id = session_id_for_delete.clone();
+                                            cx.listener(move |this, _, window, cx| {
+                                                if let Some(ref session_id) = session_id {
+                                                    this.archive_thread(session_id, window, cx);
+                                                }
+                                            })
+                                        }),
+                                )
+                                .child(
+                                    IconButton::new("delete-thread", IconName::Trash)
+                                        .icon_size(IconSize::Small)
+                                        .tooltip(Tooltip::text("Delete Permanently"))
+                                        .on_click({
+                                            let thread_id = metadata.thread_id;
+                                            let session_id = metadata.session_id.clone();
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.delete_thread_permanently(thread_id, session_id.as_ref(), window, cx);
+                                            })
+                                        }),
+                                )
                                 .into_any_element(),
                         ),
                     }
