@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.0] - 2026-09-18
+
+### Added
+- **Canonical Agent Execution State**: Single source of truth across all subsystems (`Idle`, `Planning`, `PlanReady`, `Approved`, `Executing`, `AwaitingInput`, `ChangesReady`, `Completed`, `Failed`, `Cancelled`) with live `PlanExecutionProgress`.
+- **Right-Panel Plan Preview & Action Toolbar**: Auto-open `*.plan.md` in right split pane with `[ Approve & Execute ]`, `[ Build Locally ]`, and `[ Edit in Buffer ]`.
+- **Permanent Thread Deletion (Sidebar Modernization)**: Right-click context action and hover trash icon to permanently remove threads from SQLite metadata and unlink session transcripts.
+- **Ultra-Lightweight Discord Remote Bridge (`katalyst-discord-bridge`)**: Standalone Bun/Node script (<15MB RAM, 0% CPU idle) with two-way prompt replies, rich embeds, and security boundaries.
+- **In-Buffer Visual Diff Review Strip**: Floating action bar in `AgentDiffPane` (`[ Revert Turn (⌥⌘Z) ]`, `[ Keep All (Enter) ]`) with zero cursor jitter.
+- **Child Process Group Reaper**: Automatic `SIGTERM` followed by 2s grace period before `SIGKILL` on shutdown, ensuring 0 orphaned agent processes.
+
+### Fixed
+- **Chunked JSON-RPC Stream Resilience**: Replaced rigid single-line parsing with an async line/frame buffer accumulator, eliminating false `UnexpectedEof` disconnections.
+- **Standalone Release-Fast Packaging**: Optimized binary compiled with `profile.release-fast` (450 MB vs 1.17 GB debug), self-contained embedded assets, and 0.079s instant startup.
+
 ## [0.2.4] - 2026-09-17
 
 ### Fixed
