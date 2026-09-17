@@ -260,7 +260,7 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
                 let s = rest.trim();
                 if !s.is_empty() && !s.eq_ignore_ascii_case("none | subagent: none") {
                     skills = Some(s.to_string());
-                    split_ix = i + 1;
+                    split_ix = lines.len();
                     continue;
                 }
             }
@@ -269,7 +269,11 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
     }
 
     skills.map(|skills_text| {
-        let remaining = lines[split_ix..].join("\n");
+        let remaining = if split_ix < lines.len() {
+            lines[split_ix..].join("\n")
+        } else {
+            String::new()
+        };
         (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
     })
 }
