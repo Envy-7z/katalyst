@@ -24,7 +24,7 @@ fi
 
 # 2. Private Auth Tokens and Secret Keys
 echo -n "Checking for secret API keys, auth tokens, and personal profile identifiers... "
-TOKEN_PATTERNS="(ghp_[a-zA-Z0-9]{20,}|glpat-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk-[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{33}|xoxb-[a-zA-Z0-9-]+|BEGIN[A-Z ]*PRIVATE KEY|wisnuandrian[0-9a-z._-]*@|geniebook\.com)"
+TOKEN_PATTERNS="(ghp_[a-zA-Z0-9]{20,}|glpat-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk-[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{33}|xoxb-[a-zA-Z0-9-]+|BEGIN[A-Z ]*PRIVATE KEY|[a-zA-Z0-9._%+-]+@(gmail|yahoo|hotmail|corp)\.[a-zA-Z]{2,})"
 MATCHES_TOKENS="$(grep -rEn --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$TOKEN_PATTERNS" . 2>/dev/null || true)"
 if [[ -n "$MATCHES_TOKENS" ]]; then
   echo "FAILED!"

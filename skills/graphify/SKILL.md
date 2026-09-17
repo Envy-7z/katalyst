@@ -11,7 +11,7 @@ Fast, deterministic structural code intelligence for AI coding agents. Enables i
 
 ## When to Use
 
-1. **Architecture Discovery**: Exploring a large unfamiliar codebase (e.g. `remoot_android_studio`, `motapos-app`, `zed-custom`).
+1. **Architecture Discovery**: Exploring a large unfamiliar codebase (e.g. `android-gradle-project`, `multi-crate-rust`, `large-monorepo`).
 2. **Blast Radius Analysis**: Finding every file and caller that will break if an API, DTO, or ViewModel contract changes.
 3. **Cross-Module Refactoring**: Deciding clean boundary seams between feature modules, core libraries, and presentation layers.
 4. **Token Conservation**: Replacing 20 repeated `grep`/`read` cycles with a single structured relationship trace.
@@ -29,7 +29,7 @@ Fast, deterministic structural code intelligence for AI coding agents. Enables i
 
 ### Step 1: Map Project Topology
 Identify modules, build files, and architectural boundaries:
-- **Android**: Root `settings.gradle.kts` → module `:app`, `:core:network`, `:feature:geniesmart`.
+- **Android**: Root `settings.gradle.kts` → module `:app`, `:core:network`, `:feature:dashboard`.
 - **Flutter**: `pubspec.yaml` → packages, feature sub-directories.
 - **Rust**: Root `Cargo.toml` `[workspace.members]` → crates relationship.
 
