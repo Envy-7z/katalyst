@@ -1,0 +1,26 @@
+From 8c21276ab59ed491174b6c50df74c40bc32f2148 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Thu, 17 Sep 2026 13:30:33 +0700
+Subject: [PATCH] fix(crashes): write panic payload to /tmp/katalyst-panic.log
+ and log::error
+
+---
+ crates/crashes/src/crashes.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/crates/crashes/src/crashes.rs b/crates/crashes/src/crashes.rs
+index 87d6f5c640..f367166d37 100644
+--- a/crates/crashes/src/crashes.rs
++++ b/crates/crashes/src/crashes.rs
+@@ -32,6 +32,8 @@ pub fn force_backtrace() {
+     let old_hook = panic::take_hook();
+     panic::set_hook(Box::new(move |info| {
+         unsafe { env::set_var("RUST_BACKTRACE", "1") };
++        log::error!("CRITICAL RUST PANIC: {info:#?}");
++        let _ = std::fs::write("/tmp/katalyst-panic.log", format!("{info:#?}\n"));
+         old_hook(info);
+         // prevent the macOS crash dialog from popping up
+         if cfg!(target_os = "macos") {
+-- 
+2.50.1 (Apple Git-155)
+
