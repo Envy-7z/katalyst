@@ -1,0 +1,39 @@
+From 2ae50149889646ec185139a0bb32c3dce54d53aa Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Thu, 17 Sep 2026 14:01:26 +0700
+Subject: [PATCH] fix(agent_ui): bounds-check extract_active_skills to prevent
+ slice out of bounds panic
+
+---
+ crates/agent_ui/src/plan_progress.rs | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/crates/agent_ui/src/plan_progress.rs b/crates/agent_ui/src/plan_progress.rs
+index 2773b64c80..de1415a9ac 100644
+--- a/crates/agent_ui/src/plan_progress.rs
++++ b/crates/agent_ui/src/plan_progress.rs
+@@ -260,7 +260,7 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
+                 let s = rest.trim();
+                 if !s.is_empty() && !s.eq_ignore_ascii_case("none | subagent: none") {
+                     skills = Some(s.to_string());
+-                    split_ix = i + 1;
++                    split_ix = lines.len();
+                     continue;
+                 }
+             }
+@@ -269,7 +269,11 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
+     }
+ 
+     skills.map(|skills_text| {
+-        let remaining = lines[split_ix..].join("\n");
++        let remaining = if split_ix < lines.len() {
++            lines[split_ix..].join("\n")
++        } else {
++            String::new()
++        };
+         (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
+     })
+ }
+-- 
+2.50.1 (Apple Git-155)
+
