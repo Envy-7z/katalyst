@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Katalyst Zero-Leak Git Pre-Commit Guard
+set -euo pipefail
+
+echo "🛡️  Running Katalyst Privacy & Secret Guard on staged files..."
+
+ERRORS=0
+
+# 1. Hardcoded local user paths (/Users/ or /home/)
+LOCAL_PATHS="$(git diff --cached -U0 | grep '^+[^+]' | grep -E "(/(Users|home)/[a-zA-Z0-9_-]+)" 2>/dev/null | grep -v "/api/users/" || true)"
+if [[ -n "$LOCAL_PATHS" ]]; then
+  echo "❌ COMMIT BLOCKED: Found staged local user path (/Users/ or /home/)!"
+  echo "$LOCAL_PATHS"
+  ERRORS=$((ERRORS + 1))
+fi
+
+# 2. Secret tokens, API keys, private keys, OAuth tokens
+TOKEN_PATTERNS="(ya29\.[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{20,}|glpat-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk-(proj-)?[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{33}|xox[baprs]-[0-9a-zA-Z]{10,}|BEGIN[A-Z ]*PRIVATE KEY)"
+MATCHES_TOKENS="$(git diff --cached -U0 | grep '^+[^+]' | grep -E "$TOKEN_PATTERNS" 2>/dev/null || true)"
+if [[ -n "$MATCHES_TOKENS" ]]; then
+  echo "❌ COMMIT BLOCKED: Found staged secret API key, token, or private key!"
+  echo "$MATCHES_TOKENS"
+  ERRORS=$((ERRORS + 1))
+fi
+
+# 3. Private company / employer / personal keywords
+COMPANY_PATTERNS="(geniebook|tripfez|mahara|nextera|remoot|motapos|bubbly)"
+MATCHES_COMPANY="$(git diff --cached -U0 | grep '^+[^+]' | grep -Ei "$COMPANY_PATTERNS" 2>/dev/null || true)"
+if [[ -n "$MATCHES_COMPANY" ]]; then
+  echo "❌ COMMIT BLOCKED: Found staged private employer/client keyword!"
+  echo "$MATCHES_COMPANY"
+  ERRORS=$((ERRORS + 1))
+fi
+
+# 4. Run automated test suite
+echo "🧪 Running full test suite..."
+python3 -m unittest discover -s tests -q
+
+if [[ $ERRORS -gt 0 ]]; then
+  echo ""
+  echo "🛑 Pre-commit check FAILED with $ERRORS violation(s). Commit aborted."
+  exit 1
+fi
+
+echo "✅ Privacy & Secret Guard PASSED: Staged changes are safe to commit."
+exit 0

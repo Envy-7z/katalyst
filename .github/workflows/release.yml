@@ -19,10 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enforce Zero-Leak Privacy & Secret Guard
+        run: bash scripts/audit-privacy.sh
       - name: Test session migration and installer contracts
         run: python3 -m unittest discover -s tests -v
       - name: Validate shell scripts
-        run: bash -n install.sh bin/katalyst-update bin/notify-updates.sh
+        run: bash -n install.sh bin/katalyst-update bin/notify-updates.sh scripts/*.sh
 
   build-macos:
     needs: test
