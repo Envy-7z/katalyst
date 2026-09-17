@@ -1560,8 +1560,7 @@ fn open_about_window(cx: &mut App) {
                 .map(|sha| sha.full())
                 .filter(|commit| !commit.is_empty())
                 .map(SharedString::from);
-
-            let katalyst_version = "0.2.3";
+            let katalyst_version = "0.2.4";
             let message: SharedString = format!("Katalyst {katalyst_version}").into();
             let commit_short = commit.as_deref().unwrap_or("dev");
             let commit_prefix = if commit_short.len() >= 8 {
