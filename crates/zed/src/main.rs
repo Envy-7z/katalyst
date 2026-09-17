@@ -154,46 +154,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 }
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
-    eprintln!(
-        "Zed failed to open a window: {e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
-    );
-    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    {
-        process::exit(1);
-    }
-
-    // Maybe unify this with gpui::platform::linux::platform::ResultExt::notify_err(..)?
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    {
-        use ashpd::desktop::notification::{Notification, NotificationProxy, Priority};
-        _cx.spawn(async move |_cx| {
-            let Ok(proxy) = NotificationProxy::new().await else {
-                process::exit(1);
-            };
-
-            let notification_id = "dev.zed.Oops";
-            proxy
-                .add_notification(
-                    notification_id,
-                    Notification::new("Zed failed to launch")
-                        .body(Some(
-                            format!(
-                                "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
-                            )
-                            .as_str(),
-                        ))
-                        .priority(Priority::High)
-                        .icon(ashpd::desktop::Icon::with_names(&[
-                            "dialog-question-symbolic",
-                        ])),
-                )
-                .await
-                .ok();
-
-            process::exit(1);
-        })
-        .detach();
-    }
+    log::error!("Zed failed to open a window: {e:#?}");
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
