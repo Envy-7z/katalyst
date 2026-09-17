@@ -136,7 +136,8 @@ The repository contains generic defaults, example MCP configuration, release scr
 | **Diff Review & Co-Editing** | Webview diffs, separate modal popups | Read-only split buffers | **Bi-Directional MultiBuffer Co-Editing (`Type to edit · Enter to keep`)** |
 | **Interface Tranquility** | Cluttered glowing frames & tall cards | None | **Calm Conversation UI (Compact 24px chips with exit status badges)** |
 | **Privacy & Secret Guard** | Leaks uncommitted `.env` to models | None | **Pre-prompt Shannon entropy scanner ($H > 4.5$) auto-scrubbing credentials** |
-| **Large Workspace Scalability** | Heavy recursive indexing freezes IDE | Locks on git operations | **Zero-wait prompt dispatch, shallow scan caps, 15s session resilience** |
+| **Large Workspace Scalability** | Heavy recursive indexing freezes IDE | Locks on git operations | **Zero-wait prompt dispatch, shallow scan caps, 60s timeout & auto resume fallback** |
+| **Lifecycle & Crash Immunity** | Silent background exits, unhandled panics | None | **AppKit auto-termination immunity, bounds-checked parsing, seamless session recovery** |
 | **Session Portability** | Locked in proprietary formats | None | **1-click lossless import from Cursor and Codex transcripts** |
 | **Anti-Sleep Streaming** | Mac sleeps mid-task, aborting agents | None | **Display sleep assertion keeps background agent execution alive** |
 | **Turn Step Numbering** | Flat unnumbered stream | None | **Sequential `Step X/Y` badges on tool execution cards** |

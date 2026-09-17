@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.2.4] - 2026-09-17
+
+### Fixed
+- **AppKit Automatic Termination & LifeCycle Immunity**:
+  - Permanently disabled macOS AppKit automatic termination (`setAutomaticTerminationSupportEnabled: NO` and `applicationShouldTerminateAfterLastWindowClosed: false`), keeping Katalyst alive across cold launches, idle states, and background window restorations (Patch 0039, 0040, 0041).
+  - Intercepted internal `_terminateWithStatus:` to prevent dormant process reaping on windowless states (Patch 0044).
+- **Active Skills Slice Bounds Guard**:
+  - Fixed slice-out-of-bounds panic in `extract_active_skills` (`plan_progress.rs:272`) when parsing single-line or concise assistant skill declarations, eliminating instant application crashes upon loading conversations (Patch 0045).
+- **Resilient Thread Loading & Fallback (Codex Parity)**:
+  - Implemented automatic fallback to `resume_session` directly inside `load_session` in `acp.rs`, ensuring connection continuity when historical transcripts encounter parsing mismatches or missing parameters (Patch 0037).
+  - Normalized interrupted assistant turns with empty content blocks across session transcripts.
+- **Standard Data Directory Preservation**:
+  - Preserved standard macOS Application Support data directory on launch while honoring `KATALYST_STATE_HOME` overrides, restoring access to all 93 sidebar threads and existing project workspaces (Patch 0036).
+- **Standalone Development Asset Resolution**:
+  - Added compile-time `CARGO_MANIFEST_DIR` and `ZED_REPO_ROOT` fallback to `dev_repo_root()` in `util.rs`, eliminating `dev asset loading requires running from within the checkout` panics when launching outside git repositories (Patch 0035).
+- **Fault-Tolerant Window Launch**:
+  - Removed unconditional `process::exit(1)` from `fail_to_open_window`, allowing graceful degradation rather than process aborts (Patch 0042).
+- **Disk & Database Health**:
+  - Cleared 53 GB of obsolete debug build artifacts and executed clean SQLite WAL checkpointing, reducing disk usage to 24% capacity and preventing database lock contention.
+
 ## [0.2.3] - 2026-09-14
 
 ### Added

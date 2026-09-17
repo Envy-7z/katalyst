@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KATALYST_VERSION="${KATALYST_VERSION:-0.2.0}"
+KATALYST_VERSION="${KATALYST_VERSION:-0.2.4}"
 KATALYST_REPOSITORY="${KATALYST_REPOSITORY:-Envy-7z/katalyst}"
 KATALYST_DATA_HOME="${KATALYST_DATA_HOME:-$HOME/.local/share/katalyst}"
 KATALYST_STATE_HOME="${KATALYST_STATE_HOME:-$HOME/.katalyst}"
@@ -33,7 +33,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-[[ "$(uname -s)" == "Darwin" ]] || { echo "Katalyst v0.2.0 currently supports macOS only." >&2; exit 1; }
+[[ "$(uname -s)" == "Darwin" ]] || { echo "Katalyst v0.2.4 currently supports macOS only." >&2; exit 1; }
 for command in curl ditto python3 shasum tar; do
   command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
