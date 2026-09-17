@@ -1,0 +1,410 @@
+From 5bc55635a0c8e3336bdb4ab2c13a688c869427e2 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Fri, 18 Sep 2026 02:07:27 +0700
+Subject: [PATCH] feat(katalyst): implement v0.3.0 core features (canonical
+ state, stream resilience, reaper, diff strip, thread deletion)
+
+---
+ crates/acp_thread/src/acp_thread.rs | 71 +++++++++++++++++++++
+ crates/agent_servers/src/acp.rs     | 40 +++++++++++-
+ crates/agent_ui/src/agent_diff.rs   | 40 +++++++++++-
+ crates/sidebar/src/sidebar.rs       | 97 ++++++++++++++++++++++-------
+ crates/util/src/process.rs          | 44 ++++++++++---
+ 5 files changed, 260 insertions(+), 32 deletions(-)
+
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index aa3f64d3cc..102ca6a910 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -2265,6 +2265,31 @@ pub enum ThreadStatus {
+     Generating,
+ }
+ 
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++pub enum CanonicalAgentState {
++    Idle,
++    Planning,
++    PlanReady,
++    Approved,
++    Executing,
++    AwaitingInput,
++    ChangesReady,
++    Completed,
++    Failed,
++    Cancelled,
++}
++
++#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++pub struct PlanExecutionProgress {
++    pub current_phase: Option<SharedString>,
++    pub current_step: usize,
++    pub total_steps: usize,
++    pub step_status: SharedString,
++    pub pending_approval: bool,
++    pub checkpoint: Option<String>,
++    pub error: Option<SharedString>,
++}
++
+ #[derive(Debug, Clone)]
+ pub enum LoadError {
+     Unsupported {
+@@ -2588,6 +2613,52 @@ impl AcpThread {
+         false
+     }
+ 
++    pub fn canonical_state(&self) -> CanonicalAgentState {
++        if self.is_waiting_for_confirmation() {
++            CanonicalAgentState::AwaitingInput
++        } else if self.running_turn.is_some() {
++            if !self.plan.is_empty() && self.plan.stats().in_progress_entry.is_some() {
++                CanonicalAgentState::Executing
++            } else {
++                CanonicalAgentState::Planning
++            }
++        } else if self.had_error {
++            CanonicalAgentState::Failed
++        } else if !self.plan.is_empty() && self.plan.stats().completed as usize == self.plan.entries.len() && !self.plan.entries.is_empty() {
++            CanonicalAgentState::Completed
++        } else if !self.plan.is_empty() && self.plan.stats().completed == 0 && self.plan.stats().in_progress_entry.is_none() {
++            CanonicalAgentState::PlanReady
++        } else if self.has_pending_edit_tool_calls() {
++            CanonicalAgentState::ChangesReady
++        } else {
++            CanonicalAgentState::Idle
++        }
++    }
++    pub fn plan_execution_progress(&self, cx: &App) -> Option<PlanExecutionProgress> {
++        if self.plan.is_empty() {
++            return None;
++        }
++        let stats = self.plan.stats();
++        let total_steps = self.plan.entries.len();
++        let current_step = (stats.completed as usize + (if stats.in_progress_entry.is_some() { 1 } else { 0 })).min(total_steps);
++        let step_status: SharedString = if let Some(in_progress) = stats.in_progress_entry {
++            in_progress.content.read(cx).source().clone()
++        } else if stats.pending == 0 && stats.completed > 0 {
++            "All tasks completed".into()
++        } else {
++            "Pending approval".into()
++        };
++        Some(PlanExecutionProgress {
++            current_phase: None,
++            current_step,
++            total_steps,
++            step_status,
++            pending_approval: self.is_waiting_for_confirmation(),
++            checkpoint: None,
++            error: if self.had_error { Some("Execution error encountered".into()) } else { None },
++        })
++    }
++
+     pub fn has_in_progress_tool_calls(&self) -> bool {
+         for entry in self.entries.iter().rev() {
+             match entry {
+diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
+index 5723e8f316..4b96d73d60 100644
+--- a/crates/agent_servers/src/acp.rs
++++ b/crates/agent_servers/src/acp.rs
+@@ -884,7 +884,45 @@ impl AcpConnection {
+         // closures to the !Send foreground thread.
+         let (dispatch_tx, dispatch_rx) = mpsc::unbounded::<ForegroundWork>();
+ 
+-        let incoming_lines = futures::io::BufReader::new(stdout).lines();
++        let incoming_lines = futures::stream::unfold(
++            (futures::io::BufReader::new(stdout), String::new()),
++            async move |(mut reader, mut buf)| {
++                use futures::AsyncBufReadExt;
++                loop {
++                    let mut line = String::new();
++                    match reader.read_line(&mut line).await {
++                        Ok(0) => {
++                            if !buf.is_empty() {
++                                let remaining = std::mem::take(&mut buf);
++                                return Some((Ok(remaining), (reader, buf)));
++                            }
++                            return None;
++                        }
++                        Ok(_) => {
++                            buf.push_str(&line);
++                            if buf.ends_with('\n') {
++                                let mut complete = std::mem::take(&mut buf);
++                                if complete.ends_with('\n') {
++                                    complete.pop();
++                                    if complete.ends_with('\r') {
++                                        complete.pop();
++                                    }
++                                }
++                                if !complete.trim().is_empty() {
++                                    return Some((Ok(complete), (reader, buf)));
++                                }
++                            }
++                        }
++                        Err(err) => {
++                            if err.kind() == std::io::ErrorKind::Interrupted {
++                                continue;
++                            }
++                            return Some((Err(err), (reader, buf)));
++                        }
++                    }
++                }
++            },
++        );
+         let tapped_incoming = incoming_lines.inspect({
+             let debug_log = debug_log.clone();
+             move |result| match result {
+diff --git a/crates/agent_ui/src/agent_diff.rs b/crates/agent_ui/src/agent_diff.rs
+index 2d8c609d08..1f170614f7 100644
+--- a/crates/agent_ui/src/agent_diff.rs
++++ b/crates/agent_ui/src/agent_diff.rs
+@@ -748,7 +748,45 @@ impl Render for AgentDiffPane {
+                         ),
+                 )
+             })
+-            .when(!is_empty, |el| el.child(self.editor.clone()))
++            .when(!is_empty, |el| {
++                el.child(self.editor.clone()).child(
++                    h_flex()
++                        .absolute()
++                        .bottom_4()
++                        .p_1p5()
++                        .gap_2()
++                        .items_center()
++                        .rounded_lg()
++                        .border_1()
++                        .border_color(cx.theme().colors().border)
++                        .bg(cx.theme().colors().elevated_surface_background)
++                        .shadow_md()
++                        .child(
++                            Button::new("diff-revert-turn", "Revert Turn")
++                                .label_size(LabelSize::Small)
++                                .size(ButtonSize::Compact)
++                                .style(ButtonStyle::Subtle)
++                                .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
++                                .on_click(cx.listener(|this, _, window, cx| {
++                                    this.reject_all(&RejectAll, window, cx);
++                                })),
++                        )
++                        .child(
++                            Button::new("diff-keep-all", "Keep All (Enter)")
++                                .label_size(LabelSize::Small)
++                                .size(ButtonSize::Compact)
++                                .style(ButtonStyle::Filled)
++                                .start_icon(
++                                    Icon::new(IconName::Check)
++                                        .size(IconSize::Small)
++                                        .color(Color::Success),
++                                )
++                                .on_click(cx.listener(|this, _, window, cx| {
++                                    this.keep_all(&KeepAll, window, cx);
++                                })),
++                        ),
++                )
++            })
+     }
+ }
+ 
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index e633daadcb..1d2db8c357 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -5876,6 +5876,45 @@ impl Sidebar {
+         );
+     }
+ 
++    fn delete_thread_permanently(
++        &mut self,
++        thread_id: ThreadId,
++        session_id: Option<&acp::SessionId>,
++        _window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if let Some(session_id) = session_id {
++            let session_id_str = session_id.to_string();
++            cx.background_spawn(async move {
++                if let Some(home) = std::env::var_os("HOME") {
++                    let omp_sessions = std::path::PathBuf::from(home).join(".omp/agent/sessions");
++                    if omp_sessions.is_dir() {
++                        if let Ok(entries) = std::fs::read_dir(&omp_sessions) {
++                            for entry in entries.flatten() {
++                                if entry.path().is_dir() {
++                                    if let Ok(sub_entries) = std::fs::read_dir(entry.path()) {
++                                        for sub_entry in sub_entries.flatten() {
++                                            if sub_entry.file_name().to_string_lossy().contains(&session_id_str) {
++                                                let _ = std::fs::remove_file(sub_entry.path());
++                                            }
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }).detach();
++        }
++
++        let store = ThreadMetadataStore::global(cx);
++        store.update(cx, |store, cx| {
++            store.delete(thread_id, cx);
++        });
++
++        self.update_entries(cx);
++    }
++
+     /// Archive a thread and activate the nearest neighbor or a draft.
+     ///
+     /// IMPORTANT: when activating a neighbor or creating a fallback draft,
+@@ -6775,27 +6814,43 @@ impl Sidebar {
+                                 .into_any_element(),
+                         ),
+                         None => Some(
+-                            IconButton::new("archive-thread", IconName::Archive)
+-                                .icon_size(IconSize::Small)
+-                                .tooltip({
+-                                    let focus_handle = focus_handle.clone();
+-                                    move |_window, cx| {
+-                                        Tooltip::for_action_in(
+-                                            "Archive Thread",
+-                                            &ArchiveSelectedThread,
+-                                            &focus_handle,
+-                                            cx,
+-                                        )
+-                                    }
+-                                })
+-                                .on_click({
+-                                    let session_id = session_id_for_delete.clone();
+-                                    cx.listener(move |this, _, window, cx| {
+-                                        if let Some(ref session_id) = session_id {
+-                                            this.archive_thread(session_id, window, cx);
+-                                        }
+-                                    })
+-                                })
++                            h_flex()
++                                .gap_0p5()
++                                .child(
++                                    IconButton::new("archive-thread", IconName::Archive)
++                                        .icon_size(IconSize::Small)
++                                        .tooltip({
++                                            let focus_handle = focus_handle.clone();
++                                            move |_window, cx| {
++                                                Tooltip::for_action_in(
++                                                    "Archive Thread",
++                                                    &ArchiveSelectedThread,
++                                                    &focus_handle,
++                                                    cx,
++                                                )
++                                            }
++                                        })
++                                        .on_click({
++                                            let session_id = session_id_for_delete.clone();
++                                            cx.listener(move |this, _, window, cx| {
++                                                if let Some(ref session_id) = session_id {
++                                                    this.archive_thread(session_id, window, cx);
++                                                }
++                                            })
++                                        }),
++                                )
++                                .child(
++                                    IconButton::new("delete-thread", IconName::Trash)
++                                        .icon_size(IconSize::Small)
++                                        .tooltip(Tooltip::text("Delete Permanently"))
++                                        .on_click({
++                                            let thread_id = metadata.thread_id;
++                                            let session_id = metadata.session_id.clone();
++                                            cx.listener(move |this, _, window, cx| {
++                                                this.delete_thread_permanently(thread_id, session_id.as_ref(), window, cx);
++                                            })
++                                        }),
++                                )
+                                 .into_any_element(),
+                         ),
+                     }
+diff --git a/crates/util/src/process.rs b/crates/util/src/process.rs
+index 93cbe65ce5..63f50c2899 100644
+--- a/crates/util/src/process.rs
++++ b/crates/util/src/process.rs
+@@ -10,7 +10,7 @@ use std::process::Stdio;
+ /// process exits for any reason (including crashes), since the OS closes
+ /// its handles, so spawned process trees can never outlive Zed.
+ pub struct Child {
+-    process: smol::process::Child,
++    process: std::mem::ManuallyDrop<smol::process::Child>,
+     #[cfg(windows)]
+     job: Option<windows_job::JobObject>,
+ }
+@@ -50,7 +50,7 @@ impl Child {
+                     crate::redact::redact_command(&format!("{command:?}"))
+                 )
+             })?;
+-        Ok(Self { process })
++        Ok(Self { process: std::mem::ManuallyDrop::new(process) })
+     }
+ 
+     #[cfg(windows)]
+@@ -98,17 +98,15 @@ impl Child {
+             })
+             .ok();
+ 
+-        Ok(Self { process, job })
++        Ok(Self { process: std::mem::ManuallyDrop::new(process), job })
+     }
+ 
+     /// Consumes the child, draining its stdout/stderr and waiting for it to
+     /// exit, then returns the collected output.
+-    pub async fn output(self) -> Result<std::process::Output> {
+-        // NOTE: Keep `self` alive across this await, do not destructure it to
+-        // pull `process` out first. On Windows that drops the job object early,
+-        // which triggers `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and kills the
+-        // child before `output()` finishes collecting its stdout/stderr.
+-        Ok(self.process.output().await?)
++    pub async fn output(mut self) -> Result<std::process::Output> {
++        let process = unsafe { std::mem::ManuallyDrop::take(&mut self.process) };
++        std::mem::forget(self);
++        Ok(process.output().await?)
+     }
+ 
+     #[cfg(not(windows))]
+@@ -119,6 +117,24 @@ impl Child {
+         }
+         Ok(())
+     }
++    #[cfg(not(windows))]
++    pub fn terminate_gracefully(&mut self, grace_period: std::time::Duration) -> Result<()> {
++        let pid = self.process.id() as i32;
++        unsafe {
++            libc::killpg(pid, libc::SIGTERM);
++        }
++        let deadline = std::time::Instant::now() + grace_period;
++        while std::time::Instant::now() < deadline {
++            if let Ok(Some(_)) = self.process.try_status() {
++                return Ok(());
++            }
++            std::thread::sleep(std::time::Duration::from_millis(50));
++        }
++        unsafe {
++            libc::killpg(pid, libc::SIGKILL);
++        }
++        Ok(())
++    }
+ 
+     #[cfg(windows)]
+     pub fn kill(&mut self) -> Result<()> {
+@@ -131,6 +147,16 @@ impl Child {
+     }
+ }
+ 
++#[cfg(not(windows))]
++impl Drop for Child {
++    fn drop(&mut self) {
++        let _ = self.terminate_gracefully(std::time::Duration::from_secs(2));
++        unsafe {
++            std::mem::ManuallyDrop::drop(&mut self.process);
++        }
++    }
++}
++
+ #[cfg(windows)]
+ mod windows_job {
+     use crate::ResultExt as _;
+-- 
+2.50.1 (Apple Git-155)
+
