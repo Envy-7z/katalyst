@@ -1,0 +1,26 @@
+From eede037b4bb98d0671acef489d42741f9d6896a7 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Thu, 17 Sep 2026 20:04:34 +0700
+Subject: [PATCH] feat(brand): update in-app About version to Katalyst 0.2.4
+
+---
+ crates/zed/src/zed.rs | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 6167ae91a9..e70dd37235 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1560,8 +1560,7 @@ fn open_about_window(cx: &mut App) {
+                 .map(|sha| sha.full())
+                 .filter(|commit| !commit.is_empty())
+                 .map(SharedString::from);
+-
+-            let katalyst_version = "0.2.3";
++            let katalyst_version = "0.2.4";
+             let message: SharedString = format!("Katalyst {katalyst_version}").into();
+             let commit_short = commit.as_deref().unwrap_or("dev");
+             let commit_prefix = if commit_short.len() >= 8 {
+-- 
+2.50.1 (Apple Git-155)
+
