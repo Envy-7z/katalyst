@@ -25,8 +25,9 @@ class InstallerTests(unittest.TestCase):
                 stderr=subprocess.STDOUT,
             )
 
+            version = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exists() else "0.2.0"
             self.assertEqual(result.returncode, 0, result.stdout)
-            self.assertIn("Katalyst-v0.2.0-macOS-arm64.zip", result.stdout)
+            self.assertIn(f"Katalyst-v{version}-macOS-arm64.zip", result.stdout)
             self.assertIn(f"{home}/.local/share/katalyst", result.stdout)
             self.assertNotIn("brew install --cask zed", result.stdout)
             self.assertFalse((Path(home) / ".katalyst").exists())
@@ -94,8 +95,9 @@ class InstallerTests(unittest.TestCase):
             (old_app / "marker").write_text("old")
             new_app.mkdir(parents=True)
             (new_app / "marker").write_text("new")
+            version = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exists() else "0.2.0"
             release.mkdir()
-            asset = release / "Katalyst-v0.2.0-macOS-arm64.zip"
+            asset = release / f"Katalyst-v{version}-macOS-arm64.zip"
             subprocess.run(["ditto", "-c", "-k", "--keepParent", str(new_app), str(asset)], check=True)
             checksum = subprocess.check_output(["shasum", "-a", "256", str(asset)], text=True).split()[0]
             (release / "SHA256SUMS").write_text(f"{checksum}  {asset.name}\n")

@@ -1,5 +1,5 @@
 From 2ae50149889646ec185139a0bb32c3dce54d53aa Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Thu, 17 Sep 2026 14:01:26 +0700
 Subject: [PATCH] fix(agent_ui): bounds-check extract_active_skills to prevent
  slice out of bounds panic

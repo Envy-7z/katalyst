@@ -1,5 +1,5 @@
 From 8e87bb982369351be948ffcd91922233cd76301e Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Wed, 16 Sep 2026 16:58:20 +0700
 Subject: [PATCH] fix(zed): restore workspace on cold launch without paths to
  prevent automatic termination

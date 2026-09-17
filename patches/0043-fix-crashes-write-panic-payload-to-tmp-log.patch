@@ -1,5 +1,5 @@
 From 8c21276ab59ed491174b6c50df74c40bc32f2148 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Thu, 17 Sep 2026 13:30:33 +0700
 Subject: [PATCH] fix(crashes): write panic payload to /tmp/katalyst-panic.log
  and log::error

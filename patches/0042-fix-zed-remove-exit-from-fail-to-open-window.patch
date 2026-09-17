@@ -1,5 +1,5 @@
 From a16206e5d31f23b28933522922f8ac400352bff0 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Thu, 17 Sep 2026 13:25:06 +0700
 Subject: [PATCH] fix(zed): remove process::exit(1) from fail_to_open_window to
  prevent unexpected shutdown

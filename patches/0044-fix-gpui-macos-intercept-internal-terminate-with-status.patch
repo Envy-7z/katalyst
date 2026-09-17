@@ -1,5 +1,5 @@
 From 9953b6ad5665ef960c11ec8d93c0d6aa8678d4a7 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Thu, 17 Sep 2026 13:34:27 +0700
 Subject: [PATCH] fix(gpui_macos): intercept _terminateWithStatus: to
  completely block AppKit automatic termination

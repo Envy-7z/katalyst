@@ -1,5 +1,5 @@
 From cdd7373e654e2456bb10355f1f36241db93fdd7d Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Wed, 16 Sep 2026 17:33:15 +0700
 Subject: [PATCH] fix(gpui_macos): implement
  applicationShouldTerminateAfterLastWindowClosed returning NO

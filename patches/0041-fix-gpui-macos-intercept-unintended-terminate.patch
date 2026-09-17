@@ -1,5 +1,5 @@
 From aca5dc715645adbf1926936bd8c73d369875031c Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Wed, 16 Sep 2026 17:49:19 +0700
 Subject: [PATCH] fix(gpui_macos): intercept terminate: and cancel
  applicationShouldTerminate to prevent AppKit auto-termination

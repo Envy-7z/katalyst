@@ -1,5 +1,5 @@
 From 36023926f2fc7f18f6414cecf5a111518c5e842c Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Wed, 16 Sep 2026 14:08:21 +0700
 Subject: [PATCH] fix(zed): preserve standard Application Support data dir so
  existing threads load

@@ -1,5 +1,5 @@
 From 5ab156f2abaf192b5f173186cbdc385e0da7bac0 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Wed, 16 Sep 2026 14:03:49 +0700
 Subject: [PATCH] fix(util): fallback dev_repo_root to CARGO_MANIFEST_DIR to
  prevent asset loading panic
