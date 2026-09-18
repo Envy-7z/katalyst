@@ -1,0 +1,113 @@
+From 03a1b8de981d25927f3fdf128bb17ede1d3142bd Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Fri, 18 Sep 2026 08:38:16 +0700
+Subject: [PATCH] feat(agent_ui): auto-open plan in editor pane on elicitation
+ plan proposal
+
+---
+ .../src/conversation_view/thread_view.rs      | 53 +++++++++++++++++--
+ 1 file changed, 49 insertions(+), 4 deletions(-)
+
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index 7610a32d5d..75c15eb156 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -616,6 +616,7 @@ pub struct ThreadView {
+     pub resumed_without_history: bool,
+     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
+     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
++    opened_plan_slugs: HashSet<String>,
+     pub _cancel_task: Option<Task<()>>,
+     _save_task: Option<Task<()>>,
+     _draft_resolve_task: Option<Task<()>>,
+@@ -1031,6 +1032,7 @@ impl ThreadView {
+             new_server_version_available: None,
+             permission_selections: HashMap::default(),
+             elicitation_form_states: HashMap::default(),
++            opened_plan_slugs: HashSet::default(),
+             _cancel_task: None,
+             _save_task: None,
+             _draft_resolve_task: None,
+@@ -2614,8 +2616,7 @@ impl ThreadView {
+             elicitation_id.clone()
+         };
+ 
+-        let thread = self.thread.read(cx);
+-        let entry = thread.elicitation(&elicitation_id).map(|(_, elicitation)| {
++        let entry = self.thread.read(cx).elicitation(&elicitation_id).map(|(_, elicitation)| {
+             (
+                 elicitation_id.clone(),
+                 matches!(elicitation.status, ElicitationStatus::Pending { .. }),
+@@ -2623,10 +2624,11 @@ impl ThreadView {
+                     acp::ElicitationMode::Form(mode) => Some(mode.requested_schema.clone()),
+                     _ => None,
+                 },
++                elicitation.request.message.clone(),
+             )
+         });
+ 
+-        let Some((id, is_pending, schema)) = entry else {
++        let Some((id, is_pending, schema, message)) = entry else {
+             return;
+         };
+ 
+@@ -2635,12 +2637,55 @@ impl ThreadView {
+             && !self.elicitation_form_states.contains_key(&id)
+         {
+             self.elicitation_form_states
+-                .insert(id, ElicitationFormState::new(&schema, window, cx));
++                .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
++            self.maybe_auto_open_elicitation_plan(&message, window, cx);
+         } else if !is_pending {
+             self.elicitation_form_states.remove(&id);
+         }
+     }
+ 
++    fn maybe_auto_open_elicitation_plan(
++        &mut self,
++        message: &str,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if let Some(start) = message.find("Approve plan \"") {
++            let rest = &message[start + "Approve plan \"".len()..];
++            if let Some(end) = rest.find('"') {
++                let slug = &rest[..end];
++                if !self.opened_plan_slugs.insert(slug.to_string()) {
++                    return;
++                }
++                if let Some(home) = std::env::var_os("HOME") {
++                    let home_path = std::path::PathBuf::from(home);
++                    let plans_dir = home_path.join(".katalyst/plans");
++                    let _ = std::fs::create_dir_all(&plans_dir);
++                    let plan_file = plans_dir.join(format!("{slug}.plan.md"));
++
++                    if let Some(md_start) = message.find("\n# ") {
++                        let md_content = &message[md_start + 1..];
++                        let _ = std::fs::write(&plan_file, md_content);
++                    }
++
++                    if let Some(workspace) = self.workspace.upgrade() {
++                        workspace.update(cx, |ws, cx| {
++                            let _ = ws.open_abs_path(
++                                plan_file,
++                                workspace::OpenOptions {
++                                    focus: Some(false),
++                                    ..workspace::OpenOptions::default()
++                                },
++                                window,
++                                cx,
++                            );
++                        });
++                    }
++                }
++            }
++        }
++    }
++
+     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let entry_count = self.thread.read(cx).entries().len();
+         for index in 0..entry_count {
+-- 
+2.50.1 (Apple Git-155)
+
