@@ -507,8 +507,25 @@ impl WorktreeStore {
         if let Some((tree, relative_path)) = self.find_worktree(abs_path, cx) {
             Task::ready(Ok((tree, relative_path)))
         } else {
-            let worktree = self.create_worktree(abs_path, visible, cx);
-            cx.background_spawn(async move { Ok((worktree.await?, RelPath::empty_arc())) })
+            let (target_root, rel_path) = if abs_path.is_file() {
+                if let (Some(parent), Some(file_name)) = (abs_path.parent(), abs_path.file_name()) {
+                    if let Some(name_str) = file_name.to_str() {
+                        if let Ok(rel) = RelPath::from_unix_str(name_str) {
+                            (parent, Arc::from(rel))
+                        } else {
+                            (abs_path, RelPath::empty_arc())
+                        }
+                    } else {
+                        (abs_path, RelPath::empty_arc())
+                    }
+                } else {
+                    (abs_path, RelPath::empty_arc())
+                }
+            } else {
+                (abs_path, RelPath::empty_arc())
+            };
+            let worktree = self.create_worktree(target_root, visible, cx);
+            cx.background_spawn(async move { Ok((worktree.await?, rel_path)) })
         }
     }
 

@@ -2744,16 +2744,45 @@ impl ThreadView {
             self.check_and_auto_open_active_plan(window, cx);
             return;
         };
-        let plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
-        if std::fs::create_dir_all(&plans_dir).is_err() {
-            self.check_and_auto_open_active_plan(window, cx);
-            return;
+        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
+        let _ = std::fs::create_dir_all(&global_plans_dir);
+        let global_plan_file = global_plans_dir.join(format!("{slug}.plan.md"));
+        if let Some(md_content) = markdown {
+            let _ = std::fs::write(&global_plan_file, md_content);
         }
 
-        let plan_file = plans_dir.join(format!("{slug}.plan.md"));
-        let wrote_plan =
-            markdown.is_some_and(|md_content| std::fs::write(&plan_file, md_content).is_ok());
-        if !wrote_plan && !plan_file.is_file() {
+        let plan_file = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| {
+                let primary_root = workspace
+                    .read(cx)
+                    .project()
+                    .read(cx)
+                    .visible_worktrees(cx)
+                    .next()
+                    .map(|w| w.read(cx).abs_path().to_path_buf());
+                if let Some(root) = primary_root {
+                    let ws_plans_dir = root.join(".katalyst/plans");
+                    let _ = std::fs::create_dir_all(&ws_plans_dir);
+                    let ws_plan_file = ws_plans_dir.join(format!("{slug}.plan.md"));
+                    if let Some(md_content) = markdown {
+                        let _ = std::fs::write(&ws_plan_file, md_content);
+                    } else if global_plan_file.is_file() && !ws_plan_file.is_file() {
+                        let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
+                    }
+                    if ws_plan_file.is_file() {
+                        Some(ws_plan_file)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(global_plan_file);
+
+        if !plan_file.is_file() {
             self.check_and_auto_open_active_plan(window, cx);
             return;
         }
