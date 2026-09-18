@@ -190,39 +190,21 @@ pub(crate) fn open_plan_in_right_pane(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    let workspace_handle = cx.weak_entity();
-    window
-        .spawn(cx, async move |cx| {
-            let _item = workspace_handle
-                .update_in(cx, |workspace, window, cx| {
-                    workspace.open_abs_path(
-                        abs_path,
-                        workspace::OpenOptions {
-                            focus: Some(false),
-                            visible: Some(workspace::OpenVisible::All),
-                            ..Default::default()
-                        },
-                        window,
-                        cx,
-                    )
-                })?
-                .await?;
-
-            workspace_handle.update_in(cx, |workspace, window, cx| {
-                workspace.move_item_to_pane_in_direction(
-                    &workspace::MoveItemToPaneInDirection {
-                        direction: workspace::SplitDirection::Right,
-                        focus: false,
-                        clone: false,
-                    },
-                    window,
-                    cx,
-                );
-            })?;
-
-            anyhow::Ok(())
-        })
-        .detach_and_log_err(cx);
+    let active_pane = workspace.active_pane().clone();
+    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
+    workspace
+        .open_paths(
+            vec![abs_path],
+            workspace::OpenOptions {
+                focus: Some(false),
+                visible: Some(workspace::OpenVisible::All),
+                ..Default::default()
+            },
+            Some(target_pane.downgrade()),
+            window,
+            cx,
+        )
+        .detach();
 }
 
 pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";

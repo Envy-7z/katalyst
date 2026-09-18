@@ -617,6 +617,7 @@ pub struct ThreadView {
     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
     opened_plan_slugs: HashSet<String>,
+    last_plan_scan: Option<std::time::Instant>,
     pub _cancel_task: Option<Task<()>>,
     _save_task: Option<Task<()>>,
     _draft_resolve_task: Option<Task<()>>,
@@ -1033,6 +1034,7 @@ impl ThreadView {
             permission_selections: HashMap::default(),
             elicitation_form_states: HashMap::default(),
             opened_plan_slugs: HashSet::default(),
+            last_plan_scan: None,
             _cancel_task: None,
             _save_task: None,
             _draft_resolve_task: None,
@@ -2616,17 +2618,21 @@ impl ThreadView {
             elicitation_id.clone()
         };
 
-        let entry = self.thread.read(cx).elicitation(&elicitation_id).map(|(_, elicitation)| {
-            (
-                elicitation_id.clone(),
-                matches!(elicitation.status, ElicitationStatus::Pending { .. }),
-                match &elicitation.request.mode {
-                    acp::ElicitationMode::Form(mode) => Some(mode.requested_schema.clone()),
-                    _ => None,
-                },
-                elicitation.request.message.clone(),
-            )
-        });
+        let entry = self
+            .thread
+            .read(cx)
+            .elicitation(&elicitation_id)
+            .map(|(_, elicitation)| {
+                (
+                    elicitation_id.clone(),
+                    matches!(elicitation.status, ElicitationStatus::Pending { .. }),
+                    match &elicitation.request.mode {
+                        acp::ElicitationMode::Form(mode) => Some(mode.requested_schema.clone()),
+                        _ => None,
+                    },
+                    elicitation.request.message.clone(),
+                )
+            });
 
         let Some((id, is_pending, schema, message)) = entry else {
             return;
@@ -2744,6 +2750,14 @@ impl ThreadView {
     }
 
     fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .last_plan_scan
+            .is_some_and(|last_scan| last_scan.elapsed() < std::time::Duration::from_millis(250))
+        {
+            return;
+        }
+        self.last_plan_scan = Some(std::time::Instant::now());
+
         let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
         let session_id_str = self.session_id.to_string();
         let recent_cutoff =
@@ -2751,6 +2765,7 @@ impl ThreadView {
         let add_plan_candidates =
             |dir: &std::path::Path,
              recent_only: Option<std::time::SystemTime>,
+             require_dot_plan_suffix: bool,
              candidates: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>| {
                 let Ok(files) = std::fs::read_dir(dir) else {
                     return false;
@@ -2758,10 +2773,15 @@ impl ThreadView {
                 let mut added = false;
                 for file in files.flatten() {
                     let path = file.path();
-                    if !path
-                        .file_name()
-                        .is_some_and(|name| name.to_string_lossy().ends_with("plan.md"))
-                    {
+                    let is_plan = path.file_name().is_some_and(|name| {
+                        let name = name.to_string_lossy();
+                        if require_dot_plan_suffix {
+                            name.ends_with(".plan.md")
+                        } else {
+                            name.ends_with("plan.md")
+                        }
+                    });
+                    if !is_plan {
                         continue;
                     }
                     let Ok(modified) =
@@ -2797,6 +2817,7 @@ impl ThreadView {
                                 found_exact_session_plan |= add_plan_candidates(
                                     &session_path.join("local"),
                                     None,
+                                    false,
                                     &mut candidates,
                                 );
                             }
@@ -2817,6 +2838,7 @@ impl ThreadView {
                                 add_plan_candidates(
                                     &session.path().join("local"),
                                     recent_cutoff,
+                                    false,
                                     &mut candidates,
                                 );
                             }
@@ -2825,7 +2847,12 @@ impl ThreadView {
                 }
             }
 
-            add_plan_candidates(&base.join(".katalyst/plans"), None, &mut candidates);
+            add_plan_candidates(
+                &base.join(".katalyst/plans"),
+                recent_cutoff,
+                false,
+                &mut candidates,
+            );
 
             let workspace_roots = self
                 .workspace
@@ -2841,7 +2868,7 @@ impl ThreadView {
                 })
                 .unwrap_or_default();
             for root in workspace_roots {
-                add_plan_candidates(&root, recent_cutoff, &mut candidates);
+                add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
             }
         }
 
@@ -4034,7 +4061,12 @@ impl ThreadView {
                             move |_event, window, cx| {
                                 if let Some(workspace) = workspace.upgrade() {
                                     workspace.update(cx, |ws, cx| {
-                                        crate::open_plan_in_right_pane(ws, plan_path.clone(), window, cx);
+                                        crate::open_plan_in_right_pane(
+                                            ws,
+                                            plan_path.clone(),
+                                            window,
+                                            cx,
+                                        );
                                     });
                                 }
                             }
