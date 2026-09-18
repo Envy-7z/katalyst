@@ -1,19 +1,55 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 18:30:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan on elicitation in right pane without duplicate splits
+Date: Fri, 18 Sep 2026 18:45:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, and right panel toggle
 
 ---
- crates/agent_ui/src/agent_ui.rs                    |  60 ++++
+ crates/agent_ui/src/agent_panel.rs                 |   4 +-
+ crates/agent_ui/src/agent_ui.rs                    |  62 ++++
  .../agent_ui/src/conversation_view/thread_view.rs  | 352 ++++++++++++++++++++-
+ crates/agent_ui/src/discord_modal.rs               | 254 +++++++++++++++
  crates/project/src/worktree_store.rs               |  21 +-
- 3 files changed, 415 insertions(+), 18 deletions(-)
+ crates/sidebar/src/sidebar.rs                      |  20 +-
+ crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
+ 7 files changed, 704 insertions(+), 31 deletions(-)
 
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index 99ad5f12e1..daf1341085 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -6613,9 +6613,9 @@ impl AgentPanel {
+ 
+         let is_full_screen = self.is_zoomed(window, cx);
+         let (icon_name, tooltip_text) = if is_full_screen {
+-            (IconName::Minimize, "Disable Full Screen")
++            (IconName::ThreadsSidebarRightClosed, "Show Plan & Editor Panel (⌥⌘B)")
+         } else {
+-            (IconName::Maximize, "Enable Full Screen")
++            (IconName::ThreadsSidebarRightOpen, "Hide Plan & Editor Panel (⌥⌘B)")
+         };
+         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
+             .icon_size(IconSize::Small)
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index fd9e57abd5..c5ee951a9e 100644
+index fd9e57abd5..6ff1d583c6 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
-@@ -184,6 +184,66 @@ pub(crate) fn open_abs_path_at_point(
+@@ -31,6 +31,7 @@ pub mod terminal_thread_metadata_store;
+ #[cfg(any(test, feature = "test-support"))]
+ pub mod test_support;
+ mod thread_import;
++mod discord_modal;
+ pub mod thread_metadata_store;
+ pub mod thread_worktree_archive;
+ 
+@@ -90,6 +91,7 @@ pub use thread_import::{
+     AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
+     channels_with_threads, import_threads_from_other_channels,
+ };
++pub use discord_modal::DiscordRemoteModal;
+ use zed_actions;
+ pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
+ 
+@@ -184,6 +186,66 @@ pub(crate) fn open_abs_path_at_point(
          .detach_and_log_err(cx);
  }
  
@@ -490,6 +526,266 @@ index 7610a32d5d..370ca47b9a 100644
          let has_messages = self.list_state.item_count() > 0;
          let list_state = self.list_state.clone();
  
+diff --git a/crates/agent_ui/src/discord_modal.rs b/crates/agent_ui/src/discord_modal.rs
+new file mode 100644
+index 0000000000..bd2f54d689
+--- /dev/null
++++ b/crates/agent_ui/src/discord_modal.rs
+@@ -0,0 +1,254 @@
++use gpui::{
++    ClipboardItem, DismissEvent, EventEmitter, FocusHandle, Focusable, Window, App, Context,
++    prelude::*,
++};
++use ui::{
++    Button, ButtonStyle, Color, Icon, IconName, IconSize, Label, LabelSize, Modal,
++    ModalFooter, ModalHeader, Section, prelude::*,
++};
++use workspace::ModalView;
++
++pub struct DiscordRemoteModal {
++    focus_handle: FocusHandle,
++    is_configured: bool,
++    bot_token_masked: Option<String>,
++    channel_id: Option<String>,
++    copied_template: bool,
++}
++
++impl DiscordRemoteModal {
++    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
++        let (is_configured, bot_token_masked, channel_id) = Self::check_config();
++        Self {
++            focus_handle: cx.focus_handle(),
++            is_configured,
++            bot_token_masked,
++            channel_id,
++            copied_template: false,
++        }
++    }
++
++    fn check_config() -> (bool, Option<String>, Option<String>) {
++        let home = std::env::var("HOME").unwrap_or_default();
++        let path = std::path::PathBuf::from(home).join(".config/zed/settings.json");
++        if let Ok(content) = std::fs::read_to_string(path) {
++            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
++                if let Some(discord) = json.get("katalyst.discord") {
++                    let enabled = discord.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
++                    let token = discord.get("bot_token").and_then(|v| v.as_str()).map(|s| s.to_string());
++                    let channel = discord.get("channel_id").and_then(|v| v.as_str()).map(|s| s.to_string());
++
++                    if enabled && token.as_ref().is_some_and(|t| !t.trim().is_empty()) {
++                        let masked = token.map(|t| {
++                            if t.len() > 10 {
++                                format!("{}••••••••{}", &t[..4], &t[t.len() - 4..])
++                            } else {
++                                "••••••••".to_string()
++                            }
++                        });
++                        return (true, masked, channel);
++                    }
++                }
++            }
++        }
++        (false, None, None)
++    }
++
++    fn copy_template(&mut self, cx: &mut Context<Self>) {
++        let template = r#""katalyst.discord": {
++  "enabled": true,
++  "bot_token": "YOUR_DISCORD_BOT_TOKEN",
++  "channel_id": "YOUR_DISCORD_CHANNEL_ID",
++  "authorized_user_ids": []
++}"#;
++        cx.write_to_clipboard(ClipboardItem::new_string(template.to_string()));
++        self.copied_template = true;
++        cx.notify();
++    }
++}
++
++impl Focusable for DiscordRemoteModal {
++    fn focus_handle(&self, _cx: &App) -> FocusHandle {
++        self.focus_handle.clone()
++    }
++}
++
++impl EventEmitter<DismissEvent> for DiscordRemoteModal {}
++impl ModalView for DiscordRemoteModal {}
++
++impl Render for DiscordRemoteModal {
++    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++        let is_configured = self.is_configured;
++        let token_masked = self.bot_token_masked.clone();
++        let channel_id = self.channel_id.clone();
++        let copied = self.copied_template;
++
++        v_flex()
++            .key_context("DiscordRemoteModal")
++            .track_focus(&self.focus_handle)
++            .size_full()
++            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
++                cx.emit(DismissEvent);
++            }))
++            .child(
++                Modal::new("discord-remote-modal", None)
++                    .header(
++                        ModalHeader::new()
++                            .headline("Discord Remote Control")
++                            .description(
++                                "Control your Katalyst coding agent remotely from Discord on your phone or desktop. \
++                                Approve plans, send instructions, and receive notifications while away from your Mac."
++                            )
++                            .show_dismiss_button(true),
++                    )
++                    .section(
++                        Section::new().child(
++                            v_flex()
++                                .gap_3()
++                                .child(
++                                    h_flex()
++                                        .justify_between()
++                                        .items_center()
++                                        .p_3()
++                                        .rounded_md()
++                                        .bg(cx.theme().colors().element_background)
++                                        .border_1()
++                                        .border_color(cx.theme().colors().border)
++                                        .child(
++                                            h_flex()
++                                                .gap_2()
++                                                .items_center()
++                                                .child(
++                                                    Icon::new(IconName::Chat)
++                                                        .size(IconSize::Medium)
++                                                        .color(if is_configured { Color::Accent } else { Color::Muted }),
++                                                )
++                                                .child(
++                                                    v_flex()
++                                                        .child(
++                                                            Label::new("Bridge Status")
++                                                                .size(LabelSize::Small)
++                                                                .color(Color::Muted),
++                                                        )
++                                                        .child(
++                                                            Label::new(if is_configured {
++                                                                "● Active & Configured"
++                                                            } else {
++                                                                "● Not Configured"
++                                                            })
++                                                            .size(LabelSize::Default)
++                                                            .color(if is_configured { Color::Success } else { Color::Warning }),
++                                                        ),
++                                                ),
++                                        )
++                                        .child(
++                                            if is_configured {
++                                                v_flex()
++                                                    .items_end()
++                                                    .gap_0p5()
++                                                    .child(
++                                                        Label::new(format!("Token: {}", token_masked.unwrap_or_default()))
++                                                            .size(LabelSize::Small)
++                                                            .color(Color::Muted),
++                                                    )
++                                                    .child(
++                                                        Label::new(format!("Channel: {}", channel_id.unwrap_or_default()))
++                                                            .size(LabelSize::Small)
++                                                            .color(Color::Muted),
++                                                    )
++                                            } else {
++                                                v_flex().child(
++                                                    Label::new("Requires Bot Token & Channel")
++                                                        .size(LabelSize::Small)
++                                                        .color(Color::Muted),
++                                                )
++                                            }
++                                        ),
++                                )
++                                .child(
++                                    v_flex()
++                                        .gap_2()
++                                        .child(
++                                            Label::new("How to Connect in 3 Steps:")
++                                                .size(LabelSize::Default)
++                                                .color(Color::Default),
++                                        )
++                                        .child(
++                                            v_flex()
++                                                .gap_1p5()
++                                                .p_3()
++                                                .rounded_md()
++                                                .bg(cx.theme().colors().editor_background)
++                                                .border_1()
++                                                .border_color(cx.theme().colors().border)
++                                                .child(
++                                                    Label::new("1. Create a Bot in Discord Developer Portal (enable Message Content Intent)")
++                                                        .size(LabelSize::Small)
++                                                        .color(Color::Default),
++                                                )
++                                                .child(
++                                                    Label::new("2. Copy your Bot Token and target Channel ID (enable Developer Mode in Discord)")
++                                                        .size(LabelSize::Small)
++                                                        .color(Color::Default),
++                                                )
++                                                .child(
++                                                    Label::new("3. Add the \"katalyst.discord\" block to ~/.config/zed/settings.json")
++                                                        .size(LabelSize::Small)
++                                                        .color(Color::Default),
++                                                ),
++                                        ),
++                                )
++                                .child(
++                                    v_flex()
++                                        .gap_1()
++                                        .child(
++                                            Label::new("Supported Remote Commands:")
++                                                .size(LabelSize::Small)
++                                                .color(Color::Muted),
++                                        )
++                                        .child(
++                                            h_flex()
++                                                .gap_2()
++                                                .child(Label::new("/approve").size(LabelSize::Small).color(Color::Accent))
++                                                .child(Label::new("•").size(LabelSize::Small).color(Color::Muted))
++                                                .child(Label::new("/continue").size(LabelSize::Small).color(Color::Accent))
++                                                .child(Label::new("•").size(LabelSize::Small).color(Color::Muted))
++                                                .child(Label::new("/status").size(LabelSize::Small).color(Color::Accent))
++                                                .child(Label::new("•").size(LabelSize::Small).color(Color::Muted))
++                                                .child(Label::new("/abort").size(LabelSize::Small).color(Color::Accent)),
++                                        ),
++                                ),
++                        ),
++                    )
++                    .footer(
++                        ModalFooter::new()
++                            .start_slot(
++                                Button::new("copy-template-btn", if copied { "Copied to Clipboard!" } else { "Copy JSON Template" })
++                                    .style(ButtonStyle::Subtle)
++                                    .on_click(cx.listener(|this, _, _, cx| {
++                                        this.copy_template(cx);
++                                    })),
++                            )
++                            .end_slot(
++                                h_flex()
++                                    .gap_2()
++                                    .child(
++                                        Button::new("open-settings-btn", "Edit in settings.json")
++                                            .style(ButtonStyle::Filled)
++                                            .on_click(cx.listener(|_, _, window, cx| {
++                                                window.dispatch_action(Box::new(zed_actions::OpenSettings), cx);
++                                                cx.emit(DismissEvent);
++                                            })),
++                                    )
++                                    .child(
++                                        Button::new("close-btn", "Close")
++                                            .style(ButtonStyle::Subtle)
++                                            .on_click(cx.listener(|_, _, _, cx| {
++                                                cx.emit(DismissEvent);
++                                            })),
++                                    ),
++                            ),
++                    ),
++            )
++    }
++}
 diff --git a/crates/project/src/worktree_store.rs b/crates/project/src/worktree_store.rs
 index 300d9cf448..3605077c30 100644
 --- a/crates/project/src/worktree_store.rs
@@ -522,6 +818,97 @@ index 300d9cf448..3605077c30 100644
          }
      }
  
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index 8e6e251d27..ec48931b8f 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -17,8 +17,8 @@ use agent_ui::threads_archive_view::{
+ };
+ use agent_ui::{
+     AcpThreadImportOnboarding, Agent, AgentPanel, AgentPanelEvent, AgentThreadSource,
+-    ArchiveSelectedThread, CrossChannelImportOnboarding, DEFAULT_THREAD_TITLE, NewTerminalThread,
+-    NewThread, RenameSelectedThread, TerminalId, ThreadId, ThreadImportModal,
++    ArchiveSelectedThread, CrossChannelImportOnboarding, DEFAULT_THREAD_TITLE, DiscordRemoteModal,
++    NewTerminalThread, NewThread, RenameSelectedThread, TerminalId, ThreadId, ThreadImportModal,
+     ThreadTitleRegenerationResult, channels_with_threads, import_threads_from_other_channels,
+ };
+ use agent_ui::{MessageEditorEvent, StateChange, thread_worktree_archive};
+@@ -8057,14 +8057,14 @@ impl Sidebar {
+                             ),
+                     )
+                     .tooltip(Tooltip::text("Configure Discord remote bridge"))
+-                    .on_click(cx.listener(|_, _, window, cx| {
+-                        window.dispatch_action(
+-                            Box::new(zed_actions::OpenSettingsAt {
+-                                path: "katalyst.discord".to_string(),
+-                                target: None,
+-                            }),
+-                            cx,
+-                        );
++                    .on_click(cx.listener(|this, _, window, cx| {
++                        if let Some(workspace) = this.active_workspace(cx) {
++                            workspace.update(cx, |workspace, cx| {
++                                workspace.toggle_modal(window, cx, |window, cx| {
++                                    DiscordRemoteModal::new(window, cx)
++                                });
++                            });
++                        }
+                     })),
+             )
+     }
+diff --git a/crates/zed/src/zed/quick_action_bar/plan_build.rs b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+index 7aef910e19..538ab26ddd 100644
+--- a/crates/zed/src/zed/quick_action_bar/plan_build.rs
++++ b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+@@ -54,6 +54,7 @@ impl QuickActionBar {
+         };
+ 
+         let build_plan_path = plan_path.clone();
++        let build_workspace_handle = workspace_handle.clone();
+         let build_button = Button::new("plan-build-locally", "Build Locally")
+             .label_size(LabelSize::Small)
+             .size(ButtonSize::Compact)
+@@ -65,7 +66,7 @@ impl QuickActionBar {
+             )
+             .tooltip(Tooltip::text("Run /go on this plan in the Agent Panel"))
+             .on_click(move |_, window, cx| {
+-                let Some(workspace) = workspace_handle.upgrade() else {
++                let Some(workspace) = build_workspace_handle.upgrade() else {
+                     return;
+                 };
+                 let command = format!("/go {}", build_plan_path.display());
+@@ -134,12 +135,31 @@ impl QuickActionBar {
+                 )
+         };
+ 
++        let close_button = IconButton::new("plan-close-preview", IconName::Close)
++            .icon_size(IconSize::Small)
++            .style(ButtonStyle::Subtle)
++            .tooltip(Tooltip::text("Hide Plan Panel"))
++            .on_click({
++                let workspace_handle = workspace_handle.clone();
++                move |_, window, cx| {
++                    if let Some(workspace) = workspace_handle.upgrade() {
++                        workspace.update(cx, |workspace, cx| {
++                            let active_pane = workspace.active_pane().clone();
++                            active_pane.update(cx, |pane, cx| {
++                                pane.close_active_item(&Default::default(), window, cx);
++                            });
++                        });
++                    }
++                }
++            });
++
+         Some(
+             h_flex()
+                 .gap(DynamicSpacing::Base01.rems(cx))
+                 .child(model_button)
+                 .child(build_button)
+                 .child(overflow_menu)
++                .child(close_button)
+                 .into_any_element(),
+         )
+     }
 
 -- 
 2.44.0
