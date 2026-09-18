@@ -1,25 +1,32 @@
-From b3a2e0f8c82b5204d2b7e583d617dc6330a3907e Mon Sep 17 00:00:00 2001
+From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 18:40:11 +0700
-Subject: [PATCH] fix(agent_ui): deduplicate plan open by slug and reuse
- empty/right pane
+Date: Fri, 18 Sep 2026 18:30:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan on elicitation in right pane without duplicate splits
 
 ---
- crates/agent_ui/src/agent_ui.rs               | 21 ++++++++++++++++---
- .../src/conversation_view/thread_view.rs      | 11 ++++++----
- 2 files changed, 25 insertions(+), 7 deletions(-)
+ crates/agent_ui/src/agent_ui.rs                    |  60 ++++
+ .../agent_ui/src/conversation_view/thread_view.rs  | 352 ++++++++++++++++++++-
+ crates/project/src/worktree_store.rs               |  21 +-
+ 3 files changed, 415 insertions(+), 18 deletions(-)
 
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index 1a29ef9e95..c5ee951a9e 100644
+index fd9e57abd5..c5ee951a9e 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
-@@ -194,9 +194,24 @@ pub(crate) fn open_plan_in_right_pane(
-         log::error!("Cannot auto-open missing plan file: {abs_path:?}");
-         return;
-     }
--
--    let active_pane = workspace.active_pane().clone();
--    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
+@@ -184,6 +184,66 @@ pub(crate) fn open_abs_path_at_point(
+         .detach_and_log_err(cx);
+ }
+ 
++pub(crate) fn open_plan_in_right_pane(
++    workspace: &mut Workspace,
++    abs_path: PathBuf,
++    window: &mut Window,
++    cx: &mut Context<Workspace>,
++) {
++    if !std::fs::metadata(&abs_path).is_ok_and(|metadata| metadata.is_file()) {
++        log::error!("Cannot auto-open missing plan file: {abs_path:?}");
++        return;
++    }
 +    // 1. If any pane in the workspace is empty (items_len == 0), reuse it!
 +    // This fills the initial center pane directly adjacent to the Agent dock,
 +    // eliminating any blank gap between the Agent panel and the editor!
@@ -38,45 +45,483 @@ index 1a29ef9e95..c5ee951a9e 100644
 +        let active_pane = workspace.active_pane().clone();
 +        workspace.adjacent_pane_of(&active_pane, window, cx)
 +    };
-     let path_for_log = abs_path.clone();
-     let open_task = workspace.open_paths(
-         vec![abs_path],
++    let path_for_log = abs_path.clone();
++    let open_task = workspace.open_paths(
++        vec![abs_path],
++        workspace::OpenOptions {
++            focus: Some(false),
++            visible: Some(workspace::OpenVisible::All),
++            ..Default::default()
++        },
++        Some(target_pane.downgrade()),
++        window,
++        cx,
++    );
++    window
++        .spawn(cx, async move |_cx| {
++            for result in open_task.await {
++                match result {
++                    Some(Ok(_)) => {}
++                    Some(Err(error)) => {
++                        log::error!("Cannot auto-open plan file {path_for_log:?}: {error:#}");
++                    }
++                    None => {
++                        log::error!(
++                            "Cannot auto-open plan file {path_for_log:?}: workspace returned no item"
++                        );
++                    }
++                }
++            }
++            anyhow::Ok(())
++        })
++        .detach_and_log_err(cx);
++}
++
+ pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";
+ const PARALLEL_AGENT_LAYOUT_BACKFILL_KEY: &str = "parallel_agent_layout_backfilled";
+ 
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index ab0ba471fc..370ca47b9a 100644
+index 7610a32d5d..370ca47b9a 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
-@@ -2787,7 +2787,7 @@ impl ThreadView {
-             return;
-         }
+@@ -616,6 +616,9 @@ pub struct ThreadView {
+     pub resumed_without_history: bool,
+     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
+     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
++    opened_plan_slugs: HashSet<String>,
++    plan_scan_task: Option<Task<()>>,
++    last_plan_scan: Option<std::time::Instant>,
+     pub _cancel_task: Option<Task<()>>,
+     _save_task: Option<Task<()>>,
+     _draft_resolve_task: Option<Task<()>>,
+@@ -1031,6 +1034,9 @@ impl ThreadView {
+             new_server_version_available: None,
+             permission_selections: HashMap::default(),
+             elicitation_form_states: HashMap::default(),
++            opened_plan_slugs: HashSet::default(),
++            plan_scan_task: None,
++            last_plan_scan: None,
+             _cancel_task: None,
+             _save_task: None,
+             _draft_resolve_task: None,
+@@ -2614,19 +2620,23 @@ impl ThreadView {
+             elicitation_id.clone()
+         };
  
--        let key = plan_file.to_string_lossy().to_string();
-+        let key = slug.clone();
-         if !self.opened_plan_slugs.insert(key) {
+-        let thread = self.thread.read(cx);
+-        let entry = thread.elicitation(&elicitation_id).map(|(_, elicitation)| {
+-            (
+-                elicitation_id.clone(),
+-                matches!(elicitation.status, ElicitationStatus::Pending { .. }),
+-                match &elicitation.request.mode {
+-                    acp::ElicitationMode::Form(mode) => Some(mode.requested_schema.clone()),
+-                    _ => None,
+-                },
+-            )
+-        });
++        let entry = self
++            .thread
++            .read(cx)
++            .elicitation(&elicitation_id)
++            .map(|(_, elicitation)| {
++                (
++                    elicitation_id.clone(),
++                    matches!(elicitation.status, ElicitationStatus::Pending { .. }),
++                    match &elicitation.request.mode {
++                        acp::ElicitationMode::Form(mode) => Some(mode.requested_schema.clone()),
++                        _ => None,
++                    },
++                    elicitation.request.message.clone(),
++                )
++            });
+ 
+-        let Some((id, is_pending, schema)) = entry else {
++        let Some((id, is_pending, schema, message)) = entry else {
              return;
+         };
+ 
+@@ -2635,17 +2645,328 @@ impl ThreadView {
+             && !self.elicitation_form_states.contains_key(&id)
+         {
+             self.elicitation_form_states
+-                .insert(id, ElicitationFormState::new(&schema, window, cx));
++                .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
++            self.maybe_auto_open_elicitation_plan(&message, window, cx);
+         } else if !is_pending {
+             self.elicitation_form_states.remove(&id);
          }
-@@ -2834,7 +2834,12 @@ impl ThreadView {
-                     let Some(plan_file) = plan_file else {
-                         return;
-                     };
--                    let key = plan_file.to_string_lossy().to_string();
+     }
+ 
++    fn maybe_auto_open_elicitation_plan(
++        &mut self,
++        message: &str,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        let markdown_start = message
++            .split_inclusive('\n')
++            .scan(0usize, |offset, line| {
++                let start = *offset;
++                *offset += line.len();
++                Some((start, line))
++            })
++            .find_map(|(offset, line)| {
++                let line = line.strip_suffix('\n').unwrap_or(line);
++                let heading = line.trim_start();
++                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
++                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
++                    .then_some(offset + line.len() - heading.len())
++            })
++            .or_else(|| {
++                let heading = message.trim_start();
++                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
++                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
++                    .then_some(message.len() - heading.len())
++            });
++        let markdown = markdown_start.map(|index| &message[index..]);
++
++        let normalize_slug = |raw: &str| {
++            let trimmed = raw.trim_matches(|c: char| {
++                matches!(
++                    c,
++                    '`' | '\'' | '"' | '(' | ')' | '<' | '>' | ',' | ';' | ':'
++                )
++            });
++            let raw = trimmed.strip_prefix("local://").unwrap_or(trimmed);
++            let raw = raw.rsplit('/').next().unwrap_or(raw);
++            let raw = raw
++                .strip_suffix("-plan.md")
++                .or_else(|| raw.strip_suffix(".plan.md"))
++                .unwrap_or(raw);
++            let slug: String = raw
++                .chars()
++                .map(|c| {
++                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
++                        c.to_ascii_lowercase()
++                    } else {
++                        '-'
++                    }
++                })
++                .collect();
++            let slug = slug.trim_matches('-');
++            if slug.is_empty() {
++                "active-plan".to_string()
++            } else {
++                slug.to_string()
++            }
++        };
++
++        let marker_slug = message.find("Approve plan \"").and_then(|start| {
++            let rest = &message[start + "Approve plan \"".len()..];
++            rest.find('"').map(|end| normalize_slug(&rest[..end]))
++        });
++        let local_slug = message.split_whitespace().find_map(|word| {
++            let clean = word.trim_matches(|c: char| {
++                matches!(
++                    c,
++                    '`' | '\'' | '"' | '(' | ')' | '<' | '>' | ',' | ';' | ':'
++                )
++            });
++            clean
++                .strip_prefix("local://")
++                .filter(|slug| slug.ends_with(".md"))
++                .map(normalize_slug)
++        });
++        let markdown_slug = markdown.and_then(|content| {
++            content.lines().find_map(|line| {
++                let heading = line.trim_start();
++                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
++                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
++                    .then(|| normalize_slug(&heading[hash_count + 1..]))
++            })
++        });
++        let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
++            self.check_and_auto_open_active_plan(window, cx);
++            return;
++        };
++
++        let Some(home) = std::env::var_os("HOME") else {
++            self.check_and_auto_open_active_plan(window, cx);
++            return;
++        };
++        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
++        let _ = std::fs::create_dir_all(&global_plans_dir);
++        let global_plan_file = global_plans_dir.join(format!("{slug}.plan.md"));
++        if let Some(md_content) = markdown {
++            let _ = std::fs::write(&global_plan_file, md_content);
++        }
++
++        let plan_file = self
++            .workspace
++            .upgrade()
++            .and_then(|workspace| {
++                let primary_root = workspace
++                    .read(cx)
++                    .project()
++                    .read(cx)
++                    .visible_worktrees(cx)
++                    .next()
++                    .map(|w| w.read(cx).abs_path().to_path_buf());
++                if let Some(root) = primary_root {
++                    let ws_plans_dir = root.join(".katalyst/plans");
++                    let _ = std::fs::create_dir_all(&ws_plans_dir);
++                    let ws_plan_file = ws_plans_dir.join(format!("{slug}.plan.md"));
++                    if let Some(md_content) = markdown {
++                        let _ = std::fs::write(&ws_plan_file, md_content);
++                    } else if global_plan_file.is_file() && !ws_plan_file.is_file() {
++                        let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
++                    }
++                    if ws_plan_file.is_file() {
++                        Some(ws_plan_file)
++                    } else {
++                        None
++                    }
++                } else {
++                    None
++                }
++            })
++            .unwrap_or(global_plan_file);
++
++        if !plan_file.is_file() {
++            self.check_and_auto_open_active_plan(window, cx);
++            return;
++        }
++
++        let key = slug.clone();
++        if !self.opened_plan_slugs.insert(key) {
++            return;
++        }
++
++        if let Some(workspace) = self.workspace.upgrade() {
++            workspace.update(cx, |ws, cx| {
++                crate::open_plan_in_right_pane(ws, plan_file, window, cx);
++            });
++        }
++    }
++
++    fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
++        if self.plan_scan_task.is_some()
++            || self.last_plan_scan.is_some_and(|last_scan| {
++                last_scan.elapsed() < std::time::Duration::from_millis(250)
++            })
++        {
++            return;
++        }
++        self.last_plan_scan = Some(std::time::Instant::now());
++
++        let session_id = self.session_id.to_string();
++        let workspace_roots = self
++            .workspace
++            .upgrade()
++            .map(|workspace| {
++                workspace
++                    .read(cx)
++                    .project()
++                    .read(cx)
++                    .visible_worktrees(cx)
++                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
++                    .collect::<Vec<_>>()
++            })
++            .unwrap_or_default();
++        let scan_task =
++            cx.background_spawn(async move { Self::find_active_plan(session_id, workspace_roots) });
++        let weak_self = cx.weak_entity();
++        self.plan_scan_task = Some(window.spawn(cx, async move |cx| {
++            let plan_file = scan_task.await;
++            weak_self
++                .update_in(cx, |this, window, cx| {
++                    this.plan_scan_task = None;
++                    let Some(plan_file) = plan_file else {
++                        return;
++                    };
 +                    let key = plan_file
 +                        .file_stem()
 +                        .and_then(|s| s.to_str())
 +                        .map(|s| s.strip_suffix(".plan").unwrap_or(s))
 +                        .unwrap_or("plan")
 +                        .to_string();
-                     if !this.opened_plan_slugs.insert(key) {
-                         return;
-                     }
-@@ -12935,8 +12940,6 @@ impl Render for ThreadView {
++                    if !this.opened_plan_slugs.insert(key) {
++                        return;
++                    }
++                    if let Some(workspace) = this.workspace.upgrade() {
++                        workspace.update(cx, |ws, cx| {
++                            crate::open_plan_in_right_pane(ws, plan_file, window, cx);
++                        });
++                    }
++                })
++                .ok();
++        }));
++    }
++
++    fn find_active_plan(
++        session_id_str: String,
++        workspace_roots: Vec<std::path::PathBuf>,
++    ) -> Option<std::path::PathBuf> {
++        let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
++        let recent_cutoff =
++            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(15 * 60));
++        let add_plan_candidates =
++            |dir: &std::path::Path,
++             recent_only: Option<std::time::SystemTime>,
++             require_dot_plan_suffix: bool,
++             candidates: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>| {
++                let Ok(files) = std::fs::read_dir(dir) else {
++                    return false;
++                };
++                let mut added = false;
++                for file in files.flatten() {
++                    let path = file.path();
++                    let is_plan = path.file_name().is_some_and(|name| {
++                        let name = name.to_string_lossy();
++                        if require_dot_plan_suffix {
++                            name.ends_with(".plan.md")
++                        } else {
++                            name.ends_with("plan.md")
++                        }
++                    });
++                    if !is_plan {
++                        continue;
++                    }
++                    let Ok(modified) =
++                        std::fs::metadata(&path).and_then(|metadata| metadata.modified())
++                    else {
++                        continue;
++                    };
++                    if recent_only.is_some_and(|cutoff| modified < cutoff) {
++                        continue;
++                    }
++                    candidates.push((modified, path));
++                    added = true;
++                }
++                added
++            };
++
++        if let Some(home) = std::env::var_os("HOME") {
++            let base = std::path::PathBuf::from(home);
++            let session_dir = base.join(".omp/agent/sessions");
++            let mut found_exact_session_plan = false;
++            if let Ok(buckets) = std::fs::read_dir(&session_dir) {
++                for bucket in buckets.flatten() {
++                    let bucket_path = bucket.path();
++                    if !bucket_path.is_dir() {
++                        continue;
++                    }
++                    if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
++                        for session in subdirs.flatten() {
++                            let session_path = session.path();
++                            if session_path.file_name().is_some_and(|name| {
++                                name.to_string_lossy().contains(&session_id_str)
++                            }) {
++                                found_exact_session_plan |= add_plan_candidates(
++                                    &session_path.join("local"),
++                                    None,
++                                    false,
++                                    &mut candidates,
++                                );
++                            }
++                        }
++                    }
++                }
++            }
++
++            if !found_exact_session_plan {
++                if let Ok(buckets) = std::fs::read_dir(&session_dir) {
++                    for bucket in buckets.flatten() {
++                        let bucket_path = bucket.path();
++                        if !bucket_path.is_dir() {
++                            continue;
++                        }
++                        if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
++                            for session in subdirs.flatten() {
++                                add_plan_candidates(
++                                    &session.path().join("local"),
++                                    recent_cutoff,
++                                    false,
++                                    &mut candidates,
++                                );
++                            }
++                        }
++                    }
++                }
++            }
++
++            add_plan_candidates(
++                &base.join(".katalyst/plans"),
++                recent_cutoff,
++                false,
++                &mut candidates,
++            );
++        }
++
++        for root in workspace_roots {
++            add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
++        }
++
++        candidates.sort_by(|a, b| b.0.cmp(&a.0));
++        candidates.into_iter().next().map(|(_, path)| path)
++    }
++
+     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let entry_count = self.thread.read(cx).entries().len();
+         for index in 0..entry_count {
+             self.sync_elicitation_state_for_entry(index, window, cx);
+         }
++        self.check_and_auto_open_active_plan(window, cx);
+     }
+ 
+     #[cfg(test)]
+@@ -3812,9 +4133,9 @@ impl ThreadView {
+                             move |_event, window, cx| {
+                                 if let Some(workspace) = workspace.upgrade() {
+                                     workspace.update(cx, |ws, cx| {
+-                                        let _ = ws.open_abs_path(
++                                        crate::open_plan_in_right_pane(
++                                            ws,
+                                             plan_path.clone(),
+-                                            workspace::OpenOptions::default(),
+                                             window,
+                                             cx,
+                                         );
+@@ -12619,7 +12940,6 @@ impl Render for ThreadView {
          // current availability of feedback/sharing, which can change between
          // renders (settings, connection state, feature flags).
          self.sync_local_commands(cx);
--        self.check_and_auto_open_active_plan(window, cx);
 -
          let has_messages = self.list_state.item_count() > 0;
          let list_state = self.list_state.clone();
  
--- 
-2.50.1 (Apple Git-155)
+diff --git a/crates/project/src/worktree_store.rs b/crates/project/src/worktree_store.rs
+index 300d9cf448..3605077c30 100644
+--- a/crates/project/src/worktree_store.rs
++++ b/crates/project/src/worktree_store.rs
+@@ -507,8 +507,25 @@ impl WorktreeStore {
+         if let Some((tree, relative_path)) = self.find_worktree(abs_path, cx) {
+             Task::ready(Ok((tree, relative_path)))
+         } else {
+-            let worktree = self.create_worktree(abs_path, visible, cx);
+-            cx.background_spawn(async move { Ok((worktree.await?, RelPath::empty_arc())) })
++            let (target_root, rel_path) = if abs_path.is_file() {
++                if let (Some(parent), Some(file_name)) = (abs_path.parent(), abs_path.file_name()) {
++                    if let Some(name_str) = file_name.to_str() {
++                        if let Ok(rel) = RelPath::from_unix_str(name_str) {
++                            (parent, Arc::from(rel))
++                        } else {
++                            (abs_path, RelPath::empty_arc())
++                        }
++                    } else {
++                        (abs_path, RelPath::empty_arc())
++                    }
++                } else {
++                    (abs_path, RelPath::empty_arc())
++                }
++            } else {
++                (abs_path, RelPath::empty_arc())
++            };
++            let worktree = self.create_worktree(target_root, visible, cx);
++            cx.background_spawn(async move { Ok((worktree.await?, rel_path)) })
+         }
+     }
+ 
 
+-- 
+2.44.0
