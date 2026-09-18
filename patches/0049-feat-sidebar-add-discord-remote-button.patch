@@ -1,0 +1,60 @@
+From b194570dca0e6b210d3191ab8bcf468670174b07 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Fri, 18 Sep 2026 08:30:48 +0700
+Subject: [PATCH] feat(sidebar): add discord remote button to quick actions
+
+---
+ crates/sidebar/src/sidebar.rs | 37 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
+index 1d2db8c357..8e6e251d27 100644
+--- a/crates/sidebar/src/sidebar.rs
++++ b/crates/sidebar/src/sidebar.rs
+@@ -8030,6 +8030,43 @@ impl Sidebar {
+                         );
+                     })),
+             )
++            .child(
++                h_flex()
++                    .items_center()
++                    .id("sidebar-discord-remote")
++                    .h(px(36.))
++                    .w_full()
++                    .px_2()
++                    .rounded_md()
++                    .cursor_pointer()
++                    .hover(|this| this.bg(cx.theme().colors().element_hover))
++                    .child(
++                        h_flex()
++                            .gap_2()
++                            .items_center()
++                            .justify_start()
++                            .child(
++                                Icon::new(IconName::Chat)
++                                    .size(IconSize::Small)
++                                    .color(Color::Muted),
++                            )
++                            .child(
++                                Label::new("Discord remote")
++                                    .size(LabelSize::Default)
++                                    .color(Color::Default),
++                            ),
++                    )
++                    .tooltip(Tooltip::text("Configure Discord remote bridge"))
++                    .on_click(cx.listener(|_, _, window, cx| {
++                        window.dispatch_action(
++                            Box::new(zed_actions::OpenSettingsAt {
++                                path: "katalyst.discord".to_string(),
++                                target: None,
++                            }),
++                            cx,
++                        );
++                    })),
++            )
+     }
+ 
+     fn render_new_chat_button(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+-- 
+2.50.1 (Apple Git-155)
+

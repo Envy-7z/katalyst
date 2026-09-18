@@ -91,6 +91,28 @@ Key enhancements in v0.3.0:
 - **Process Group Reaper**: Automatic `SIGTERM` followed by 2s grace period before `SIGKILL` on shutdown, guaranteeing zero orphaned OMP processes.
 - **Sidebar Categorization & Source Badges**: Threads organized by `Today`, `Previous 7 Days`, and `Older` with visual source tags (`[Cursor]`, `[Codex]`, `[OMP]`).
 - **Standalone Release-Fast Packaging**: Compiled with `profile.release-fast`, reducing disk footprint from 1.17 GB to 450 MB with 0.079s instant startup.
+
+### 📱 Mobile & Remote Control via Discord (`katalyst-discord-bridge`)
+
+Leave long tasks running while away or sleeping and monitor them directly from your phone:
+- **Push Alerts**: Instant rich embeds when a turn completes, encounters an error, or requests confirmation/input.
+- **Two-Way Reply**: Send prompt replies from Discord directly into your active Katalyst workspace.
+- **Remote Commands**: `/approve`, `/continue`, `/status`, `/abort`.
+- **Ultra-Lightweight**: Standalone Bun/Node daemon (< 15 MB RAM, 0% CPU idle).
+- **Quick Access**: Click **Discord remote** in the left sidebar to jump straight to configuration.
+
+```json
+"katalyst.discord": {
+  "enabled": true,
+  "bot_token": "YOUR_DISCORD_BOT_TOKEN",
+  "channel_id": "YOUR_CHANNEL_ID",
+  "authorized_user_ids": ["YOUR_USER_ID"]
+}
+```
+Run the bridge:
+```bash
+~/.katalyst/bin/katalyst-discord-bridge.ts
+```
 ### Privacy boundary
 
 The repository contains generic defaults, example MCP configuration, release scripts, and reusable skills. Personal Cursor/Codex rules, hooks, settings, MCP credentials, raw transcripts, and provider accounts stay on the local machine under `~/.katalyst/private-profile` and are never copied into this repository. The installer migrates compatible local skills and MCP definitions without publishing the source files or secrets.
