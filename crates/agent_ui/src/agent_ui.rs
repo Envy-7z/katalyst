@@ -196,49 +196,34 @@ pub(crate) fn open_plan_in_right_pane(
     }
 
     let active_pane = workspace.active_pane().clone();
-    let open_options = workspace::OpenOptions {
-        focus: Some(false),
-        visible: Some(workspace::OpenVisible::All),
-        ..Default::default()
-    };
-    if active_pane.read(cx).items_len() == 0 {
-        let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
-        let open_task = workspace.open_paths(
-            vec![abs_path],
-            open_options,
-            Some(target_pane.downgrade()),
-            window,
-            cx,
-        );
-        window
-            .spawn(cx, async move |_cx| {
-                for result in open_task.await {
-                    if let Some(Err(error)) = result {
-                        log::error!("Cannot auto-open plan file: {error:#}");
+    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
+    let path_for_log = abs_path.clone();
+    let open_task = workspace.open_paths(
+        vec![abs_path],
+        workspace::OpenOptions {
+            focus: Some(false),
+            visible: Some(workspace::OpenVisible::All),
+            ..Default::default()
+        },
+        Some(target_pane.downgrade()),
+        window,
+        cx,
+    );
+    window
+        .spawn(cx, async move |_cx| {
+            for result in open_task.await {
+                match result {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => {
+                        log::error!("Cannot auto-open plan file {path_for_log:?}: {error:#}");
+                    }
+                    None => {
+                        log::error!(
+                            "Cannot auto-open plan file {path_for_log:?}: workspace returned no item"
+                        );
                     }
                 }
-                anyhow::Ok(())
-            })
-            .detach_and_log_err(cx);
-        return;
-    }
-
-    let workspace_handle = cx.weak_entity();
-    let open_task = workspace.open_abs_path(abs_path, open_options, window, cx);
-    window
-        .spawn(cx, async move |cx| {
-            open_task.await?;
-            workspace_handle.update_in(cx, |workspace, window, cx| {
-                workspace.move_item_to_pane_in_direction(
-                    &workspace::MoveItemToPaneInDirection {
-                        direction: workspace::SplitDirection::Right,
-                        focus: false,
-                        clone: false,
-                    },
-                    window,
-                    cx,
-                );
-            })?;
+            }
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);

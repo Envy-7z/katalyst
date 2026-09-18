@@ -2659,9 +2659,25 @@ impl ThreadView {
         cx: &mut Context<Self>,
     ) {
         let markdown_start = message
-            .find("\n# ")
-            .map(|index| index + 1)
-            .or_else(|| message.starts_with("# ").then_some(0));
+            .split_inclusive('\n')
+            .scan(0usize, |offset, line| {
+                let start = *offset;
+                *offset += line.len();
+                Some((start, line))
+            })
+            .find_map(|(offset, line)| {
+                let line = line.strip_suffix('\n').unwrap_or(line);
+                let heading = line.trim_start();
+                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
+                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
+                    .then_some(offset + line.len() - heading.len())
+            })
+            .or_else(|| {
+                let heading = message.trim_start();
+                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
+                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
+                    .then_some(message.len() - heading.len())
+            });
         let markdown = markdown_start.map(|index| &message[index..]);
 
         let normalize_slug = |raw: &str| {
@@ -2712,9 +2728,12 @@ impl ThreadView {
                 .map(normalize_slug)
         });
         let markdown_slug = markdown.and_then(|content| {
-            content
-                .lines()
-                .find_map(|line| line.strip_prefix("# ").map(normalize_slug))
+            content.lines().find_map(|line| {
+                let heading = line.trim_start();
+                let hash_count = heading.bytes().take_while(|byte| *byte == b'#').count();
+                (hash_count > 0 && heading.as_bytes().get(hash_count) == Some(&b' '))
+                    .then(|| normalize_slug(&heading[hash_count + 1..]))
+            })
         });
         let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
             self.check_and_auto_open_active_plan(window, cx);
