@@ -74,7 +74,11 @@ impl Focusable for DiscordRemoteModal {
 }
 
 impl EventEmitter<DismissEvent> for DiscordRemoteModal {}
-impl ModalView for DiscordRemoteModal {}
+impl ModalView for DiscordRemoteModal {
+    fn fade_out_background(&self) -> bool {
+        true
+    }
+}
 
 impl Render for DiscordRemoteModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -84,9 +88,17 @@ impl Render for DiscordRemoteModal {
         let copied = self.copied_template;
 
         v_flex()
+            .id("discord-remote-modal")
             .key_context("DiscordRemoteModal")
+            .w(rems(38.))
+            .max_w(rems(38.))
+            .bg(cx.theme().colors().elevated_surface_background)
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .rounded_xl()
+            .shadow_xl()
+            .overflow_hidden()
             .track_focus(&self.focus_handle)
-            .size_full()
             .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
                 cx.emit(DismissEvent);
             }))
@@ -167,34 +179,70 @@ impl Render for DiscordRemoteModal {
                                 )
                                 .child(
                                     v_flex()
-                                        .gap_2()
+                                        .gap_1p5()
                                         .child(
-                                            Label::new("How to Connect in 3 Steps:")
+                                            Label::new("How to Connect:")
                                                 .size(LabelSize::Default)
                                                 .color(Color::Default),
                                         )
                                         .child(
                                             v_flex()
-                                                .gap_1p5()
-                                                .p_3()
+                                                .gap_1()
+                                                .p_2p5()
                                                 .rounded_md()
                                                 .bg(cx.theme().colors().editor_background)
                                                 .border_1()
                                                 .border_color(cx.theme().colors().border)
                                                 .child(
-                                                    Label::new("1. Create a Bot in Discord Developer Portal (enable Message Content Intent)")
+                                                    Label::new("1. Create Bot in Discord Developer Portal (enable Message Content Intent)")
                                                         .size(LabelSize::Small)
                                                         .color(Color::Default),
                                                 )
                                                 .child(
-                                                    Label::new("2. Copy your Bot Token and target Channel ID (enable Developer Mode in Discord)")
+                                                    Label::new("2. Copy your Bot Token and target Channel ID (enable Developer Mode)")
                                                         .size(LabelSize::Small)
                                                         .color(Color::Default),
                                                 )
                                                 .child(
-                                                    Label::new("3. Add the \"katalyst.discord\" block to ~/.config/zed/settings.json")
+                                                    Label::new("3. Add \"katalyst.discord\" block to ~/.config/zed/settings.json")
                                                         .size(LabelSize::Small)
                                                         .color(Color::Default),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            h_flex()
+                                                .justify_between()
+                                                .items_center()
+                                                .child(
+                                                    Label::new("Settings Template:")
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted),
+                                                )
+                                                .child(
+                                                    Button::new("copy-template-btn", if copied { "Copied!" } else { "Copy Template" })
+                                                        .style(ButtonStyle::Subtle)
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.copy_template(cx);
+                                                        })),
+                                                ),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .p_2p5()
+                                                .rounded_md()
+                                                .bg(cx.theme().colors().editor_background)
+                                                .border_1()
+                                                .border_color(cx.theme().colors().border)
+                                                .child(
+                                                    Label::new(
+                                                        "\"katalyst.discord\": {\n  \"enabled\": true,\n  \"bot_token\": \"YOUR_BOT_TOKEN\",\n  \"channel_id\": \"YOUR_CHANNEL_ID\"\n}"
+                                                    )
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted),
                                                 ),
                                         ),
                                 )
@@ -222,13 +270,6 @@ impl Render for DiscordRemoteModal {
                     )
                     .footer(
                         ModalFooter::new()
-                            .start_slot(
-                                Button::new("copy-template-btn", if copied { "Copied to Clipboard!" } else { "Copy JSON Template" })
-                                    .style(ButtonStyle::Subtle)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.copy_template(cx);
-                                    })),
-                            )
                             .end_slot(
                                 h_flex()
                                     .gap_2()
