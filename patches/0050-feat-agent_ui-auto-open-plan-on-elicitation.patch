@@ -1,12 +1,12 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:00:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, and right panel toggle
+Date: Fri, 18 Sep 2026 19:15:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan on elicitation, DiscordRemoteModal, and right panel toggle
 
 ---
  crates/agent_ui/src/agent_panel.rs                 |   4 +-
- crates/agent_ui/src/agent_ui.rs                    |  62 ++++
- .../agent_ui/src/conversation_view/thread_view.rs  | 352 ++++++++++++++++++++-
+ crates/agent_ui/src/agent_ui.rs                    |  63 ++++
+ .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  20 +-
@@ -30,7 +30,7 @@ index 99ad5f12e1..daf1341085 100644
          let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
              .icon_size(IconSize::Small)
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index fd9e57abd5..6ff1d583c6 100644
+index fd9e57abd5..8455f2bd8e 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
 @@ -31,6 +31,7 @@ pub mod terminal_thread_metadata_store;
@@ -49,7 +49,7 @@ index fd9e57abd5..6ff1d583c6 100644
  use zed_actions;
  pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
  
-@@ -184,6 +186,66 @@ pub(crate) fn open_abs_path_at_point(
+@@ -184,6 +186,67 @@ pub(crate) fn open_abs_path_at_point(
          .detach_and_log_err(cx);
  }
  
@@ -72,10 +72,11 @@ index fd9e57abd5..6ff1d583c6 100644
 +        .find(|pane| pane.read(cx).items_len() == 0)
 +    {
 +        empty_pane.clone()
-+    } else if workspace.panes().len() > 1 {
-+        // 2. If multiple panes already exist, use the existing rightmost pane
-+        // instead of repeatedly splitting new panes to the right!
-+        workspace.panes().last().unwrap().clone()
++    } else if let Some(last_pane) = workspace.panes().last() {
++        // 2. If a center pane already exists, reuse it as a tab!
++        // Because the chat is docked on the left, any center pane is already on the right.
++        // Never multi-split into duplicate side-by-side columns!
++        last_pane.clone()
 +    } else {
 +        // 3. Exactly one non-empty pane: split once to the right
 +        let active_pane = workspace.active_pane().clone();
@@ -117,7 +118,7 @@ index fd9e57abd5..6ff1d583c6 100644
  const PARALLEL_AGENT_LAYOUT_BACKFILL_KEY: &str = "parallel_agent_layout_backfilled";
  
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index 7610a32d5d..370ca47b9a 100644
+index 7610a32d5d..417587c71d 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -616,6 +616,9 @@ pub struct ThreadView {
@@ -176,7 +177,7 @@ index 7610a32d5d..370ca47b9a 100644
              return;
          };
  
-@@ -2635,17 +2645,328 @@ impl ThreadView {
+@@ -2635,12 +2645,322 @@ impl ThreadView {
              && !self.elicitation_form_states.contains_key(&id)
          {
              self.elicitation_form_states
@@ -500,13 +501,7 @@ index 7610a32d5d..370ca47b9a 100644
      fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
          let entry_count = self.thread.read(cx).entries().len();
          for index in 0..entry_count {
-             self.sync_elicitation_state_for_entry(index, window, cx);
-         }
-+        self.check_and_auto_open_active_plan(window, cx);
-     }
- 
-     #[cfg(test)]
-@@ -3812,9 +4133,9 @@ impl ThreadView {
+@@ -3812,9 +4132,9 @@ impl ThreadView {
                              move |_event, window, cx| {
                                  if let Some(workspace) = workspace.upgrade() {
                                      workspace.update(cx, |ws, cx| {
@@ -518,7 +513,7 @@ index 7610a32d5d..370ca47b9a 100644
                                              window,
                                              cx,
                                          );
-@@ -12619,7 +12940,6 @@ impl Render for ThreadView {
+@@ -12619,7 +12939,6 @@ impl Render for ThreadView {
          // current availability of feedback/sharing, which can change between
          // renders (settings, connection state, feature flags).
          self.sync_local_commands(cx);
