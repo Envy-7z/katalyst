@@ -184,6 +184,47 @@ pub(crate) fn open_abs_path_at_point(
         .detach_and_log_err(cx);
 }
 
+pub(crate) fn open_plan_in_right_pane(
+    workspace: &mut Workspace,
+    abs_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let workspace_handle = cx.weak_entity();
+    window
+        .spawn(cx, async move |cx| {
+            let _item = workspace_handle
+                .update_in(cx, |workspace, window, cx| {
+                    workspace.open_abs_path(
+                        abs_path,
+                        workspace::OpenOptions {
+                            focus: Some(false),
+                            visible: Some(workspace::OpenVisible::All),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    )
+                })?
+                .await?;
+
+            workspace_handle.update_in(cx, |workspace, window, cx| {
+                workspace.move_item_to_pane_in_direction(
+                    &workspace::MoveItemToPaneInDirection {
+                        direction: workspace::SplitDirection::Right,
+                        focus: false,
+                        clone: false,
+                    },
+                    window,
+                    cx,
+                );
+            })?;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+}
+
 pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";
 const PARALLEL_AGENT_LAYOUT_BACKFILL_KEY: &str = "parallel_agent_layout_backfilled";
 
