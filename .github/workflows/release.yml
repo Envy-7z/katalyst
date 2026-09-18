@@ -99,10 +99,7 @@ jobs:
             xcrun stapler staple package/Katalyst.app
             rm package/notarization.zip package/AuthKey.p8 package/katalyst-certificate.p12
           else
-            for bin in package/Katalyst.app/Contents/MacOS/*; do
-              [[ -f "$bin" ]] && codesign --force --sign - "$bin"
-            done
-            codesign --force --sign - package/Katalyst.app
+            codesign --force --deep --sign - package/Katalyst.app
           fi
 
           ASSET="Katalyst-v${VERSION}-macOS-${RELEASE_ARCH}.zip"
