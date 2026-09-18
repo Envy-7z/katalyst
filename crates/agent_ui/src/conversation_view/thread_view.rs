@@ -2966,7 +2966,6 @@ impl ThreadView {
         for index in 0..entry_count {
             self.sync_elicitation_state_for_entry(index, window, cx);
         }
-        self.check_and_auto_open_active_plan(window, cx);
     }
 
     #[cfg(test)]

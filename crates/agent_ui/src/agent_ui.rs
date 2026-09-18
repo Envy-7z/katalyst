@@ -205,10 +205,11 @@ pub(crate) fn open_plan_in_right_pane(
         .find(|pane| pane.read(cx).items_len() == 0)
     {
         empty_pane.clone()
-    } else if workspace.panes().len() > 1 {
-        // 2. If multiple panes already exist, use the existing rightmost pane
-        // instead of repeatedly splitting new panes to the right!
-        workspace.panes().last().unwrap().clone()
+    } else if let Some(last_pane) = workspace.panes().last() {
+        // 2. If a center pane already exists, reuse it as a tab!
+        // Because the chat is docked on the left, any center pane is already on the right.
+        // Never multi-split into duplicate side-by-side columns!
+        last_pane.clone()
     } else {
         // 3. Exactly one non-empty pane: split once to the right
         let active_pane = workspace.active_pane().clone();
