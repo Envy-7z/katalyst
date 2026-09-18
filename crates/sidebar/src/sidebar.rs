@@ -8030,6 +8030,43 @@ impl Sidebar {
                         );
                     })),
             )
+            .child(
+                h_flex()
+                    .items_center()
+                    .id("sidebar-discord-remote")
+                    .h(px(36.))
+                    .w_full()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .child(
+                                Icon::new(IconName::Chat)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Discord remote")
+                                    .size(LabelSize::Default)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .tooltip(Tooltip::text("Configure Discord remote bridge"))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(
+                            Box::new(zed_actions::OpenSettingsAt {
+                                path: "katalyst.discord".to_string(),
+                                target: None,
+                            }),
+                            cx,
+                        );
+                    })),
+            )
     }
 
     fn render_new_chat_button(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
