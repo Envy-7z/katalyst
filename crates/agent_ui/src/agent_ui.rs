@@ -190,21 +190,58 @@ pub(crate) fn open_plan_in_right_pane(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
+    if !std::fs::metadata(&abs_path).is_ok_and(|metadata| metadata.is_file()) {
+        log::error!("Cannot auto-open missing plan file: {abs_path:?}");
+        return;
+    }
+
     let active_pane = workspace.active_pane().clone();
-    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
-    workspace
-        .open_paths(
+    let open_options = workspace::OpenOptions {
+        focus: Some(false),
+        visible: Some(workspace::OpenVisible::All),
+        ..Default::default()
+    };
+    if active_pane.read(cx).items_len() == 0 {
+        let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
+        let open_task = workspace.open_paths(
             vec![abs_path],
-            workspace::OpenOptions {
-                focus: Some(false),
-                visible: Some(workspace::OpenVisible::All),
-                ..Default::default()
-            },
+            open_options,
             Some(target_pane.downgrade()),
             window,
             cx,
-        )
-        .detach();
+        );
+        window
+            .spawn(cx, async move |_cx| {
+                for result in open_task.await {
+                    if let Some(Err(error)) = result {
+                        log::error!("Cannot auto-open plan file: {error:#}");
+                    }
+                }
+                anyhow::Ok(())
+            })
+            .detach_and_log_err(cx);
+        return;
+    }
+
+    let workspace_handle = cx.weak_entity();
+    let open_task = workspace.open_abs_path(abs_path, open_options, window, cx);
+    window
+        .spawn(cx, async move |cx| {
+            open_task.await?;
+            workspace_handle.update_in(cx, |workspace, window, cx| {
+                workspace.move_item_to_pane_in_direction(
+                    &workspace::MoveItemToPaneInDirection {
+                        direction: workspace::SplitDirection::Right,
+                        focus: false,
+                        clone: false,
+                    },
+                    window,
+                    cx,
+                );
+            })?;
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
 }
 
 pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";

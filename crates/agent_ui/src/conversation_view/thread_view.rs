@@ -617,6 +617,7 @@ pub struct ThreadView {
     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
     opened_plan_slugs: HashSet<String>,
+    plan_scan_task: Option<Task<()>>,
     last_plan_scan: Option<std::time::Instant>,
     pub _cancel_task: Option<Task<()>>,
     _save_task: Option<Task<()>>,
@@ -1034,6 +1035,7 @@ impl ThreadView {
             permission_selections: HashMap::default(),
             elicitation_form_states: HashMap::default(),
             opened_plan_slugs: HashSet::default(),
+            plan_scan_task: None,
             last_plan_scan: None,
             _cancel_task: None,
             _save_task: None,
@@ -2750,16 +2752,59 @@ impl ThreadView {
     }
 
     fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .last_plan_scan
-            .is_some_and(|last_scan| last_scan.elapsed() < std::time::Duration::from_millis(250))
+        if self.plan_scan_task.is_some()
+            || self.last_plan_scan.is_some_and(|last_scan| {
+                last_scan.elapsed() < std::time::Duration::from_millis(250)
+            })
         {
             return;
         }
         self.last_plan_scan = Some(std::time::Instant::now());
 
+        let session_id = self.session_id.to_string();
+        let workspace_roots = self
+            .workspace
+            .upgrade()
+            .map(|workspace| {
+                workspace
+                    .read(cx)
+                    .project()
+                    .read(cx)
+                    .visible_worktrees(cx)
+                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let scan_task =
+            cx.background_spawn(async move { Self::find_active_plan(session_id, workspace_roots) });
+        let weak_self = cx.weak_entity();
+        self.plan_scan_task = Some(window.spawn(cx, async move |cx| {
+            let plan_file = scan_task.await;
+            weak_self
+                .update_in(cx, |this, window, cx| {
+                    this.plan_scan_task = None;
+                    let Some(plan_file) = plan_file else {
+                        return;
+                    };
+                    let key = plan_file.to_string_lossy().to_string();
+                    if !this.opened_plan_slugs.insert(key) {
+                        return;
+                    }
+                    if let Some(workspace) = this.workspace.upgrade() {
+                        workspace.update(cx, |ws, cx| {
+                            crate::open_plan_in_right_pane(ws, plan_file, window, cx);
+                        });
+                    }
+                })
+                .ok();
+        }));
+    }
+
+    fn find_active_plan(
+        session_id_str: String,
+        workspace_roots: Vec<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
         let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-        let session_id_str = self.session_id.to_string();
         let recent_cutoff =
             std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(15 * 60));
         let add_plan_candidates =
@@ -2853,40 +2898,14 @@ impl ThreadView {
                 false,
                 &mut candidates,
             );
+        }
 
-            let workspace_roots = self
-                .workspace
-                .upgrade()
-                .map(|workspace| {
-                    workspace
-                        .read(cx)
-                        .project()
-                        .read(cx)
-                        .visible_worktrees(cx)
-                        .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            for root in workspace_roots {
-                add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
-            }
+        for root in workspace_roots {
+            add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
         }
 
         candidates.sort_by(|a, b| b.0.cmp(&a.0));
-        let Some((_, plan_file)) = candidates.into_iter().next() else {
-            return;
-        };
-
-        let key = plan_file.to_string_lossy().to_string();
-        if !self.opened_plan_slugs.insert(key) {
-            return;
-        }
-
-        if let Some(workspace) = self.workspace.upgrade() {
-            workspace.update(cx, |ws, cx| {
-                crate::open_plan_in_right_pane(ws, plan_file, window, cx);
-            });
-        }
+        candidates.into_iter().next().map(|(_, path)| path)
     }
 
     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
