@@ -17,8 +17,8 @@ use agent_ui::threads_archive_view::{
 };
 use agent_ui::{
     AcpThreadImportOnboarding, Agent, AgentPanel, AgentPanelEvent, AgentThreadSource,
-    ArchiveSelectedThread, CrossChannelImportOnboarding, DEFAULT_THREAD_TITLE, NewTerminalThread,
-    NewThread, RenameSelectedThread, TerminalId, ThreadId, ThreadImportModal,
+    ArchiveSelectedThread, CrossChannelImportOnboarding, DEFAULT_THREAD_TITLE, DiscordRemoteModal,
+    NewTerminalThread, NewThread, RenameSelectedThread, TerminalId, ThreadId, ThreadImportModal,
     ThreadTitleRegenerationResult, channels_with_threads, import_threads_from_other_channels,
 };
 use agent_ui::{MessageEditorEvent, StateChange, thread_worktree_archive};
@@ -8057,14 +8057,14 @@ impl Sidebar {
                             ),
                     )
                     .tooltip(Tooltip::text("Configure Discord remote bridge"))
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(
-                            Box::new(zed_actions::OpenSettingsAt {
-                                path: "katalyst.discord".to_string(),
-                                target: None,
-                            }),
-                            cx,
-                        );
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(workspace) = this.active_workspace(cx) {
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.toggle_modal(window, cx, |window, cx| {
+                                    DiscordRemoteModal::new(window, cx)
+                                });
+                            });
+                        }
                     })),
             )
     }

@@ -54,6 +54,7 @@ impl QuickActionBar {
         };
 
         let build_plan_path = plan_path.clone();
+        let build_workspace_handle = workspace_handle.clone();
         let build_button = Button::new("plan-build-locally", "Build Locally")
             .label_size(LabelSize::Small)
             .size(ButtonSize::Compact)
@@ -65,7 +66,7 @@ impl QuickActionBar {
             )
             .tooltip(Tooltip::text("Run /go on this plan in the Agent Panel"))
             .on_click(move |_, window, cx| {
-                let Some(workspace) = workspace_handle.upgrade() else {
+                let Some(workspace) = build_workspace_handle.upgrade() else {
                     return;
                 };
                 let command = format!("/go {}", build_plan_path.display());
@@ -134,12 +135,31 @@ impl QuickActionBar {
                 )
         };
 
+        let close_button = IconButton::new("plan-close-preview", IconName::Close)
+            .icon_size(IconSize::Small)
+            .style(ButtonStyle::Subtle)
+            .tooltip(Tooltip::text("Hide Plan Panel"))
+            .on_click({
+                let workspace_handle = workspace_handle.clone();
+                move |_, window, cx| {
+                    if let Some(workspace) = workspace_handle.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            let active_pane = workspace.active_pane().clone();
+                            active_pane.update(cx, |pane, cx| {
+                                pane.close_active_item(&Default::default(), window, cx);
+                            });
+                        });
+                    }
+                }
+            });
+
         Some(
             h_flex()
                 .gap(DynamicSpacing::Base01.rems(cx))
                 .child(model_button)
                 .child(build_button)
                 .child(overflow_menu)
+                .child(close_button)
                 .into_any_element(),
         )
     }

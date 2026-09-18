@@ -6613,9 +6613,9 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::Minimize, "Disable Full Screen")
+            (IconName::ThreadsSidebarRightClosed, "Show Plan & Editor Panel (⌥⌘B)")
         } else {
-            (IconName::Maximize, "Enable Full Screen")
+            (IconName::ThreadsSidebarRightOpen, "Hide Plan & Editor Panel (⌥⌘B)")
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)

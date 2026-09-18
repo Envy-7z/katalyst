@@ -31,6 +31,7 @@ pub mod terminal_thread_metadata_store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod thread_import;
+mod discord_modal;
 pub mod thread_metadata_store;
 pub mod thread_worktree_archive;
 
@@ -90,6 +91,7 @@ pub use thread_import::{
     AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
     channels_with_threads, import_threads_from_other_channels,
 };
+pub use discord_modal::DiscordRemoteModal;
 use zed_actions;
 pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
 
