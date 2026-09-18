@@ -2674,7 +2674,7 @@ impl ThreadView {
                         workspace.update(cx, |ws, cx| {
                             let active_pane = ws.active_pane().clone();
                             let target_pane = ws.adjacent_pane_of(&active_pane, window, cx);
-                            let _ = ws.open_paths(
+                            ws.open_paths(
                                 vec![plan_file],
                                 workspace::OpenOptions {
                                     focus: Some(false),
@@ -2684,7 +2684,7 @@ impl ThreadView {
                                 Some(target_pane.downgrade()),
                                 window,
                                 cx,
-                            );
+                            ).detach();
                         });
                     }
                 }
@@ -2754,7 +2754,7 @@ impl ThreadView {
             workspace.update(cx, |ws, cx| {
                 let active_pane = ws.active_pane().clone();
                 let target_pane = ws.adjacent_pane_of(&active_pane, window, cx);
-                let _ = ws.open_paths(
+                ws.open_paths(
                     vec![plan_file],
                     workspace::OpenOptions {
                         focus: Some(false),
@@ -2764,7 +2764,7 @@ impl ThreadView {
                     Some(target_pane.downgrade()),
                     window,
                     cx,
-                );
+                ).detach();
             });
         }
     }
@@ -3941,12 +3941,19 @@ impl ThreadView {
                             move |_event, window, cx| {
                                 if let Some(workspace) = workspace.upgrade() {
                                     workspace.update(cx, |ws, cx| {
-                                        let _ = ws.open_abs_path(
-                                            plan_path.clone(),
-                                            workspace::OpenOptions::default(),
+                                        let active_pane = ws.active_pane().clone();
+                                        let target_pane = ws.adjacent_pane_of(&active_pane, window, cx);
+                                        ws.open_paths(
+                                            vec![plan_path.clone()],
+                                            workspace::OpenOptions {
+                                                focus: Some(false),
+                                                visible: Some(workspace::OpenVisible::All),
+                                                ..workspace::OpenOptions::default()
+                                            },
+                                            Some(target_pane.downgrade()),
                                             window,
                                             cx,
-                                        );
+                                        ).detach();
                                     });
                                 }
                             }
