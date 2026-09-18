@@ -1,5 +1,5 @@
-From 5bc55635a0c8e3336bdb4ab2c13a688c869427e2 Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From 1542a0031f012414455062471f9d48439c7339d8 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
 Date: Fri, 18 Sep 2026 02:07:27 +0700
 Subject: [PATCH] feat(katalyst): implement v0.3.0 core features (canonical
  state, stream resilience, reaper, diff strip, thread deletion)

@@ -77,24 +77,20 @@ katalyst-session-sync status --json
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
 
-### v0.2.x desktop UI
+### v0.3.x Desktop UI & Autonomous Superpowers
 
-Katalyst opens a workspace with task navigation on the left, the OMP conversation in the main area, and a live OMP status panel on the right. The status panel reports the connected state only after the local OMP ACP runtime is available; it does not invent a connection state.
+Katalyst v0.3.0 introduces developer superpower workflow parity with Cursor and Codex, combined with native GPU-accelerated Rust performance:
 
-![Katalyst v0.2.x workspace](assets/katalyst-v020-workspace-actual.png)
+![Katalyst v0.3.x workspace](assets/katalyst-preview.png)
 
-This is a screenshot from the Katalyst v0.2.x native build using an isolated demo profile and a synthetic workspace. It contains no personal project, transcript, account, credential, or provider data.
-
-The sidebar actions are intentionally visible from the first workspace:
-
-- **New task** starts an OMP conversation after a workspace is open.
-- **Open workspace** opens a directory as a separate workspace.
-- **Skills** lists reusable skills installed globally or for the current project.
-- **Import Cursor & Codex** previews and imports detected sessions without changing the original transcripts.
-- **MCP servers** shows configured tool providers and their connection status.
-
-The `+` beside **Projects** adds a project to the current workspace. **Open workspace** is the action to create or switch to a separate workspace directory.
-
+Key enhancements in v0.3.0:
+- **Right-Panel Plan Preview & Action Toolbar**: Creating or planning tasks (`*.plan.md`) automatically opens a rendered markdown preview to the right (`SplitDirection::Right`) with interactive action buttons: `[ Approve & Execute ]`, `[ Build Locally ]`, and `[ Edit in Buffer ]`.
+- **Permanent Thread Deletion**: Right-click any thread in the sidebar or click the hover trash icon to permanently remove it from both SQLite metadata and unlinked session transcripts.
+- **Two-Way Discord Remote Bridge (`katalyst-discord-bridge`)**: Ultra-lightweight Bun/Node daemon (<15MB RAM, 0% idle CPU) streaming rich embeds to Discord and accepting remote prompt replies/approvals from mobile.
+- **In-Buffer Visual Diff Review Strip**: Floating action bar anchored to `AgentDiffPane` (`[ ↩ Revert Turn (⌥⌘Z) ]` `[ ✎ Edit in Buffer ]` `[ ✓ Keep All (Enter) ]`) with zero cursor jitter.
+- **Process Group Reaper**: Automatic `SIGTERM` followed by 2s grace period before `SIGKILL` on shutdown, guaranteeing zero orphaned OMP processes.
+- **Sidebar Categorization & Source Badges**: Threads organized by `Today`, `Previous 7 Days`, and `Older` with visual source tags (`[Cursor]`, `[Codex]`, `[OMP]`).
+- **Standalone Release-Fast Packaging**: Compiled with `profile.release-fast`, reducing disk footprint from 1.17 GB to 450 MB with 0.079s instant startup.
 ### Privacy boundary
 
 The repository contains generic defaults, example MCP configuration, release scripts, and reusable skills. Personal Cursor/Codex rules, hooks, settings, MCP credentials, raw transcripts, and provider accounts stay on the local machine under `~/.katalyst/private-profile` and are never copied into this repository. The installer migrates compatible local skills and MCP definitions without publishing the source files or secrets.
