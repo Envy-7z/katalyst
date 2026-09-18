@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -52,11 +52,44 @@ const ALLOWED_SLASH_COMMANDS = new Set([
   "/open",
   "/threads",
   "/thread",
+  "/models",
+  "/model",
   "/status",
   "/approve",
   "/continue",
   "/abort",
 ]);
+
+interface ModelInfo {
+  id: string;
+  name: string;
+  tag: string;
+}
+
+const POPULAR_MODELS: ModelInfo[] = [
+  { id: "openai-codex/gpt-5.6-luna", name: "GPT-5.6-Luna (OpenAI Codex - Default)", tag: "luna" },
+  { id: "google-antigravity/gemini-3.8-flash", name: "Gemini 3.8 Flash (Super Cepat & Kuota Jumbo)", tag: "gemini" },
+  { id: "google-antigravity/gemini-2.5-pro", name: "Gemini 2.5 Pro (Deep Reasoning)", tag: "gemini-pro" },
+  { id: "google-antigravity/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (High Precision)", tag: "sonnet" },
+  { id: "google-antigravity/claude-opus-4-6", name: "Claude Opus 4.6 (Heavy Logic)", tag: "opus" },
+];
+
+let selectedModel = (config as any).model || "openai-codex/gpt-5.6-luna";
+
+function updateSettingsModel(modelId: string) {
+  const configPath = join(homedir(), ".config/zed/settings.json");
+  if (!existsSync(configPath)) return;
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (raw.agent_servers && raw.agent_servers.omp) {
+      if (!raw.agent_servers.omp.default_config_options) {
+        raw.agent_servers.omp.default_config_options = {};
+      }
+      raw.agent_servers.omp.default_config_options.model = modelId;
+      writeFileSync(configPath, JSON.stringify(raw, null, 2));
+    }
+  } catch {}
+}
 
 interface ThreadInfo {
   session_id: string;
@@ -273,6 +306,8 @@ async function handleDispatch(eventType: string, data: any) {
                 { name: "📂 `/open <nomor/nama>`", value: "Membuka window project tersebut langsung di aplikasi Katalyst." },
                 { name: "📋 `/threads`", value: "Menampilkan daftar thread agent yang sedang aktif di sidebar." },
                 { name: "🎯 `/thread <nomor/nama>`", value: "Memilih thread target yang ingin kamu ajak chat / beri perintah." },
+                { name: "🤖 `/models`", value: "Melihat daftar model AI yang tersedia (GPT-5.6, Gemini 3.8, Claude, dll)." },
+                { name: "🔄 `/model <nomor/nama>`", value: "Mengganti model AI secara instan saat kehabisan kuota (contoh: `/model 2` atau `/model gemini`)." },
                 { name: "📊 `/status`", value: "Melihat status koneksi bridge, thread terpilih, dan kondisi Mac kamu." },
                 { name: "✅ `/approve`", value: "Menyetujui review plan agent dan memulai eksekusi (`/go`)." },
                 { name: "▶️ `/continue`", value: "Meneruskan eksekusi bila agent menunggu input." },
@@ -378,6 +413,58 @@ async function handleDispatch(eventType: string, data: any) {
         }
         return;
       }
+      if (cmd === "/models") {
+        let text = "🤖 **Daftar Model AI yang Tersedia di Mac Kamu:**\n\n";
+        POPULAR_MODELS.forEach((m, i) => {
+          const isCurr = selectedModel === m.id;
+          text += `\`${i + 1}.\` ${isCurr ? "👉 **[Aktif]** " : ""}**${m.name}**\n   \`ID: ${m.id}\n`;
+        });
+        text += `\nKetik \`/model <nomor>\` atau \`/model <nama>\` untuk mengganti model (contoh: \`/model 2\` atau \`/model gemini\`).`;
+        await sendDiscordMessage(channelId, { content: text });
+        return;
+      }
+
+      if (cmd === "/model") {
+        const target = parts.slice(1).join(" ").trim();
+        if (!target) {
+          await sendDiscordMessage(channelId, {
+            content: "⚠️ Masukkan nomor atau nama model. Contoh: `/model 2` atau `/model gemini`. Ketik `/models` untuk melihat daftar.",
+          });
+          return;
+        }
+
+        let found: ModelInfo | undefined;
+        const num = parseInt(target, 10);
+        if (!isNaN(num) && num >= 1 && num <= POPULAR_MODELS.length) {
+          found = POPULAR_MODELS[num - 1];
+        } else {
+          found = POPULAR_MODELS.find(
+            (m) =>
+              m.id.toLowerCase().includes(target.toLowerCase()) ||
+              m.name.toLowerCase().includes(target.toLowerCase()) ||
+              m.tag.toLowerCase().includes(target.toLowerCase())
+          );
+        }
+
+        if (found) {
+          selectedModel = found.id;
+          updateSettingsModel(found.id);
+          await sendDiscordMessage(channelId, {
+            content: `🔄 **Model Berhasil Diganti!**\n\nModel aktif sekarang: **${found.name}**\n\`ID: ${found.id}\`\n\nSemua perintah kerja selanjutnya otomatis menggunakan model ini (kuota baru aktif)! 🚀`,
+          });
+        } else if (target.includes("/")) {
+          selectedModel = target;
+          updateSettingsModel(target);
+          await sendDiscordMessage(channelId, {
+            content: `🔄 **Model Custom Diaktifkan:** \`${target}\`\nPengaturan telah disimpan ke Katalyst!`,
+          });
+        } else {
+          await sendDiscordMessage(channelId, {
+            content: `❌ Model \`${target}\` tidak dikenali. Ketik \`/models\` untuk melihat daftar model yang tersedia.`,
+          });
+        }
+        return;
+      }
 
       if (cmd === "/status") {
         const currentTitle = activeThread ? activeThread.title : "Thread Terbaru (Auto-detect)";
@@ -391,7 +478,7 @@ async function handleDispatch(eventType: string, data: any) {
           embeds: [
             {
               title: "Katalyst Remote Agent Status",
-              description: `🟢 **Online & Connected**\n\n**Mac Host:** Darwin arm64 (${memInfo})\n**Target Thread:** ${currentTitle}\n**Security:** Authorized (${data.author.username})\n**Engine:** Oh My Pi (ACP / Autonomous)`,
+              description: `🟢 **Online & Connected**\n\n**Active Model:** \`${selectedModel}\`\n**Mac Host:** Darwin arm64 (${memInfo})\n**Target Thread:** ${currentTitle}\n**Security:** Authorized (${data.author.username})\n**Engine:** Oh My Pi (ACP / Autonomous)`,
               color: 0x10b981,
               footer: { text: "Katalyst v0.3.0 · Full Remote Bridge" },
             },
@@ -435,7 +522,13 @@ async function handleDispatch(eventType: string, data: any) {
         });
 
         // Run omp in background
-        activeJob = spawn("/opt/homebrew/bin/omp", ["-r", sessFile, prompt], {
+        // Run omp in background with selected model
+        const ompArgs = ["-r", sessFile];
+        if (selectedModel) {
+          ompArgs.push("--model", selectedModel);
+        }
+        ompArgs.push(prompt);
+        activeJob = spawn("/opt/homebrew/bin/omp", ompArgs, {
           stdio: ["ignore", "pipe", "pipe"],
         });
 
@@ -465,9 +558,13 @@ async function handleDispatch(eventType: string, data: any) {
       await sendDiscordMessage(channelId, {
         content: `📥 **Instruksi Diterima:** "${rawText.slice(0, 150)}${rawText.length > 150 ? "..." : ""}"\nTarget Thread: **${target.title}**\n⏳ *Agent di Mac kamu sedang memproses...*`,
       });
-
-      // Dispatch to omp
-      activeJob = spawn("/opt/homebrew/bin/omp", ["-r", sessFile, rawText], {
+      // Dispatch to omp with selected model
+      const ompArgs = ["-r", sessFile];
+      if (selectedModel) {
+        ompArgs.push("--model", selectedModel);
+      }
+      ompArgs.push(rawText);
+      activeJob = spawn("/opt/homebrew/bin/omp", ompArgs, {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
