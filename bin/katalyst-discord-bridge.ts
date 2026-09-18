@@ -150,6 +150,28 @@ function getAvailableProjects(): { name: string; path: string }[] {
 function findSessionFile(sessionId: string): string | null {
   const base = join(homedir(), ".omp/agent/sessions");
   if (!existsSync(base)) return null;
+async function handleAttachments(attachments: any[]): Promise<string[]> {
+  if (!attachments || attachments.length === 0) return [];
+  const cacheDir = join(homedir(), ".katalyst/cache/discord-attachments");
+  if (!existsSync(cacheDir)) {
+    execSync(`mkdir -p "${cacheDir}"`);
+  }
+  const downloaded: string[] = [];
+  for (const att of attachments) {
+    try {
+      const filename = att.filename || `file_${Date.now()}`;
+      const localPath = join(cacheDir, `${Date.now()}_${filename}`);
+      const res = await fetch(att.url);
+      const buffer = Buffer.from(await res.arrayBuffer());
+      writeFileSync(localPath, buffer);
+      downloaded.push(localPath);
+    } catch (err) {
+      console.error("[katalyst-discord-bridge] Failed to download attachment:", err);
+    }
+  }
+  return downloaded;
+}
+
 
   try {
     const out = execSync(`/usr/bin/find "${base}" -type f -name "*${sessionId}*.jsonl" | head -n 1`, { encoding: "utf-8" }).trim();
@@ -522,14 +544,15 @@ async function handleDispatch(eventType: string, data: any) {
         });
 
         // Run omp in background
-        // Run omp in background with selected model
-        const ompArgs = ["-r", sessFile];
+        // Run omp in non-interactive print mode with selected model
+        const ompArgs = ["-p", "-r", sessFile];
         if (selectedModel) {
           ompArgs.push("--model", selectedModel);
         }
         ompArgs.push(prompt);
         activeJob = spawn("/opt/homebrew/bin/omp", ompArgs, {
           stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
         });
 
         activeJob.on("close", async (code: number) => {
@@ -555,17 +578,28 @@ async function handleDispatch(eventType: string, data: any) {
         return;
       }
 
+      const files = await handleAttachments(data.attachments || []);
+      let promptToSend = rawText;
+      let previewMsg = rawText;
+      if (files.length > 0) {
+        const fileReferences = files.map((f) => `[File/Image Lampiran: ${f}]`).join("\n");
+        promptToSend = `${fileReferences}\n${rawText}`.trim();
+        previewMsg = `[${files.length} Lampiran File/Foto] ${rawText}`;
+      }
+
       await sendDiscordMessage(channelId, {
-        content: `📥 **Instruksi Diterima:** "${rawText.slice(0, 150)}${rawText.length > 150 ? "..." : ""}"\nTarget Thread: **${target.title}**\n⏳ *Agent di Mac kamu sedang memproses...*`,
+        content: `📥 **Instruksi Diterima:** "${previewMsg.slice(0, 150)}${previewMsg.length > 150 ? "..." : ""}"\nTarget Thread: **${target.title}**\n⏳ *Agent di Mac kamu sedang memproses...*`,
       });
-      // Dispatch to omp with selected model
-      const ompArgs = ["-r", sessFile];
+
+      // Dispatch to omp with -p and clean terminal output
+      const ompArgs = ["-p", "-r", sessFile];
       if (selectedModel) {
         ompArgs.push("--model", selectedModel);
       }
-      ompArgs.push(rawText);
+      ompArgs.push(promptToSend);
       activeJob = spawn("/opt/homebrew/bin/omp", ompArgs, {
         stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
       });
 
       let stdoutData = "";
@@ -575,12 +609,17 @@ async function handleDispatch(eventType: string, data: any) {
 
       activeJob.on("close", async (code: number) => {
         activeJob = null;
-        let responsePreview = stdoutData.trim().slice(-600);
+        let responsePreview = stdoutData.trim();
+        // Clean up any stray ANSI escape codes
+        responsePreview = responsePreview.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
         if (!responsePreview) {
           responsePreview = "Agent telah selesai menjalankan instruksi.";
         }
+        if (responsePreview.length > 1800) {
+          responsePreview = responsePreview.slice(-1800);
+        }
         await sendDiscordMessage(channelId, {
-          content: `✅ **Katalyst Selesai:** (Thread: **${target.title}**)\n\`\`\`\n${responsePreview}\n\`\`\``,
+          content: `✅ **Katalyst Selesai:** (Thread: **${target.title}**)\n\n${responsePreview}`,
         });
       });
     }
