@@ -1,103 +1,81 @@
-From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
+From b3a2e0f8c82b5204d2b7e583d617dc6330a3907e Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 18:26:36 +0700
-Subject: [PATCH] fix(project, agent_ui): resolve external file worktree paths
- and save plan in workspace root
+Date: Fri, 18 Sep 2026 18:40:11 +0700
+Subject: [PATCH] fix(agent_ui): deduplicate plan open by slug and reuse
+ empty/right pane
 
 ---
- .../src/conversation_view/thread_view.rs      | 45 +++++++++++++++----
- crates/project/src/worktree_store.rs          | 21 ++++++++-
- 2 files changed, 56 insertions(+), 10 deletions(-)
+ crates/agent_ui/src/agent_ui.rs               | 21 ++++++++++++++++---
+ .../src/conversation_view/thread_view.rs      | 11 ++++++----
+ 2 files changed, 25 insertions(+), 7 deletions(-)
 
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index 1a29ef9e95..c5ee951a9e 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -194,9 +194,24 @@ pub(crate) fn open_plan_in_right_pane(
+         log::error!("Cannot auto-open missing plan file: {abs_path:?}");
+         return;
+     }
+-
+-    let active_pane = workspace.active_pane().clone();
+-    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
++    // 1. If any pane in the workspace is empty (items_len == 0), reuse it!
++    // This fills the initial center pane directly adjacent to the Agent dock,
++    // eliminating any blank gap between the Agent panel and the editor!
++    let target_pane = if let Some(empty_pane) = workspace
++        .panes()
++        .iter()
++        .find(|pane| pane.read(cx).items_len() == 0)
++    {
++        empty_pane.clone()
++    } else if workspace.panes().len() > 1 {
++        // 2. If multiple panes already exist, use the existing rightmost pane
++        // instead of repeatedly splitting new panes to the right!
++        workspace.panes().last().unwrap().clone()
++    } else {
++        // 3. Exactly one non-empty pane: split once to the right
++        let active_pane = workspace.active_pane().clone();
++        workspace.adjacent_pane_of(&active_pane, window, cx)
++    };
+     let path_for_log = abs_path.clone();
+     let open_task = workspace.open_paths(
+         vec![abs_path],
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index c49e095997..ab0ba471fc 100644
+index ab0ba471fc..370ca47b9a 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
-@@ -2744,16 +2744,45 @@ impl ThreadView {
-             self.check_and_auto_open_active_plan(window, cx);
+@@ -2787,7 +2787,7 @@ impl ThreadView {
              return;
-         };
--        let plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
--        if std::fs::create_dir_all(&plans_dir).is_err() {
--            self.check_and_auto_open_active_plan(window, cx);
--            return;
-+        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
-+        let _ = std::fs::create_dir_all(&global_plans_dir);
-+        let global_plan_file = global_plans_dir.join(format!("{slug}.plan.md"));
-+        if let Some(md_content) = markdown {
-+            let _ = std::fs::write(&global_plan_file, md_content);
          }
  
--        let plan_file = plans_dir.join(format!("{slug}.plan.md"));
--        let wrote_plan =
--            markdown.is_some_and(|md_content| std::fs::write(&plan_file, md_content).is_ok());
--        if !wrote_plan && !plan_file.is_file() {
-+        let plan_file = self
-+            .workspace
-+            .upgrade()
-+            .and_then(|workspace| {
-+                let primary_root = workspace
-+                    .read(cx)
-+                    .project()
-+                    .read(cx)
-+                    .visible_worktrees(cx)
-+                    .next()
-+                    .map(|w| w.read(cx).abs_path().to_path_buf());
-+                if let Some(root) = primary_root {
-+                    let ws_plans_dir = root.join(".katalyst/plans");
-+                    let _ = std::fs::create_dir_all(&ws_plans_dir);
-+                    let ws_plan_file = ws_plans_dir.join(format!("{slug}.plan.md"));
-+                    if let Some(md_content) = markdown {
-+                        let _ = std::fs::write(&ws_plan_file, md_content);
-+                    } else if global_plan_file.is_file() && !ws_plan_file.is_file() {
-+                        let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
-+                    }
-+                    if ws_plan_file.is_file() {
-+                        Some(ws_plan_file)
-+                    } else {
-+                        None
-+                    }
-+                } else {
-+                    None
-+                }
-+            })
-+            .unwrap_or(global_plan_file);
-+
-+        if !plan_file.is_file() {
-             self.check_and_auto_open_active_plan(window, cx);
+-        let key = plan_file.to_string_lossy().to_string();
++        let key = slug.clone();
+         if !self.opened_plan_slugs.insert(key) {
              return;
          }
-diff --git a/crates/project/src/worktree_store.rs b/crates/project/src/worktree_store.rs
-index 300d9cf448..3605077c30 100644
---- a/crates/project/src/worktree_store.rs
-+++ b/crates/project/src/worktree_store.rs
-@@ -507,8 +507,25 @@ impl WorktreeStore {
-         if let Some((tree, relative_path)) = self.find_worktree(abs_path, cx) {
-             Task::ready(Ok((tree, relative_path)))
-         } else {
--            let worktree = self.create_worktree(abs_path, visible, cx);
--            cx.background_spawn(async move { Ok((worktree.await?, RelPath::empty_arc())) })
-+            let (target_root, rel_path) = if abs_path.is_file() {
-+                if let (Some(parent), Some(file_name)) = (abs_path.parent(), abs_path.file_name()) {
-+                    if let Some(name_str) = file_name.to_str() {
-+                        if let Ok(rel) = RelPath::from_unix_str(name_str) {
-+                            (parent, Arc::from(rel))
-+                        } else {
-+                            (abs_path, RelPath::empty_arc())
-+                        }
-+                    } else {
-+                        (abs_path, RelPath::empty_arc())
-+                    }
-+                } else {
-+                    (abs_path, RelPath::empty_arc())
-+                }
-+            } else {
-+                (abs_path, RelPath::empty_arc())
-+            };
-+            let worktree = self.create_worktree(target_root, visible, cx);
-+            cx.background_spawn(async move { Ok((worktree.await?, rel_path)) })
-         }
-     }
+@@ -2834,7 +2834,12 @@ impl ThreadView {
+                     let Some(plan_file) = plan_file else {
+                         return;
+                     };
+-                    let key = plan_file.to_string_lossy().to_string();
++                    let key = plan_file
++                        .file_stem()
++                        .and_then(|s| s.to_str())
++                        .map(|s| s.strip_suffix(".plan").unwrap_or(s))
++                        .unwrap_or("plan")
++                        .to_string();
+                     if !this.opened_plan_slugs.insert(key) {
+                         return;
+                     }
+@@ -12935,8 +12940,6 @@ impl Render for ThreadView {
+         // current availability of feedback/sharing, which can change between
+         // renders (settings, connection state, feature flags).
+         self.sync_local_commands(cx);
+-        self.check_and_auto_open_active_plan(window, cx);
+-
+         let has_messages = self.list_state.item_count() > 0;
+         let list_state = self.list_state.clone();
  
 -- 
 2.50.1 (Apple Git-155)
