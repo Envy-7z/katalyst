@@ -2787,7 +2787,7 @@ impl ThreadView {
             return;
         }
 
-        let key = plan_file.to_string_lossy().to_string();
+        let key = slug.clone();
         if !self.opened_plan_slugs.insert(key) {
             return;
         }
@@ -2834,7 +2834,12 @@ impl ThreadView {
                     let Some(plan_file) = plan_file else {
                         return;
                     };
-                    let key = plan_file.to_string_lossy().to_string();
+                    let key = plan_file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.strip_suffix(".plan").unwrap_or(s))
+                        .unwrap_or("plan")
+                        .to_string();
                     if !this.opened_plan_slugs.insert(key) {
                         return;
                     }
@@ -12935,8 +12940,6 @@ impl Render for ThreadView {
         // current availability of feedback/sharing, which can change between
         // renders (settings, connection state, feature flags).
         self.sync_local_commands(cx);
-        self.check_and_auto_open_active_plan(window, cx);
-
         let has_messages = self.list_state.item_count() > 0;
         let list_state = self.list_state.clone();
 

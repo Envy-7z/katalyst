@@ -194,9 +194,24 @@ pub(crate) fn open_plan_in_right_pane(
         log::error!("Cannot auto-open missing plan file: {abs_path:?}");
         return;
     }
-
-    let active_pane = workspace.active_pane().clone();
-    let target_pane = workspace.adjacent_pane_of(&active_pane, window, cx);
+    // 1. If any pane in the workspace is empty (items_len == 0), reuse it!
+    // This fills the initial center pane directly adjacent to the Agent dock,
+    // eliminating any blank gap between the Agent panel and the editor!
+    let target_pane = if let Some(empty_pane) = workspace
+        .panes()
+        .iter()
+        .find(|pane| pane.read(cx).items_len() == 0)
+    {
+        empty_pane.clone()
+    } else if workspace.panes().len() > 1 {
+        // 2. If multiple panes already exist, use the existing rightmost pane
+        // instead of repeatedly splitting new panes to the right!
+        workspace.panes().last().unwrap().clone()
+    } else {
+        // 3. Exactly one non-empty pane: split once to the right
+        let active_pane = workspace.active_pane().clone();
+        workspace.adjacent_pane_of(&active_pane, window, cx)
+    };
     let path_for_log = abs_path.clone();
     let open_task = workspace.open_paths(
         vec![abs_path],
