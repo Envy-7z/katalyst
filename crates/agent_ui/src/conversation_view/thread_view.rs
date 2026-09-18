@@ -2650,81 +2650,198 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(start) = message.find("Approve plan \"") {
-            let rest = &message[start + "Approve plan \"".len()..];
-            if let Some(end) = rest.find('"') {
-                let slug = &rest[..end];
-                if let Some(home) = std::env::var_os("HOME") {
-                    let home_path = std::path::PathBuf::from(home);
-                    let plans_dir = home_path.join(".katalyst/plans");
-                    let _ = std::fs::create_dir_all(&plans_dir);
-                    let plan_file = plans_dir.join(format!("{slug}.plan.md"));
+        let markdown_start = message
+            .find("\n# ")
+            .map(|index| index + 1)
+            .or_else(|| message.starts_with("# ").then_some(0));
+        let markdown = markdown_start.map(|index| &message[index..]);
 
-                    if let Some(md_start) = message.find("\n# ") {
-                        let md_content = &message[md_start + 1..];
-                        let _ = std::fs::write(&plan_file, md_content);
+        let normalize_slug = |raw: &str| {
+            let trimmed = raw.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '`' | '\'' | '"' | '(' | ')' | '<' | '>' | ',' | ';' | ':'
+                )
+            });
+            let raw = trimmed.strip_prefix("local://").unwrap_or(trimmed);
+            let raw = raw.rsplit('/').next().unwrap_or(raw);
+            let raw = raw
+                .strip_suffix("-plan.md")
+                .or_else(|| raw.strip_suffix(".plan.md"))
+                .unwrap_or(raw);
+            let slug: String = raw
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
                     }
-
-                    let key = plan_file.to_string_lossy().to_string();
-                    if !self.opened_plan_slugs.insert(key) {
-                        return;
-                    }
-
-                    if let Some(workspace) = self.workspace.upgrade() {
-                        workspace.update(cx, |ws, cx| {
-                            crate::open_plan_in_right_pane(ws, plan_file, window, cx);
-                        });
-                    }
-                }
+                })
+                .collect();
+            let slug = slug.trim_matches('-');
+            if slug.is_empty() {
+                "active-plan".to_string()
+            } else {
+                slug.to_string()
             }
+        };
+
+        let marker_slug = message.find("Approve plan \"").and_then(|start| {
+            let rest = &message[start + "Approve plan \"".len()..];
+            rest.find('"').map(|end| normalize_slug(&rest[..end]))
+        });
+        let local_slug = message.split_whitespace().find_map(|word| {
+            let clean = word.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '`' | '\'' | '"' | '(' | ')' | '<' | '>' | ',' | ';' | ':'
+                )
+            });
+            clean
+                .strip_prefix("local://")
+                .filter(|slug| slug.ends_with(".md"))
+                .map(normalize_slug)
+        });
+        let markdown_slug = markdown.and_then(|content| {
+            content
+                .lines()
+                .find_map(|line| line.strip_prefix("# ").map(normalize_slug))
+        });
+        let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
+            self.check_and_auto_open_active_plan(window, cx);
+            return;
+        };
+
+        let Some(home) = std::env::var_os("HOME") else {
+            self.check_and_auto_open_active_plan(window, cx);
+            return;
+        };
+        let plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
+        if std::fs::create_dir_all(&plans_dir).is_err() {
+            self.check_and_auto_open_active_plan(window, cx);
+            return;
+        }
+
+        let plan_file = plans_dir.join(format!("{slug}.plan.md"));
+        let wrote_plan =
+            markdown.is_some_and(|md_content| std::fs::write(&plan_file, md_content).is_ok());
+        if !wrote_plan && !plan_file.is_file() {
+            self.check_and_auto_open_active_plan(window, cx);
+            return;
+        }
+
+        let key = plan_file.to_string_lossy().to_string();
+        if !self.opened_plan_slugs.insert(key) {
+            return;
+        }
+
+        if let Some(workspace) = self.workspace.upgrade() {
+            workspace.update(cx, |ws, cx| {
+                crate::open_plan_in_right_pane(ws, plan_file, window, cx);
+            });
         }
     }
 
     fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
         let session_id_str = self.session_id.to_string();
+        let recent_cutoff =
+            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(15 * 60));
+        let add_plan_candidates =
+            |dir: &std::path::Path,
+             recent_only: Option<std::time::SystemTime>,
+             candidates: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>| {
+                let Ok(files) = std::fs::read_dir(dir) else {
+                    return false;
+                };
+                let mut added = false;
+                for file in files.flatten() {
+                    let path = file.path();
+                    if !path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().ends_with("plan.md"))
+                    {
+                        continue;
+                    }
+                    let Ok(modified) =
+                        std::fs::metadata(&path).and_then(|metadata| metadata.modified())
+                    else {
+                        continue;
+                    };
+                    if recent_only.is_some_and(|cutoff| modified < cutoff) {
+                        continue;
+                    }
+                    candidates.push((modified, path));
+                    added = true;
+                }
+                added
+            };
 
         if let Some(home) = std::env::var_os("HOME") {
             let base = std::path::PathBuf::from(home);
             let session_dir = base.join(".omp/agent/sessions");
+            let mut found_exact_session_plan = false;
             if let Ok(buckets) = std::fs::read_dir(&session_dir) {
                 for bucket in buckets.flatten() {
-                    if bucket.path().is_dir() {
-                        if let Ok(subdirs) = std::fs::read_dir(bucket.path()) {
-                            for sdir in subdirs.flatten() {
-                                if sdir.file_name().to_string_lossy().contains(&session_id_str) {
-                                    let local_dir = sdir.path().join("local");
-                                    if let Ok(files) = std::fs::read_dir(&local_dir) {
-                                        for f in files.flatten() {
-                                            let p = f.path();
-                                            if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("plan.md")) {
-                                                if let Ok(meta) = std::fs::metadata(&p) {
-                                                    if let Ok(mtime) = meta.modified() {
-                                                        candidates.push((mtime, p));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                    let bucket_path = bucket.path();
+                    if !bucket_path.is_dir() {
+                        continue;
+                    }
+                    if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
+                        for session in subdirs.flatten() {
+                            let session_path = session.path();
+                            if session_path.file_name().is_some_and(|name| {
+                                name.to_string_lossy().contains(&session_id_str)
+                            }) {
+                                found_exact_session_plan |= add_plan_candidates(
+                                    &session_path.join("local"),
+                                    None,
+                                    &mut candidates,
+                                );
                             }
                         }
                     }
                 }
             }
 
-            let plans_dir = base.join(".katalyst/plans");
-            if let Ok(files) = std::fs::read_dir(&plans_dir) {
-                for f in files.flatten() {
-                    let p = f.path();
-                    if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("plan.md")) {
-                        if let Ok(meta) = std::fs::metadata(&p) {
-                            if let Ok(mtime) = meta.modified() {
-                                candidates.push((mtime, p));
+            if !found_exact_session_plan {
+                if let Ok(buckets) = std::fs::read_dir(&session_dir) {
+                    for bucket in buckets.flatten() {
+                        let bucket_path = bucket.path();
+                        if !bucket_path.is_dir() {
+                            continue;
+                        }
+                        if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
+                            for session in subdirs.flatten() {
+                                add_plan_candidates(
+                                    &session.path().join("local"),
+                                    recent_cutoff,
+                                    &mut candidates,
+                                );
                             }
                         }
                     }
                 }
+            }
+
+            add_plan_candidates(&base.join(".katalyst/plans"), None, &mut candidates);
+
+            let workspace_roots = self
+                .workspace
+                .upgrade()
+                .map(|workspace| {
+                    workspace
+                        .read(cx)
+                        .project()
+                        .read(cx)
+                        .visible_worktrees(cx)
+                        .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for root in workspace_roots {
+                add_plan_candidates(&root, recent_cutoff, &mut candidates);
             }
         }
 
@@ -12719,9 +12836,7 @@ impl Render for ThreadView {
         // current availability of feedback/sharing, which can change between
         // renders (settings, connection state, feature flags).
         self.sync_local_commands(cx);
-        if self.opened_plan_slugs.is_empty() {
-            self.check_and_auto_open_active_plan(window, cx);
-        }
+        self.check_and_auto_open_active_plan(window, cx);
 
         let has_messages = self.list_state.item_count() > 0;
         let list_state = self.list_state.clone();
