@@ -2654,9 +2654,6 @@ impl ThreadView {
             let rest = &message[start + "Approve plan \"".len()..];
             if let Some(end) = rest.find('"') {
                 let slug = &rest[..end];
-                if !self.opened_plan_slugs.insert(slug.to_string()) {
-                    return;
-                }
                 if let Some(home) = std::env::var_os("HOME") {
                     let home_path = std::path::PathBuf::from(home);
                     let plans_dir = home_path.join(".katalyst/plans");
@@ -2668,14 +2665,23 @@ impl ThreadView {
                         let _ = std::fs::write(&plan_file, md_content);
                     }
 
+                    let key = plan_file.to_string_lossy().to_string();
+                    if !self.opened_plan_slugs.insert(key) {
+                        return;
+                    }
+
                     if let Some(workspace) = self.workspace.upgrade() {
                         workspace.update(cx, |ws, cx| {
-                            let _ = ws.open_abs_path(
-                                plan_file,
+                            let active_pane = ws.active_pane().clone();
+                            let target_pane = ws.adjacent_pane_of(&active_pane, window, cx);
+                            let _ = ws.open_paths(
+                                vec![plan_file],
                                 workspace::OpenOptions {
                                     focus: Some(false),
+                                    visible: Some(workspace::OpenVisible::All),
                                     ..workspace::OpenOptions::default()
                                 },
+                                Some(target_pane.downgrade()),
                                 window,
                                 cx,
                             );
@@ -2686,11 +2692,89 @@ impl ThreadView {
         }
     }
 
+    fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        let session_id_str = self.session_id.to_string();
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let base = std::path::PathBuf::from(home);
+            let session_dir = base.join(".omp/agent/sessions");
+            if let Ok(buckets) = std::fs::read_dir(&session_dir) {
+                for bucket in buckets.flatten() {
+                    if bucket.path().is_dir() {
+                        if let Ok(subdirs) = std::fs::read_dir(bucket.path()) {
+                            for sdir in subdirs.flatten() {
+                                if sdir.file_name().to_string_lossy().contains(&session_id_str) {
+                                    let local_dir = sdir.path().join("local");
+                                    if let Ok(files) = std::fs::read_dir(&local_dir) {
+                                        for f in files.flatten() {
+                                            let p = f.path();
+                                            if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("plan.md")) {
+                                                if let Ok(meta) = std::fs::metadata(&p) {
+                                                    if let Ok(mtime) = meta.modified() {
+                                                        candidates.push((mtime, p));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let plans_dir = base.join(".katalyst/plans");
+            if let Ok(files) = std::fs::read_dir(&plans_dir) {
+                for f in files.flatten() {
+                    let p = f.path();
+                    if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("plan.md")) {
+                        if let Ok(meta) = std::fs::metadata(&p) {
+                            if let Ok(mtime) = meta.modified() {
+                                candidates.push((mtime, p));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+        let Some((_, plan_file)) = candidates.into_iter().next() else {
+            return;
+        };
+
+        let key = plan_file.to_string_lossy().to_string();
+        if !self.opened_plan_slugs.insert(key) {
+            return;
+        }
+
+        if let Some(workspace) = self.workspace.upgrade() {
+            workspace.update(cx, |ws, cx| {
+                let active_pane = ws.active_pane().clone();
+                let target_pane = ws.adjacent_pane_of(&active_pane, window, cx);
+                let _ = ws.open_paths(
+                    vec![plan_file],
+                    workspace::OpenOptions {
+                        focus: Some(false),
+                        visible: Some(workspace::OpenVisible::All),
+                        ..workspace::OpenOptions::default()
+                    },
+                    Some(target_pane.downgrade()),
+                    window,
+                    cx,
+                );
+            });
+        }
+    }
+
     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry_count = self.thread.read(cx).entries().len();
         for index in 0..entry_count {
             self.sync_elicitation_state_for_entry(index, window, cx);
         }
+        self.check_and_auto_open_active_plan(window, cx);
     }
 
     #[cfg(test)]
@@ -12664,6 +12748,9 @@ impl Render for ThreadView {
         // current availability of feedback/sharing, which can change between
         // renders (settings, connection state, feature flags).
         self.sync_local_commands(cx);
+        if self.opened_plan_slugs.is_empty() {
+            self.check_and_auto_open_active_plan(window, cx);
+        }
 
         let has_messages = self.list_state.item_count() > 0;
         let list_state = self.list_state.clone();
