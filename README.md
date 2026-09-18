@@ -97,21 +97,22 @@ Key enhancements in v0.3.0:
 Leave long tasks running while away or sleeping and monitor them directly from your phone:
 - **Push Alerts**: Instant rich embeds when a turn completes, encounters an error, or requests confirmation/input.
 - **Two-Way Reply**: Send prompt replies from Discord directly into your active Katalyst workspace.
-- **Remote Commands**: `/approve`, `/continue`, `/status`, `/abort`.
+- **Remote Commands**: `/help`, `/projects`, `/open <N>`, `/threads`, `/thread <N>`, `/status`, `/approve`, `/continue`, `/abort`.
 - **Ultra-Lightweight**: Standalone Bun/Node daemon (< 15 MB RAM, 0% CPU idle).
-- **Quick Access**: Click **Discord remote** in the left sidebar to jump straight to configuration.
+- **Quick Access**: Click **Discord remote** in the left sidebar to view the setup guide and status.
+- 📖 **Full Walkthrough**: See the complete step-by-step setup guide in [**`DISCORD_REMOTE.md`**](DISCORD_REMOTE.md).
 
 ```json
 "katalyst.discord": {
   "enabled": true,
   "bot_token": "YOUR_DISCORD_BOT_TOKEN",
   "channel_id": "YOUR_CHANNEL_ID",
-  "authorized_user_ids": ["YOUR_USER_ID"]
+  "authorized_user_ids": ["YOUR_DISCORD_USER_ID"]
 }
 ```
 Run the bridge:
 ```bash
-~/.katalyst/bin/katalyst-discord-bridge.ts
+~/.katalyst/bin/katalyst-discord-bridge.ts &
 ```
 ### Privacy boundary
 
