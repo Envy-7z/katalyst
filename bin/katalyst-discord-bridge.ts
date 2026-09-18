@@ -150,6 +150,14 @@ function getAvailableProjects(): { name: string; path: string }[] {
 function findSessionFile(sessionId: string): string | null {
   const base = join(homedir(), ".omp/agent/sessions");
   if (!existsSync(base)) return null;
+  try {
+    const out = execSync(`/usr/bin/find "${base}" -type f -name "*${sessionId}*.jsonl" | head -n 1`, { encoding: "utf-8" }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleAttachments(attachments: any[]): Promise<string[]> {
   if (!attachments || attachments.length === 0) return [];
   const cacheDir = join(homedir(), ".katalyst/cache/discord-attachments");
@@ -170,15 +178,6 @@ async function handleAttachments(attachments: any[]): Promise<string[]> {
     }
   }
   return downloaded;
-}
-
-
-  try {
-    const out = execSync(`/usr/bin/find "${base}" -type f -name "*${sessionId}*.jsonl" | head -n 1`, { encoding: "utf-8" }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
 }
 
 async function sendDiscordMessage(chId: string, payload: { content?: string; embeds?: any[] }) {
