@@ -29,6 +29,13 @@ function loadConfig(): DiscordConfig {
   }
 }
 
+process.on("uncaughtException", (err) => {
+  console.error("[katalyst-discord-bridge] Uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[katalyst-discord-bridge] Unhandled rejection:", reason);
+});
+
 const config = loadConfig();
 
 if (!config.enabled && !process.env.DISCORD_BOT_TOKEN) {
@@ -291,7 +298,7 @@ function identify() {
         op: 2,
         d: {
           token,
-          intents: (1 << 9) | (1 << 15), // GUILD_MESSAGES | MESSAGE_CONTENT
+          intents: (1 << 0) | (1 << 9) | (1 << 15), // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT
           properties: {
             os: "darwin",
             browser: "katalyst",
