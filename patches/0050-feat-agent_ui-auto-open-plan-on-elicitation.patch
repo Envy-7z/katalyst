@@ -1,9 +1,10 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:40:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, image mentions, and right panel toggle
+Date: Fri, 18 Sep 2026 20:00:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, and clean project CWD
 
 ---
+ crates/agent_servers/src/acp.rs                    |  19 +-
  crates/agent_ui/src/agent_panel.rs                 |   4 +-
  crates/agent_ui/src/agent_ui.rs                    |  62 ++++
  .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
@@ -13,8 +14,42 @@ Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, image menti
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 9 files changed, 793 insertions(+), 44 deletions(-)
+ 10 files changed, 809 insertions(+), 47 deletions(-)
 
+diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
+index 4b96d73d60..89a8178672 100644
+--- a/crates/agent_servers/src/acp.rs
++++ b/crates/agent_servers/src/acp.rs
+@@ -1560,13 +1560,26 @@ fn session_directories_from_work_dirs(
+     work_dirs: &PathList,
+     supports_additional_directories: bool,
+ ) -> Result<SessionDirectories> {
+-    let mut ordered_paths = work_dirs.ordered_paths();
++    let filtered_paths: Vec<_> = work_dirs
++        .ordered_paths()
++        .filter(|p| {
++            let s = p.to_string_lossy();
++            !s.contains(".katalyst") && !s.contains(".omp")
++        })
++        .cloned()
++        .collect();
++
++    let mut ordered_paths = if !filtered_paths.is_empty() {
++        filtered_paths.into_iter()
++    } else {
++        work_dirs.ordered_paths().cloned().collect::<Vec<_>>().into_iter()
++    };
++
+     let cwd = ordered_paths
+         .next()
+-        .cloned()
+         .unwrap_or_else(|| util::paths::home_dir().join(".katalyst/history"));
+     let additional_directories = if supports_additional_directories {
+-        ordered_paths.cloned().collect()
++        ordered_paths.collect()
+     } else {
+         Vec::new()
+     };
 diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
 index 99ad5f12e1..daf1341085 100644
 --- a/crates/agent_ui/src/agent_panel.rs
