@@ -3352,6 +3352,22 @@ impl ConversationView {
             });
         }
     }
+    pub(crate) fn insert_external_paths(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(active_thread) = self.active_thread() {
+            active_thread.update(cx, |thread, cx| {
+                thread.message_editor.update(cx, |editor, cx| {
+                    editor.insert_external_paths(paths, window, cx);
+                    editor.focus_handle(cx).focus(window, cx);
+                })
+            });
+        }
+    }
+
 
     /// Inserts the selected text into the message editor or the message being
     /// edited, if any.

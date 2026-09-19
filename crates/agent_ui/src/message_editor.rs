@@ -1435,6 +1435,45 @@ impl MessageEditor {
         })
         .detach();
     }
+    pub fn insert_external_paths(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.upgrade().is_none() {
+            return;
+        }
+        let supports_images = self.session_capabilities.read().supports_images();
+        let default_image_name: SharedString = "Image".into();
+        let editor = self.editor.clone();
+        let mention_set = self.mention_set.clone();
+        let workspace_weak = self.workspace.clone();
+
+        cx.spawn_in(window, async move |_this, mut cx| {
+            let mut images = Vec::new();
+            for path in paths.iter() {
+                if supports_images && crate::mention_set::is_raster_image_path(path.as_path()) {
+                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(path.as_path(), &default_image_name) {
+                        images.push((image, name));
+                    }
+                }
+            }
+            if !images.is_empty() {
+                crate::mention_set::insert_images_as_context(
+                    images,
+                    editor,
+                    mention_set,
+                    workspace_weak,
+                    &mut cx,
+                )
+                .await;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach_and_log_err(cx);
+    }
+
 
     pub fn insert_branch_diff_crease(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.workspace.upgrade() else {

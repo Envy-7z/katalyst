@@ -6902,28 +6902,49 @@ impl AgentPanel {
             return;
         };
         let conversation_view = conversation_view.clone();
-        let tasks = paths
-            .paths()
+        let all_paths = paths.paths().to_vec();
+        let image_paths: Vec<_> = all_paths
             .iter()
-            .map(|path| Workspace::project_path_for_path(self.project.clone(), path, false, cx))
-            .collect::<Vec<_>>();
-        cx.spawn_in(window, async move |_this, cx| {
-            let mut paths = vec![];
-            let mut added_worktrees = vec![];
-            let opened_paths = futures::future::join_all(tasks).await;
-            for entry in opened_paths {
-                if let Some((worktree, project_path)) = entry.log_err() {
-                    added_worktrees.push(worktree);
-                    paths.push(project_path);
+            .filter(|p| crate::mention_set::is_raster_image_path(p))
+            .cloned()
+            .collect();
+        let non_image_paths: Vec<_> = all_paths
+            .into_iter()
+            .filter(|p| !crate::mention_set::is_raster_image_path(p))
+            .collect();
+
+        if !image_paths.is_empty() {
+            let conversation_view = conversation_view.clone();
+            window.defer(cx, move |window, cx| {
+                conversation_view.update(cx, |cv, cx| {
+                    cv.insert_external_paths(image_paths, window, cx);
+                });
+            });
+        }
+
+        if !non_image_paths.is_empty() {
+            let tasks = non_image_paths
+                .iter()
+                .map(|path| Workspace::project_path_for_path(self.project.clone(), path, false, cx))
+                .collect::<Vec<_>>();
+            cx.spawn_in(window, async move |_this, cx| {
+                let mut paths = vec![];
+                let mut added_worktrees = vec![];
+                let opened_paths = futures::future::join_all(tasks).await;
+                for entry in opened_paths {
+                    if let Some((worktree, project_path)) = entry.log_err() {
+                        added_worktrees.push(worktree);
+                        paths.push(project_path);
+                    }
                 }
-            }
-            conversation_view
-                .update_in(cx, |conversation_view, window, cx| {
-                    conversation_view.insert_dragged_files(paths, added_worktrees, window, cx);
-                })
-                .log_err();
-        })
-        .detach();
+                conversation_view
+                    .update_in(cx, |conversation_view, window, cx| {
+                        conversation_view.insert_dragged_files(paths, added_worktrees, window, cx);
+                    })
+                    .log_err();
+            })
+            .detach();
+        }
     }
 
     fn paste_external_paths_into_active_terminal(
