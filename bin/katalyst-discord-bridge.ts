@@ -207,6 +207,10 @@ let heartbeatInterval = 41250;
 let lastSequence: number | null = null;
 let ws: WebSocket | null = null;
 let heartbeatTimer: any = null;
+let isReconnecting = false;
+
+// Keep Node event loop alive continuously
+setInterval(() => {}, 1 << 30);
 
 function connectGateway() {
   try {
@@ -247,14 +251,27 @@ function connectGateway() {
       console.error("[katalyst-discord-bridge] WebSocket error:", err);
     };
 
-    ws.onclose = () => {
-      console.log("[katalyst-discord-bridge] Gateway closed. Reconnecting in 5s...");
+    ws.onclose = (event) => {
+      console.log(`[katalyst-discord-bridge] Gateway closed (code: ${event.code}, reason: ${event.reason || "none"}). Reconnecting in 5s...`);
       clearInterval(heartbeatTimer);
-      setTimeout(connectGateway, 5000);
+      ws = null;
+      if (!isReconnecting) {
+        isReconnecting = true;
+        setTimeout(() => {
+          isReconnecting = false;
+          connectGateway();
+        }, 5000);
+      }
     };
   } catch (err) {
     console.error("[katalyst-discord-bridge] Connection error:", err);
-    setTimeout(connectGateway, 10000);
+    if (!isReconnecting) {
+      isReconnecting = true;
+      setTimeout(() => {
+        isReconnecting = false;
+        connectGateway();
+      }, 10000);
+    }
   }
 }
 
