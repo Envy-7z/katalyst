@@ -1560,13 +1560,26 @@ fn session_directories_from_work_dirs(
     work_dirs: &PathList,
     supports_additional_directories: bool,
 ) -> Result<SessionDirectories> {
-    let mut ordered_paths = work_dirs.ordered_paths();
+    let filtered_paths: Vec<_> = work_dirs
+        .ordered_paths()
+        .filter(|p| {
+            let s = p.to_string_lossy();
+            !s.contains(".katalyst") && !s.contains(".omp")
+        })
+        .cloned()
+        .collect();
+
+    let mut ordered_paths = if !filtered_paths.is_empty() {
+        filtered_paths.into_iter()
+    } else {
+        work_dirs.ordered_paths().cloned().collect::<Vec<_>>().into_iter()
+    };
+
     let cwd = ordered_paths
         .next()
-        .cloned()
         .unwrap_or_else(|| util::paths::home_dir().join(".katalyst/history"));
     let additional_directories = if supports_additional_directories {
-        ordered_paths.cloned().collect()
+        ordered_paths.collect()
     } else {
         Vec::new()
     };
