@@ -2736,12 +2736,10 @@ impl ThreadView {
             })
         });
         let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
-            self.check_and_auto_open_active_plan(window, cx);
             return;
         };
 
         let Some(home) = std::env::var_os("HOME") else {
-            self.check_and_auto_open_active_plan(window, cx);
             return;
         };
         let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
@@ -2783,7 +2781,6 @@ impl ThreadView {
             .unwrap_or(global_plan_file);
 
         if !plan_file.is_file() {
-            self.check_and_auto_open_active_plan(window, cx);
             return;
         }
 
