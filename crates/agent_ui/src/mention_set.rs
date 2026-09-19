@@ -259,21 +259,26 @@ impl MentionSet {
         let crease = if let MentionUri::File { abs_path } = &mention_uri
             && is_raster_image_path(abs_path)
         {
-            let Some(project_path) = project
+            let image = if let Some(project_path) = project
                 .read(cx)
                 .project_path_for_absolute_path(&abs_path, cx)
-            else {
-                log::error!("project path not found for image mention {abs_path:?}");
-                return Task::ready(());
-            };
-            let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
-            let image = cx
-                .spawn(async move |_, cx| {
+            {
+                let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
+                cx.spawn(async move |_, cx| {
                     let image = image_task.await.map_err(|e| e.to_string())?;
                     let image = image.update(cx, |image, _| image.image.clone());
                     Ok(image)
                 })
-                .shared();
+                .shared()
+            } else {
+                let abs_path = abs_path.clone();
+                cx.background_spawn(async move {
+                    let (image, _) = load_external_image_from_path(&abs_path, &"".into())
+                        .ok_or_else(|| "failed to load external image".to_string())?;
+                    Ok(Arc::new(image))
+                })
+                .shared()
+            };
             insert_crease_for_mention(
                 start,
                 content_len,
