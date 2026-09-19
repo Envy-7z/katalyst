@@ -129,7 +129,12 @@ impl ElicitationFormState {
                             ElicitationFieldValue::Text(editor.read(cx).text(cx))
                         }
                         ElicitationFieldState::Boolean(value) => {
-                            ElicitationFieldValue::Boolean(*value)
+                            let bool_val = if self.fields.len() == 1 && name == "value" {
+                                true
+                            } else {
+                                *value
+                            };
+                            ElicitationFieldValue::Boolean(bool_val)
                         }
                         ElicitationFieldState::SingleSelect { value } => {
                             ElicitationFieldValue::SingleSelect {
@@ -1667,13 +1672,16 @@ impl<'a> ElicitationCard<'a> {
             let row_id = format!("elicitation-bool-row-{}-{field_name}", self.entry_ix);
             let checkbox_id = format!("elicitation-bool-{}-{field_name}", self.entry_ix);
 
+            if field_name == "value" && self.form_state.as_ref().is_some_and(|s| s.fields.len() == 1) {
+                return div().into_any_element();
+            }
+
             return v_flex()
                 .gap_1()
                 .child(
                     h_flex()
                         .id(row_id)
                         .w_full()
-                        .items_start()
                         .gap_1()
                         .cursor_pointer()
                         .on_click(move |_, _window, cx| {
@@ -2015,10 +2023,15 @@ impl<'a> ElicitationCard<'a> {
         let is_accepted_url =
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
+        let is_confirmation = self.form_state.is_some_and(|state| {
+            state.fields.len() == 1 && state.fields.contains_key("value")
+        });
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
             ("Open Again", IconName::ArrowUpRight, Color::Muted)
         } else if open_url.is_some() {
             ("Open", IconName::ArrowUpRight, Color::Muted)
+        } else if is_confirmation {
+            ("Confirm", IconName::Check, Color::Success)
         } else {
             ("Submit", IconName::Check, Color::Success)
         };
