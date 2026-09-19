@@ -1,13 +1,14 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:30:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, confirm dialog guard
+Date: Fri, 18 Sep 2026 19:40:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, confirmation dialog UX
 
 ---
  crates/agent_servers/src/acp.rs                    |  19 +-
  crates/agent_ui/src/agent_panel.rs                 |  65 ++--
  crates/agent_ui/src/agent_ui.rs                    |  62 ++++
  crates/agent_ui/src/conversation_view.rs           |  16 +
+ .../agent_ui/src/conversation_view/elicitation.rs  |  17 +-
  .../agent_ui/src/conversation_view/thread_view.rs  | 348 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
  crates/agent_ui/src/mention_set.rs                 |  25 +-
@@ -16,7 +17,7 @@ Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 12 files changed, 903 insertions(+), 68 deletions(-)
+ 13 files changed, 918 insertions(+), 70 deletions(-)
 
 diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
 index 4b96d73d60..89a8178672 100644
@@ -252,6 +253,58 @@ index bf7d01da92..df0ddfa18c 100644
  
      /// Inserts the selected text into the message editor or the message being
      /// edited, if any.
+diff --git a/crates/agent_ui/src/conversation_view/elicitation.rs b/crates/agent_ui/src/conversation_view/elicitation.rs
+index e7d5d0be9e..8ec73b8187 100644
+--- a/crates/agent_ui/src/conversation_view/elicitation.rs
++++ b/crates/agent_ui/src/conversation_view/elicitation.rs
+@@ -129,7 +129,12 @@ impl ElicitationFormState {
+                             ElicitationFieldValue::Text(editor.read(cx).text(cx))
+                         }
+                         ElicitationFieldState::Boolean(value) => {
+-                            ElicitationFieldValue::Boolean(*value)
++                            let bool_val = if self.fields.len() == 1 && name == "value" {
++                                true
++                            } else {
++                                *value
++                            };
++                            ElicitationFieldValue::Boolean(bool_val)
+                         }
+                         ElicitationFieldState::SingleSelect { value } => {
+                             ElicitationFieldValue::SingleSelect {
+@@ -1667,13 +1672,16 @@ impl<'a> ElicitationCard<'a> {
+             let row_id = format!("elicitation-bool-row-{}-{field_name}", self.entry_ix);
+             let checkbox_id = format!("elicitation-bool-{}-{field_name}", self.entry_ix);
+ 
++            if field_name == "value" && self.form_state.as_ref().is_some_and(|s| s.fields.len() == 1) {
++                return div().into_any_element();
++            }
++
+             return v_flex()
+                 .gap_1()
+                 .child(
+                     h_flex()
+                         .id(row_id)
+                         .w_full()
+-                        .items_start()
+                         .gap_1()
+                         .cursor_pointer()
+                         .on_click(move |_, _window, cx| {
+@@ -2015,10 +2023,15 @@ impl<'a> ElicitationCard<'a> {
+         let is_accepted_url =
+             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
+         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
++        let is_confirmation = self.form_state.is_some_and(|state| {
++            state.fields.len() == 1 && state.fields.contains_key("value")
++        });
+         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
+             ("Open Again", IconName::ArrowUpRight, Color::Muted)
+         } else if open_url.is_some() {
+             ("Open", IconName::ArrowUpRight, Color::Muted)
++        } else if is_confirmation {
++            ("Confirm", IconName::Check, Color::Success)
+         } else {
+             ("Submit", IconName::Check, Color::Success)
+         };
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
 index 7610a32d5d..b0248d24aa 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
