@@ -1,14 +1,14 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:20:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, single worktree guard
+Date: Fri, 18 Sep 2026 19:30:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, confirm dialog guard
 
 ---
  crates/agent_servers/src/acp.rs                    |  19 +-
  crates/agent_ui/src/agent_panel.rs                 |  65 ++--
  crates/agent_ui/src/agent_ui.rs                    |  62 ++++
  crates/agent_ui/src/conversation_view.rs           |  16 +
- .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
+ .../agent_ui/src/conversation_view/thread_view.rs  | 348 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
  crates/agent_ui/src/mention_set.rs                 |  25 +-
  crates/agent_ui/src/message_editor.rs              |  39 +++
@@ -16,7 +16,7 @@ Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 12 files changed, 906 insertions(+), 68 deletions(-)
+ 12 files changed, 903 insertions(+), 68 deletions(-)
 
 diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
 index 4b96d73d60..89a8178672 100644
@@ -253,7 +253,7 @@ index bf7d01da92..df0ddfa18c 100644
      /// Inserts the selected text into the message editor or the message being
      /// edited, if any.
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
-index 7610a32d5d..417587c71d 100644
+index 7610a32d5d..b0248d24aa 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
 +++ b/crates/agent_ui/src/conversation_view/thread_view.rs
 @@ -616,6 +616,9 @@ pub struct ThreadView {
@@ -312,7 +312,7 @@ index 7610a32d5d..417587c71d 100644
              return;
          };
  
-@@ -2635,12 +2645,322 @@ impl ThreadView {
+@@ -2635,12 +2645,319 @@ impl ThreadView {
              && !self.elicitation_form_states.contains_key(&id)
          {
              self.elicitation_form_states
@@ -408,12 +408,10 @@ index 7610a32d5d..417587c71d 100644
 +            })
 +        });
 +        let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
-+            self.check_and_auto_open_active_plan(window, cx);
 +            return;
 +        };
 +
 +        let Some(home) = std::env::var_os("HOME") else {
-+            self.check_and_auto_open_active_plan(window, cx);
 +            return;
 +        };
 +        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
@@ -455,7 +453,6 @@ index 7610a32d5d..417587c71d 100644
 +            .unwrap_or(global_plan_file);
 +
 +        if !plan_file.is_file() {
-+            self.check_and_auto_open_active_plan(window, cx);
 +            return;
 +        }
 +
@@ -636,7 +633,7 @@ index 7610a32d5d..417587c71d 100644
      fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
          let entry_count = self.thread.read(cx).entries().len();
          for index in 0..entry_count {
-@@ -3812,9 +4132,9 @@ impl ThreadView {
+@@ -3812,9 +4129,9 @@ impl ThreadView {
                              move |_event, window, cx| {
                                  if let Some(workspace) = workspace.upgrade() {
                                      workspace.update(cx, |ws, cx| {
@@ -648,7 +645,7 @@ index 7610a32d5d..417587c71d 100644
                                              window,
                                              cx,
                                          );
-@@ -12619,7 +12939,6 @@ impl Render for ThreadView {
+@@ -12619,7 +12936,6 @@ impl Render for ThreadView {
          // current availability of feedback/sharing, which can change between
          // renders (settings, connection state, feature flags).
          self.sync_local_commands(cx);
