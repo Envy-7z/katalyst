@@ -1,7 +1,7 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 20:20:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, image drag-drop, and clean project CWD
+Date: Fri, 18 Sep 2026 19:20:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, single worktree guard
 
 ---
  crates/agent_servers/src/acp.rs                    |  19 +-
@@ -139,7 +139,7 @@ index 99ad5f12e1..d57ba47433 100644
  
      fn paste_external_paths_into_active_terminal(
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index fd9e57abd5..0af1e75e7e 100644
+index fd9e57abd5..f7847e41fa 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
 @@ -31,6 +31,7 @@ pub mod terminal_thread_metadata_store;
@@ -195,7 +195,7 @@ index fd9e57abd5..0af1e75e7e 100644
 +        vec![abs_path],
 +        workspace::OpenOptions {
 +            focus: Some(false),
-+            visible: Some(workspace::OpenVisible::All),
++            visible: Some(workspace::OpenVisible::None),
 +            ..Default::default()
 +        },
 +        Some(target_pane.downgrade()),
