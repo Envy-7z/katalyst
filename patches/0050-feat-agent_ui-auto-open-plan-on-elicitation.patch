@@ -1,18 +1,19 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:30:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, and clean project headers
+Date: Fri, 18 Sep 2026 19:40:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, image mentions, and right panel toggle
 
 ---
  crates/agent_ui/src/agent_panel.rs                 |   4 +-
- crates/agent_ui/src/agent_ui.rs                    |  63 ++++
+ crates/agent_ui/src/agent_ui.rs                    |  62 ++++
  .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
+ crates/agent_ui/src/mention_set.rs                 |  23 +-
  crates/project/src/project.rs                      |  29 +-
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 8 files changed, 780 insertions(+), 35 deletions(-)
+ 9 files changed, 793 insertions(+), 44 deletions(-)
 
 diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
 index 99ad5f12e1..daf1341085 100644
@@ -31,7 +32,7 @@ index 99ad5f12e1..daf1341085 100644
          let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
              .icon_size(IconSize::Small)
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
-index fd9e57abd5..8455f2bd8e 100644
+index fd9e57abd5..0af1e75e7e 100644
 --- a/crates/agent_ui/src/agent_ui.rs
 +++ b/crates/agent_ui/src/agent_ui.rs
 @@ -31,6 +31,7 @@ pub mod terminal_thread_metadata_store;
@@ -50,7 +51,7 @@ index fd9e57abd5..8455f2bd8e 100644
  use zed_actions;
  pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
  
-@@ -184,6 +186,67 @@ pub(crate) fn open_abs_path_at_point(
+@@ -184,6 +186,66 @@ pub(crate) fn open_abs_path_at_point(
          .detach_and_log_err(cx);
  }
  
@@ -74,12 +75,11 @@ index fd9e57abd5..8455f2bd8e 100644
 +    {
 +        empty_pane.clone()
 +    } else if let Some(last_pane) = workspace.panes().last() {
-+        // 2. If a center pane already exists, reuse it as a tab!
-+        // Because the chat is docked on the left, any center pane is already on the right.
-+        // Never multi-split into duplicate side-by-side columns!
++        // If a center pane already exists, reuse it as a tab!
++        // Because the chat is docked on the left, the center pane is already on the right.
++        // This prevents creating duplicate split columns.
 +        last_pane.clone()
 +    } else {
-+        // 3. Exactly one non-empty pane: split once to the right
 +        let active_pane = workspace.active_pane().clone();
 +        workspace.adjacent_pane_of(&active_pane, window, cx)
 +    };
@@ -823,6 +823,46 @@ index 0000000000..353417a93e
 +            )
 +    }
 +}
+diff --git a/crates/agent_ui/src/mention_set.rs b/crates/agent_ui/src/mention_set.rs
+index 3ab2f10060..aae9377355 100644
+--- a/crates/agent_ui/src/mention_set.rs
++++ b/crates/agent_ui/src/mention_set.rs
+@@ -259,21 +259,26 @@ impl MentionSet {
+         let crease = if let MentionUri::File { abs_path } = &mention_uri
+             && is_raster_image_path(abs_path)
+         {
+-            let Some(project_path) = project
++            let image = if let Some(project_path) = project
+                 .read(cx)
+                 .project_path_for_absolute_path(&abs_path, cx)
+-            else {
+-                log::error!("project path not found for image mention {abs_path:?}");
+-                return Task::ready(());
+-            };
+-            let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
+-            let image = cx
+-                .spawn(async move |_, cx| {
++            {
++                let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
++                cx.spawn(async move |_, cx| {
+                     let image = image_task.await.map_err(|e| e.to_string())?;
+                     let image = image.update(cx, |image, _| image.image.clone());
+                     Ok(image)
+                 })
+-                .shared();
++                .shared()
++            } else {
++                let abs_path = abs_path.clone();
++                cx.background_spawn(async move {
++                    let (image, _) = load_external_image_from_path(&abs_path, &"".into())
++                        .ok_or_else(|| "failed to load external image".to_string())?;
++                    Ok(Arc::new(image))
++                })
++                .shared()
++            };
+             insert_crease_for_mention(
+                 start,
+                 content_len,
 diff --git a/crates/project/src/project.rs b/crates/project/src/project.rs
 index 2bdff41b16..740a47f354 100644
 --- a/crates/project/src/project.rs

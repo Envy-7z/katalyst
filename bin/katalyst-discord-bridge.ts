@@ -8,7 +8,7 @@
 import { execSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 interface DiscordConfig {
   enabled?: boolean;
@@ -150,8 +150,11 @@ function getAvailableProjects(): { name: string; path: string }[] {
 function findSessionFile(sessionId: string): string | null {
   const base = join(homedir(), ".omp/agent/sessions");
   if (!existsSync(base)) return null;
+  // Sanitize sessionId to alphanumeric and dashes only to prevent any shell or path manipulation
+  const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safeSessionId) return null;
   try {
-    const out = execSync(`/usr/bin/find "${base}" -type f -name "*${sessionId}*.jsonl" | head -n 1`, { encoding: "utf-8" }).trim();
+    const out = execSync(`/usr/bin/find "${base}" -type f -name "*${safeSessionId}*.jsonl" | head -n 1`, { encoding: "utf-8" }).trim();
     return out || null;
   } catch {
     return null;
@@ -167,8 +170,9 @@ async function handleAttachments(attachments: any[]): Promise<string[]> {
   const downloaded: string[] = [];
   for (const att of attachments) {
     try {
-      const filename = att.filename || `file_${Date.now()}`;
-      const localPath = join(cacheDir, `${Date.now()}_${filename}`);
+      const rawName = basename(att.filename || `file_${Date.now()}`);
+      const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const localPath = join(cacheDir, `${Date.now()}_${safeName}`);
       const res = await fetch(att.url);
       const buffer = Buffer.from(await res.arrayBuffer());
       writeFileSync(localPath, buffer);
