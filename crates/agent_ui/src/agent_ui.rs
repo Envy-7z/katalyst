@@ -219,7 +219,7 @@ pub(crate) fn open_plan_in_right_pane(
         vec![abs_path],
         workspace::OpenOptions {
             focus: Some(false),
-            visible: Some(workspace::OpenVisible::All),
+            visible: Some(workspace::OpenVisible::None),
             ..Default::default()
         },
         Some(target_pane.downgrade()),
