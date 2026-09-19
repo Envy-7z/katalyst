@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use agent_ui::AgentPanel;
 use editor::{Editor, MultiBufferOffset};
-use gpui::{Anchor, AnyElement, ClipboardItem, Entity};
+use gpui::{Anchor, AnyElement, ClipboardItem, Entity, TaskExt as _};
 use project::ProjectPath;
 use ui::{ButtonSize, ContextMenu, LabelSize, PopoverMenu, Tooltip, prelude::*};
 use workspace::Toast;
@@ -146,7 +146,8 @@ impl QuickActionBar {
                         workspace.update(cx, |workspace, cx| {
                             let active_pane = workspace.active_pane().clone();
                             active_pane.update(cx, |pane, cx| {
-                                pane.close_active_item(&Default::default(), window, cx);
+                                pane.close_active_item(&Default::default(), window, cx)
+                                    .detach_and_log_err(cx);
                             });
                         });
                     }
