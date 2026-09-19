@@ -1,20 +1,22 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 20:00:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, and clean project CWD
+Date: Fri, 18 Sep 2026 20:20:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, image drag-drop, and clean project CWD
 
 ---
  crates/agent_servers/src/acp.rs                    |  19 +-
- crates/agent_ui/src/agent_panel.rs                 |   4 +-
+ crates/agent_ui/src/agent_panel.rs                 |  65 ++--
  crates/agent_ui/src/agent_ui.rs                    |  62 ++++
+ crates/agent_ui/src/conversation_view.rs           |  16 +
  .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
- crates/agent_ui/src/mention_set.rs                 |  23 +-
+ crates/agent_ui/src/mention_set.rs                 |  25 +-
+ crates/agent_ui/src/message_editor.rs              |  39 +++
  crates/project/src/project.rs                      |  29 +-
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 10 files changed, 809 insertions(+), 47 deletions(-)
+ 12 files changed, 906 insertions(+), 68 deletions(-)
 
 diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
 index 4b96d73d60..89a8178672 100644
@@ -51,7 +53,7 @@ index 4b96d73d60..89a8178672 100644
          Vec::new()
      };
 diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
-index 99ad5f12e1..daf1341085 100644
+index 99ad5f12e1..d57ba47433 100644
 --- a/crates/agent_ui/src/agent_panel.rs
 +++ b/crates/agent_ui/src/agent_panel.rs
 @@ -6613,9 +6613,9 @@ impl AgentPanel {
@@ -66,6 +68,76 @@ index 99ad5f12e1..daf1341085 100644
          };
          let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
              .icon_size(IconSize::Small)
+@@ -6902,28 +6902,49 @@ impl AgentPanel {
+             return;
+         };
+         let conversation_view = conversation_view.clone();
+-        let tasks = paths
+-            .paths()
++        let all_paths = paths.paths().to_vec();
++        let image_paths: Vec<_> = all_paths
+             .iter()
+-            .map(|path| Workspace::project_path_for_path(self.project.clone(), path, false, cx))
+-            .collect::<Vec<_>>();
+-        cx.spawn_in(window, async move |_this, cx| {
+-            let mut paths = vec![];
+-            let mut added_worktrees = vec![];
+-            let opened_paths = futures::future::join_all(tasks).await;
+-            for entry in opened_paths {
+-                if let Some((worktree, project_path)) = entry.log_err() {
+-                    added_worktrees.push(worktree);
+-                    paths.push(project_path);
++            .filter(|p| crate::mention_set::is_raster_image_path(p))
++            .cloned()
++            .collect();
++        let non_image_paths: Vec<_> = all_paths
++            .into_iter()
++            .filter(|p| !crate::mention_set::is_raster_image_path(p))
++            .collect();
++
++        if !image_paths.is_empty() {
++            let conversation_view = conversation_view.clone();
++            window.defer(cx, move |window, cx| {
++                conversation_view.update(cx, |cv, cx| {
++                    cv.insert_external_paths(image_paths, window, cx);
++                });
++            });
++        }
++
++        if !non_image_paths.is_empty() {
++            let tasks = non_image_paths
++                .iter()
++                .map(|path| Workspace::project_path_for_path(self.project.clone(), path, false, cx))
++                .collect::<Vec<_>>();
++            cx.spawn_in(window, async move |_this, cx| {
++                let mut paths = vec![];
++                let mut added_worktrees = vec![];
++                let opened_paths = futures::future::join_all(tasks).await;
++                for entry in opened_paths {
++                    if let Some((worktree, project_path)) = entry.log_err() {
++                        added_worktrees.push(worktree);
++                        paths.push(project_path);
++                    }
+                 }
+-            }
+-            conversation_view
+-                .update_in(cx, |conversation_view, window, cx| {
+-                    conversation_view.insert_dragged_files(paths, added_worktrees, window, cx);
+-                })
+-                .log_err();
+-        })
+-        .detach();
++                conversation_view
++                    .update_in(cx, |conversation_view, window, cx| {
++                        conversation_view.insert_dragged_files(paths, added_worktrees, window, cx);
++                    })
++                    .log_err();
++            })
++            .detach();
++        }
+     }
+ 
+     fn paste_external_paths_into_active_terminal(
 diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
 index fd9e57abd5..0af1e75e7e 100644
 --- a/crates/agent_ui/src/agent_ui.rs
@@ -153,6 +225,33 @@ index fd9e57abd5..0af1e75e7e 100644
  pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";
  const PARALLEL_AGENT_LAYOUT_BACKFILL_KEY: &str = "parallel_agent_layout_backfilled";
  
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index bf7d01da92..df0ddfa18c 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -3352,6 +3352,22 @@ impl ConversationView {
+             });
+         }
+     }
++    pub(crate) fn insert_external_paths(
++        &self,
++        paths: Vec<std::path::PathBuf>,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if let Some(active_thread) = self.active_thread() {
++            active_thread.update(cx, |thread, cx| {
++                thread.message_editor.update(cx, |editor, cx| {
++                    editor.insert_external_paths(paths, window, cx);
++                    editor.focus_handle(cx).focus(window, cx);
++                })
++            });
++        }
++    }
++
+ 
+     /// Inserts the selected text into the message editor or the message being
+     /// edited, if any.
 diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
 index 7610a32d5d..417587c71d 100644
 --- a/crates/agent_ui/src/conversation_view/thread_view.rs
@@ -859,7 +958,7 @@ index 0000000000..353417a93e
 +    }
 +}
 diff --git a/crates/agent_ui/src/mention_set.rs b/crates/agent_ui/src/mention_set.rs
-index 3ab2f10060..aae9377355 100644
+index 3ab2f10060..aaee89afbe 100644
 --- a/crates/agent_ui/src/mention_set.rs
 +++ b/crates/agent_ui/src/mention_set.rs
 @@ -259,21 +259,26 @@ impl MentionSet {
@@ -898,6 +997,65 @@ index 3ab2f10060..aae9377355 100644
              insert_crease_for_mention(
                  start,
                  content_len,
+@@ -1002,7 +1007,7 @@ fn image_format_from_external_content(format: image::ImageFormat) -> Option<Imag
+ 
+ // Case-insensitive so that e.g. `foo.PNG` is recognized the same as `foo.png`.
+ // SVG is excluded because it is handled separately.
+-fn is_raster_image_path(path: &Path) -> bool {
++pub(crate) fn is_raster_image_path(path: &Path) -> bool {
+     let Some(extension) = path.extension().and_then(OsStr::to_str) else {
+         return false;
+     };
+diff --git a/crates/agent_ui/src/message_editor.rs b/crates/agent_ui/src/message_editor.rs
+index fe10a36cb9..2f7cc0aead 100644
+--- a/crates/agent_ui/src/message_editor.rs
++++ b/crates/agent_ui/src/message_editor.rs
+@@ -1435,6 +1435,45 @@ impl MessageEditor {
+         })
+         .detach();
+     }
++    pub fn insert_external_paths(
++        &mut self,
++        paths: Vec<std::path::PathBuf>,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self.workspace.upgrade().is_none() {
++            return;
++        }
++        let supports_images = self.session_capabilities.read().supports_images();
++        let default_image_name: SharedString = "Image".into();
++        let editor = self.editor.clone();
++        let mention_set = self.mention_set.clone();
++        let workspace_weak = self.workspace.clone();
++
++        cx.spawn_in(window, async move |_this, mut cx| {
++            let mut images = Vec::new();
++            for path in paths.iter() {
++                if supports_images && crate::mention_set::is_raster_image_path(path.as_path()) {
++                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(path.as_path(), &default_image_name) {
++                        images.push((image, name));
++                    }
++                }
++            }
++            if !images.is_empty() {
++                crate::mention_set::insert_images_as_context(
++                    images,
++                    editor,
++                    mention_set,
++                    workspace_weak,
++                    &mut cx,
++                )
++                .await;
++            }
++            Ok::<(), anyhow::Error>(())
++        })
++        .detach_and_log_err(cx);
++    }
++
+ 
+     pub fn insert_branch_diff_crease(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let Some(workspace) = self.workspace.upgrade() else {
 diff --git a/crates/project/src/project.rs b/crates/project/src/project.rs
 index 2bdff41b16..740a47f354 100644
 --- a/crates/project/src/project.rs
