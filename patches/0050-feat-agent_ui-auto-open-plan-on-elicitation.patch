@@ -1,17 +1,18 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:15:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan on elicitation, DiscordRemoteModal, and right panel toggle
+Date: Fri, 18 Sep 2026 19:30:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, and clean project headers
 
 ---
  crates/agent_ui/src/agent_panel.rs                 |   4 +-
  crates/agent_ui/src/agent_ui.rs                    |  63 ++++
  .../agent_ui/src/conversation_view/thread_view.rs  | 351 ++++++++++++++++++++-
  crates/agent_ui/src/discord_modal.rs               | 295 +++++++++++++++++
+ crates/project/src/project.rs                      |  29 +-
  crates/project/src/worktree_store.rs               |  21 +-
- crates/sidebar/src/sidebar.rs                      |  20 +-
+ crates/sidebar/src/sidebar.rs                      |  30 +-
  crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 7 files changed, 745 insertions(+), 31 deletions(-)
+ 8 files changed, 780 insertions(+), 35 deletions(-)
 
 diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
 index 99ad5f12e1..daf1341085 100644
@@ -822,6 +823,67 @@ index 0000000000..353417a93e
 +            )
 +    }
 +}
+diff --git a/crates/project/src/project.rs b/crates/project/src/project.rs
+index 2bdff41b16..740a47f354 100644
+--- a/crates/project/src/project.rs
++++ b/crates/project/src/project.rs
+@@ -6597,15 +6597,34 @@ impl ProjectGroupKey {
+     /// Creates a new `ProjectGroupKey` with the given path list.
+     ///
+     /// The path list should point to the git main worktree paths for a project.
++    fn sanitize_paths(paths: &PathList) -> PathList {
++        let filtered: Vec<PathBuf> = paths
++            .ordered_paths()
++            .filter(|p| {
++                let s = p.to_string_lossy();
++                !s.contains(".katalyst") && !s.contains(".omp")
++            })
++            .cloned()
++            .collect();
++        if filtered.is_empty() && !paths.paths().is_empty() {
++            paths.clone()
++        } else {
++            PathList::new(&filtered)
++        }
++    }
++
+     pub fn new(host: Option<RemoteConnectionOptions>, paths: PathList) -> Self {
+-        Self { paths, host }
++        Self {
++            paths: Self::sanitize_paths(&paths),
++            host,
++        }
+     }
+ 
+     pub fn from_project(project: &Project, cx: &App) -> Self {
+         let paths = project.worktree_paths(cx);
+         let host = project.remote_connection_options(cx);
+         Self {
+-            paths: paths.main_worktree_path_list().clone(),
++            paths: Self::sanitize_paths(paths.main_worktree_path_list()),
+             host,
+         }
+     }
+@@ -6615,7 +6634,7 @@ impl ProjectGroupKey {
+         host: Option<RemoteConnectionOptions>,
+     ) -> Self {
+         Self {
+-            paths: paths.main_worktree_path_list().clone(),
++            paths: Self::sanitize_paths(paths.main_worktree_path_list()),
+             host,
+         }
+     }
+@@ -6630,6 +6649,10 @@ impl ProjectGroupKey {
+     ) -> SharedString {
+         let mut names = Vec::with_capacity(self.paths.paths().len());
+         for abs_path in self.paths.ordered_paths() {
++            let s = abs_path.to_string_lossy();
++            if s.contains(".katalyst") || s.contains(".omp") {
++                continue;
++            }
+             let detail = path_detail_map.get(abs_path).copied().unwrap_or(0);
+             // Strip a `.git` extension for display (bare clones like `foo.git`
+             // should display as `foo`, matching the titlebar).
 diff --git a/crates/project/src/worktree_store.rs b/crates/project/src/worktree_store.rs
 index 300d9cf448..3605077c30 100644
 --- a/crates/project/src/worktree_store.rs
@@ -855,7 +917,7 @@ index 300d9cf448..3605077c30 100644
      }
  
 diff --git a/crates/sidebar/src/sidebar.rs b/crates/sidebar/src/sidebar.rs
-index 8e6e251d27..ec48931b8f 100644
+index 8e6e251d27..9510432abd 100644
 --- a/crates/sidebar/src/sidebar.rs
 +++ b/crates/sidebar/src/sidebar.rs
 @@ -17,8 +17,8 @@ use agent_ui::threads_archive_view::{
@@ -869,7 +931,24 @@ index 8e6e251d27..ec48931b8f 100644
      ThreadTitleRegenerationResult, channels_with_threads, import_threads_from_other_channels,
  };
  use agent_ui::{MessageEditorEvent, StateChange, thread_worktree_archive};
-@@ -8057,14 +8057,14 @@ impl Sidebar {
+@@ -659,7 +659,15 @@ fn workspace_menu_worktree_labels(
+     workspace: &Entity<Workspace>,
+     cx: &App,
+ ) -> Vec<WorkspaceMenuWorktreeLabel> {
+-    let root_paths = workspace.read(cx).root_paths(cx);
++    let root_paths: Vec<_> = workspace
++        .read(cx)
++        .root_paths(cx)
++        .into_iter()
++        .filter(|p| {
++            let s = p.to_string_lossy();
++            !s.contains(".katalyst") && !s.contains(".omp")
++        })
++        .collect();
+     let show_folder_name = root_paths.len() > 1;
+     let project = workspace.read(cx).project().clone();
+     let repository_snapshots: Vec<_> = project
+@@ -8057,14 +8065,14 @@ impl Sidebar {
                              ),
                      )
                      .tooltip(Tooltip::text("Configure Discord remote bridge"))
