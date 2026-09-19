@@ -1,7 +1,7 @@
 From e95a13189d694c6c95e733ccc156ef32dbc6e6fb Mon Sep 17 00:00:00 2001
 From: Katalyst Contributors <noreply@katalyst.dev>
-Date: Fri, 18 Sep 2026 19:40:00 +0700
-Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, confirmation dialog UX
+Date: Fri, 18 Sep 2026 19:45:00 +0700
+Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel toggle, robust close task
 
 ---
  crates/agent_servers/src/acp.rs                    |  19 +-
@@ -16,8 +16,8 @@ Subject: [PATCH] feat(agent_ui): auto open plan, DiscordRemoteModal, right panel
  crates/project/src/project.rs                      |  29 +-
  crates/project/src/worktree_store.rs               |  21 +-
  crates/sidebar/src/sidebar.rs                      |  30 +-
- crates/zed/src/zed/quick_action_bar/plan_build.rs  |  22 +-
- 13 files changed, 918 insertions(+), 70 deletions(-)
+ crates/zed/src/zed/quick_action_bar/plan_build.rs  |  25 +-
+ 13 files changed, 920 insertions(+), 71 deletions(-)
 
 diff --git a/crates/agent_servers/src/acp.rs b/crates/agent_servers/src/acp.rs
 index 4b96d73d60..89a8178672 100644
@@ -1255,9 +1255,18 @@ index 8e6e251d27..9510432abd 100644
              )
      }
 diff --git a/crates/zed/src/zed/quick_action_bar/plan_build.rs b/crates/zed/src/zed/quick_action_bar/plan_build.rs
-index 7aef910e19..538ab26ddd 100644
+index 7aef910e19..c7563fcee6 100644
 --- a/crates/zed/src/zed/quick_action_bar/plan_build.rs
 +++ b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+@@ -2,7 +2,7 @@ use std::path::PathBuf;
+ 
+ use agent_ui::AgentPanel;
+ use editor::{Editor, MultiBufferOffset};
+-use gpui::{Anchor, AnyElement, ClipboardItem, Entity};
++use gpui::{Anchor, AnyElement, ClipboardItem, Entity, TaskExt as _};
+ use project::ProjectPath;
+ use ui::{ButtonSize, ContextMenu, LabelSize, PopoverMenu, Tooltip, prelude::*};
+ use workspace::Toast;
 @@ -54,6 +54,7 @@ impl QuickActionBar {
          };
  
@@ -1275,7 +1284,7 @@ index 7aef910e19..538ab26ddd 100644
                      return;
                  };
                  let command = format!("/go {}", build_plan_path.display());
-@@ -134,12 +135,31 @@ impl QuickActionBar {
+@@ -134,12 +135,32 @@ impl QuickActionBar {
                  )
          };
  
@@ -1290,7 +1299,8 @@ index 7aef910e19..538ab26ddd 100644
 +                        workspace.update(cx, |workspace, cx| {
 +                            let active_pane = workspace.active_pane().clone();
 +                            active_pane.update(cx, |pane, cx| {
-+                                pane.close_active_item(&Default::default(), window, cx);
++                                pane.close_active_item(&Default::default(), window, cx)
++                                    .detach_and_log_err(cx);
 +                            });
 +                        });
 +                    }
