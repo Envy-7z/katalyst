@@ -659,7 +659,15 @@ fn workspace_menu_worktree_labels(
     workspace: &Entity<Workspace>,
     cx: &App,
 ) -> Vec<WorkspaceMenuWorktreeLabel> {
-    let root_paths = workspace.read(cx).root_paths(cx);
+    let root_paths: Vec<_> = workspace
+        .read(cx)
+        .root_paths(cx)
+        .into_iter()
+        .filter(|p| {
+            let s = p.to_string_lossy();
+            !s.contains(".katalyst") && !s.contains(".omp")
+        })
+        .collect();
     let show_folder_name = root_paths.len() > 1;
     let project = workspace.read(cx).project().clone();
     let repository_snapshots: Vec<_> = project

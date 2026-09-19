@@ -6597,15 +6597,34 @@ impl ProjectGroupKey {
     /// Creates a new `ProjectGroupKey` with the given path list.
     ///
     /// The path list should point to the git main worktree paths for a project.
+    fn sanitize_paths(paths: &PathList) -> PathList {
+        let filtered: Vec<PathBuf> = paths
+            .ordered_paths()
+            .filter(|p| {
+                let s = p.to_string_lossy();
+                !s.contains(".katalyst") && !s.contains(".omp")
+            })
+            .cloned()
+            .collect();
+        if filtered.is_empty() && !paths.paths().is_empty() {
+            paths.clone()
+        } else {
+            PathList::new(&filtered)
+        }
+    }
+
     pub fn new(host: Option<RemoteConnectionOptions>, paths: PathList) -> Self {
-        Self { paths, host }
+        Self {
+            paths: Self::sanitize_paths(&paths),
+            host,
+        }
     }
 
     pub fn from_project(project: &Project, cx: &App) -> Self {
         let paths = project.worktree_paths(cx);
         let host = project.remote_connection_options(cx);
         Self {
-            paths: paths.main_worktree_path_list().clone(),
+            paths: Self::sanitize_paths(paths.main_worktree_path_list()),
             host,
         }
     }
@@ -6615,7 +6634,7 @@ impl ProjectGroupKey {
         host: Option<RemoteConnectionOptions>,
     ) -> Self {
         Self {
-            paths: paths.main_worktree_path_list().clone(),
+            paths: Self::sanitize_paths(paths.main_worktree_path_list()),
             host,
         }
     }
@@ -6630,6 +6649,10 @@ impl ProjectGroupKey {
     ) -> SharedString {
         let mut names = Vec::with_capacity(self.paths.paths().len());
         for abs_path in self.paths.ordered_paths() {
+            let s = abs_path.to_string_lossy();
+            if s.contains(".katalyst") || s.contains(".omp") {
+                continue;
+            }
             let detail = path_detail_map.get(abs_path).copied().unwrap_or(0);
             // Strip a `.git` extension for display (bare clones like `foo.git`
             // should display as `foo`, matching the titlebar).
