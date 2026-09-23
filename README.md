@@ -91,6 +91,7 @@ Key enhancements in v0.3.0:
 - **Process Group Reaper**: Automatic `SIGTERM` followed by 2s grace period before `SIGKILL` on shutdown, guaranteeing zero orphaned OMP processes.
 - **Sidebar Categorization & Source Badges**: Threads organized by `Today`, `Previous 7 Days`, and `Older` with visual source tags (`[Cursor]`, `[Codex]`, `[OMP]`).
 - **Standalone Release-Fast Packaging**: Compiled with `profile.release-fast`, reducing disk footprint from 1.17 GB to 450 MB with 0.079s instant startup.
+- **Persistent Plan Review Panel (v0.3.1)**: Plans open as native workspace items with rendered/source modes, durable checklist progress, right-split reuse, and session-safe approval.
 
 ### 📱 Mobile & Remote Control via Discord (`katalyst-discord-bridge`)
 

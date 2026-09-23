@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.1] - 2026-09-23
+
+### Added
+- **Persistent Plan Review Panel**: Opens plans as native workspace items with a rendered/source toggle, checklist projection, live execution statuses, and stable session/path identity.
+- **Dedicated Right-Split Review Surface**: Reuses an existing plan review tab and keeps plan review separate from the generic markdown preview toolbar.
+- **Session-Safe Plan Approval**: Prevents approval from executing against the wrong active agent session and provides an explicit source-thread action.
+
+### Fixed
+- **Plan Review Persistence**: Restores plan path, session, title, and view mode across workspace reloads.
+- **Plan Review Editing**: Save, Save As, reload, dirty state, conflict state, and deleted-file state now follow the backing source editor.
+
 ## [0.3.0] - 2026-09-18
 
 ### Added
