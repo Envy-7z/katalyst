@@ -1,0 +1,1770 @@
+From aac06c82408d2d9d83c7c74457044642768f54ae Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Wed, 23 Sep 2026 14:43:31 +0700
+Subject: [PATCH] feat(agent): add persistent plan review panel
+
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 1952d6874a..ff0d3d5bb8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -504,6 +504,7 @@ dependencies = [
+  "lru",
+  "lsp",
+  "markdown",
++ "markdown_preview",
+  "menu",
+  "multi_buffer",
+  "notifications",
+diff --git a/crates/agent_ui/Cargo.toml b/crates/agent_ui/Cargo.toml
+index 3c22a95cad..fa0bfabae5 100644
+--- a/crates/agent_ui/Cargo.toml
++++ b/crates/agent_ui/Cargo.toml
+@@ -73,6 +73,7 @@ log.workspace = true
+ lru.workspace = true
+ lsp.workspace = true
+ markdown.workspace = true
++markdown_preview.workspace = true
+ menu.workspace = true
+ multi_buffer.workspace = true
+ notifications.workspace = true
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index d57ba47433..df9a480604 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -1,7 +1,7 @@
+ use std::{
+     cell::Cell,
+     fmt,
+-    path::PathBuf,
++    path::{Path, PathBuf},
+     rc::Rc,
+     sync::{
+         Arc,
+@@ -4446,8 +4446,8 @@ impl AgentPanel {
+         true
+     }
+ 
+-    /// Focuses the active thread composer, sets its text, and submits — used by
+-    /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
++    /// Focuses the active thread composer, sets its text, and submits a
++    /// slash command.
+     pub fn submit_slash_command(
+         &mut self,
+         text: &str,
+@@ -4471,6 +4471,40 @@ impl AgentPanel {
+         });
+         true
+     }
++    pub fn submit_plan_for_session(
++        &mut self,
++        session_id: &acp::SessionId,
++        plan_path: &Path,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> bool {
++        let Some(thread_view) = self.active_thread_view(cx) else {
++            return false;
++        };
++        if thread_view.read(cx).session_id != *session_id {
++            return false;
++        }
++        thread_view.update(cx, |view, cx| {
++            view.submit_plan_from_review(plan_path, window, cx);
++        });
++        true
++    }
++    pub fn open_plan_source_session(
++        &mut self,
++        session_id: &acp::SessionId,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.open_thread(
++            session_id.clone(),
++            None,
++            Some("Plan Source".into()),
++            window,
++            cx,
++        );
++    }
++
++
+     pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
+         let thread_view = self.active_thread_view(cx)?;
+         let thread = thread_view.read(cx);
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index f7847e41fa..0ff6af02da 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -24,6 +24,7 @@ mod mode_selector;
+ mod model_selector;
+ mod model_selector_popover;
+ pub mod plan_progress;
++mod plan_review;
+ mod profile_selector;
+ mod terminal_codegen;
+ mod terminal_inline_assistant;
+@@ -50,8 +51,8 @@ use editor::{Editor, SelectionEffects, scroll::Autoscroll};
+ use feature_flags::FeatureFlagAppExt as _;
+ use fs::Fs;
+ use gpui::{
+-    Action, App, Context, Entity, ImageSource, ReadGlobal as _, Resource, SharedString, SharedUri,
+-    TaskExt, Window, actions,
++    Action, App, AppContext as _, Context, Entity, ImageSource, ReadGlobal as _, Resource,
++    SharedString, SharedUri, TaskExt, Window, actions,
+ };
+ use language::{
+     LanguageRegistry,
+@@ -68,7 +69,7 @@ use serde::{Deserialize, Serialize};
+ use settings::{LanguageModelSelection, Settings as _, SettingsStore, SidebarSide};
+ use std::any::TypeId;
+ use std::path::{Path, PathBuf};
+-use workspace::{OpenOptions, Workspace};
++use workspace::{OpenOptions, SplitDirection, Workspace};
+ 
+ use crate::agent_configuration::ManageProfilesModal;
+ pub use crate::agent_connection_store::{ActiveAcpConnection, AgentConnectionStore};
+@@ -186,61 +187,85 @@ pub(crate) fn open_abs_path_at_point(
+         .detach_and_log_err(cx);
+ }
+ 
+-pub(crate) fn open_plan_in_right_pane(
++pub(crate) fn open_plan_review(
+     workspace: &mut Workspace,
++    session_id: acp::SessionId,
+     abs_path: PathBuf,
++    title: SharedString,
+     window: &mut Window,
+     cx: &mut Context<Workspace>,
+ ) {
+     if !std::fs::metadata(&abs_path).is_ok_and(|metadata| metadata.is_file()) {
+-        log::error!("Cannot auto-open missing plan file: {abs_path:?}");
++        log::error!("Cannot open missing plan file: {abs_path:?}");
+         return;
+     }
+-    // 1. If any pane in the workspace is empty (items_len == 0), reuse it!
+-    // This fills the initial center pane directly adjacent to the Agent dock,
+-    // eliminating any blank gap between the Agent panel and the editor!
+-    let target_pane = if let Some(empty_pane) = workspace
++
++    let key = crate::plan_review::PlanReviewKey::new(session_id, abs_path.clone());
++    let existing = {
++        workspace
++            .items_of_type::<crate::plan_review::PlanReviewView>(cx)
++            .find(|view| view.read(cx).key() == &key)
++    };
++    if let Some(existing) = existing {
++        workspace.activate_item(&existing, true, true, window, cx);
++        return;
++    }
++
++    let target_pane = workspace
+         .panes()
+         .iter()
+-        .find(|pane| pane.read(cx).items_len() == 0)
+-    {
+-        empty_pane.clone()
+-    } else if let Some(last_pane) = workspace.panes().last() {
+-        // If a center pane already exists, reuse it as a tab!
+-        // Because the chat is docked on the left, the center pane is already on the right.
+-        // This prevents creating duplicate split columns.
+-        last_pane.clone()
+-    } else {
+-        let active_pane = workspace.active_pane().clone();
+-        workspace.adjacent_pane_of(&active_pane, window, cx)
+-    };
++        .find(|pane| pane.read(cx).items_of_type::<crate::plan_review::PlanReviewView>().next().is_some())
++        .cloned()
++        .unwrap_or_else(|| {
++            workspace.split_pane(workspace.active_pane().clone(), SplitDirection::Right, window, cx)
++        });
++    let target_pane = target_pane.downgrade();
++    let project = workspace.project().clone();
++    let language_registry = project.read(cx).languages().clone();
++    let workspace_handle = workspace.weak_handle();
++    let project_path_task =
++        Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
+     let path_for_log = abs_path.clone();
+-    let open_task = workspace.open_paths(
+-        vec![abs_path],
+-        workspace::OpenOptions {
+-            focus: Some(false),
+-            visible: Some(workspace::OpenVisible::None),
+-            ..Default::default()
+-        },
+-        Some(target_pane.downgrade()),
+-        window,
+-        cx,
+-    );
++
+     window
+-        .spawn(cx, async move |_cx| {
+-            for result in open_task.await {
+-                match result {
+-                    Some(Ok(_)) => {}
+-                    Some(Err(error)) => {
+-                        log::error!("Cannot auto-open plan file {path_for_log:?}: {error:#}");
+-                    }
+-                    None => {
+-                        log::error!(
+-                            "Cannot auto-open plan file {path_for_log:?}: workspace returned no item"
+-                        );
+-                    }
+-                }
+-            }
++        .spawn(cx, async move |cx| {
++            let (_, project_path) = project_path_task.await?;
++            let buffer = project
++                .update(cx, |project, cx| project.open_buffer(project_path, cx))
++                .await?;
++            let markdown = std::fs::read_to_string(&path_for_log).unwrap_or_default();
++            let mut projection = crate::plan_review::project_plan(&markdown, None);
++            projection.availability =
++                crate::plan_review::availability_for(&path_for_log, true);
++            let view = cx.update(|window, cx| {
++                let editor = cx.new(|cx| {
++                    editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
++                });
++                let markdown_view = markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
++                    markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
++                    editor.clone(),
++                    workspace_handle.clone(),
++                    language_registry,
++                    window,
++                    cx,
++                );
++                cx.new(|cx| {
++                    crate::plan_review::PlanReviewView::new(
++                        key,
++                        title,
++                        editor,
++                        markdown_view,
++                        projection,
++                        workspace_handle,
++                        cx,
++                    )
++                })
++            })?;
++            target_pane
++                .update_in(cx, |pane, window, cx| {
++                    pane.add_item(Box::new(view), true, true, None, window, cx);
++                })
++                .map_err(|error| anyhow::anyhow!("{error}"))?;
+             anyhow::Ok(())
+         })
+         .detach_and_log_err(cx);
+@@ -686,6 +711,7 @@ pub fn init(
+         init_language_model_settings(cx);
+     }
+     agent_panel::init(cx);
++    workspace::register_serializable_item::<crate::plan_review::PlanReviewView>(cx);
+     context_server_configuration::init(language_registry, fs.clone(), cx);
+     thread_metadata_store::init(cx);
+     terminal_thread_metadata_store::init(cx);
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index b0248d24aa..91ff860f37 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -602,7 +602,7 @@ pub struct ThreadView {
+     pub subagent_scroll_handles: RefCell<HashMap<acp::SessionId, ScrollHandle>>,
+     pub edits_expanded: bool,
+     pub plan_expanded: bool,
+-    /// Plan path seeded from Build Locally / `/go` for checklist progress sync.
++    /// Plan path used for checklist progress sync after `/go`.
+     pub execution_plan_path: Option<PathBuf>,
+     pub queue_expanded: bool,
+     pub editor_expanded: bool,
+@@ -616,9 +616,8 @@ pub struct ThreadView {
+     pub resumed_without_history: bool,
+     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
+     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
++    plan_review_paths: HashMap<ElicitationEntryId, PathBuf>,
+     opened_plan_slugs: HashSet<String>,
+-    plan_scan_task: Option<Task<()>>,
+-    last_plan_scan: Option<std::time::Instant>,
+     pub _cancel_task: Option<Task<()>>,
+     _save_task: Option<Task<()>>,
+     _draft_resolve_task: Option<Task<()>>,
+@@ -1034,9 +1033,8 @@ impl ThreadView {
+             new_server_version_available: None,
+             permission_selections: HashMap::default(),
+             elicitation_form_states: HashMap::default(),
++            plan_review_paths: HashMap::default(),
+             opened_plan_slugs: HashSet::default(),
+-            plan_scan_task: None,
+-            last_plan_scan: None,
+             _cancel_task: None,
+             _save_task: None,
+             _draft_resolve_task: None,
+@@ -2592,17 +2590,16 @@ impl ThreadView {
+     }
+ 
+     fn has_pending_request_elicitation(&self, cx: &App) -> bool {
+-        self.server_view
+-            .read_with(cx, |server_view, cx| {
+-                server_view
+-                    .request_elicitation_store()
+-                    .is_some_and(|store| {
+-                        store.read(cx).elicitations().iter().any(|elicitation| {
+-                            matches!(elicitation.status, ElicitationStatus::Pending { .. })
+-                        })
+-                    })
++        let thread = self.thread.read(cx);
++        thread.entries().iter().any(|entry| {
++            let AgentThreadEntry::Elicitation(id) = entry else {
++                return false;
++            };
++            thread.elicitation(id).is_some_and(|(_, elicitation)| {
++                matches!(elicitation.status, ElicitationStatus::Pending { .. })
++                    && !crate::plan_progress::is_plan_review_request(&elicitation.request.message)
+             })
+-            .unwrap_or(false)
++        })
+     }
+ 
+     pub fn sync_elicitation_state_for_entry(
+@@ -2640,24 +2637,44 @@ impl ThreadView {
+             return;
+         };
+ 
+-        if is_pending
+-            && let Some(schema) = schema
+-            && !self.elicitation_form_states.contains_key(&id)
+-        {
+-            self.elicitation_form_states
+-                .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
+-            self.maybe_auto_open_elicitation_plan(&message, window, cx);
+-        } else if !is_pending {
++        if is_pending {
++            if crate::plan_progress::is_plan_review_request(&message)
++                && let Some(plan_path) =
++                    self.maybe_auto_open_elicitation_plan(&message, window, cx)
++            {
++                self.plan_review_paths.insert(id.clone(), plan_path);
++            }
++            if let Some(schema) = schema
++                && !self.elicitation_form_states.contains_key(&id)
++            {
++                self.elicitation_form_states
++                    .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
++            }
++        } else {
+             self.elicitation_form_states.remove(&id);
++            self.plan_review_paths.remove(&id);
+         }
+     }
+ 
++    fn pending_plan_elicitation_id(&self, cx: &Context<Self>) -> Option<ElicitationEntryId> {
++        let thread = self.thread.read(cx);
++        thread.entries().iter().rev().find_map(|entry| {
++            let AgentThreadEntry::Elicitation(id) = entry else {
++                return None;
++            };
++            let (_, elicitation) = thread.elicitation(id)?;
++            (matches!(elicitation.status, ElicitationStatus::Pending { .. })
++                && crate::plan_progress::is_plan_review_request(&elicitation.request.message))
++            .then(|| id.clone())
++        })
++    }
++
+     fn maybe_auto_open_elicitation_plan(
+         &mut self,
+         message: &str,
+         window: &mut Window,
+         cx: &mut Context<Self>,
+-    ) {
++    ) -> Option<PathBuf> {
+         let markdown_start = message
+             .split_inclusive('\n')
+             .scan(0usize, |offset, line| {
+@@ -2736,11 +2753,11 @@ impl ThreadView {
+             })
+         });
+         let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
+-            return;
++            return None;
+         };
+ 
+         let Some(home) = std::env::var_os("HOME") else {
+-            return;
++            return None;
+         };
+         let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
+         let _ = std::fs::create_dir_all(&global_plans_dir);
+@@ -2781,183 +2798,27 @@ impl ThreadView {
+             .unwrap_or(global_plan_file);
+ 
+         if !plan_file.is_file() {
+-            return;
+-        }
+-
+-        let key = slug.clone();
+-        if !self.opened_plan_slugs.insert(key) {
+-            return;
+-        }
+-
+-        if let Some(workspace) = self.workspace.upgrade() {
+-            workspace.update(cx, |ws, cx| {
+-                crate::open_plan_in_right_pane(ws, plan_file, window, cx);
+-            });
+-        }
+-    }
+-
+-    fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+-        if self.plan_scan_task.is_some()
+-            || self.last_plan_scan.is_some_and(|last_scan| {
+-                last_scan.elapsed() < std::time::Duration::from_millis(250)
+-            })
+-        {
+-            return;
++            return None;
+         }
+-        self.last_plan_scan = Some(std::time::Instant::now());
+-
+-        let session_id = self.session_id.to_string();
+-        let workspace_roots = self
+-            .workspace
+-            .upgrade()
+-            .map(|workspace| {
+-                workspace
+-                    .read(cx)
+-                    .project()
+-                    .read(cx)
+-                    .visible_worktrees(cx)
+-                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+-                    .collect::<Vec<_>>()
+-            })
+-            .unwrap_or_default();
+-        let scan_task =
+-            cx.background_spawn(async move { Self::find_active_plan(session_id, workspace_roots) });
+-        let weak_self = cx.weak_entity();
+-        self.plan_scan_task = Some(window.spawn(cx, async move |cx| {
+-            let plan_file = scan_task.await;
+-            weak_self
+-                .update_in(cx, |this, window, cx| {
+-                    this.plan_scan_task = None;
+-                    let Some(plan_file) = plan_file else {
+-                        return;
+-                    };
+-                    let key = plan_file
+-                        .file_stem()
+-                        .and_then(|s| s.to_str())
+-                        .map(|s| s.strip_suffix(".plan").unwrap_or(s))
+-                        .unwrap_or("plan")
+-                        .to_string();
+-                    if !this.opened_plan_slugs.insert(key) {
+-                        return;
+-                    }
+-                    if let Some(workspace) = this.workspace.upgrade() {
+-                        workspace.update(cx, |ws, cx| {
+-                            crate::open_plan_in_right_pane(ws, plan_file, window, cx);
+-                        });
+-                    }
+-                })
+-                .ok();
+-        }));
+-    }
+ 
+-    fn find_active_plan(
+-        session_id_str: String,
+-        workspace_roots: Vec<std::path::PathBuf>,
+-    ) -> Option<std::path::PathBuf> {
+-        let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+-        let recent_cutoff =
+-            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(15 * 60));
+-        let add_plan_candidates =
+-            |dir: &std::path::Path,
+-             recent_only: Option<std::time::SystemTime>,
+-             require_dot_plan_suffix: bool,
+-             candidates: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>| {
+-                let Ok(files) = std::fs::read_dir(dir) else {
+-                    return false;
+-                };
+-                let mut added = false;
+-                for file in files.flatten() {
+-                    let path = file.path();
+-                    let is_plan = path.file_name().is_some_and(|name| {
+-                        let name = name.to_string_lossy();
+-                        if require_dot_plan_suffix {
+-                            name.ends_with(".plan.md")
+-                        } else {
+-                            name.ends_with("plan.md")
+-                        }
+-                    });
+-                    if !is_plan {
+-                        continue;
+-                    }
+-                    let Ok(modified) =
+-                        std::fs::metadata(&path).and_then(|metadata| metadata.modified())
+-                    else {
+-                        continue;
+-                    };
+-                    if recent_only.is_some_and(|cutoff| modified < cutoff) {
+-                        continue;
+-                    }
+-                    candidates.push((modified, path));
+-                    added = true;
+-                }
+-                added
+-            };
+-
+-        if let Some(home) = std::env::var_os("HOME") {
+-            let base = std::path::PathBuf::from(home);
+-            let session_dir = base.join(".omp/agent/sessions");
+-            let mut found_exact_session_plan = false;
+-            if let Ok(buckets) = std::fs::read_dir(&session_dir) {
+-                for bucket in buckets.flatten() {
+-                    let bucket_path = bucket.path();
+-                    if !bucket_path.is_dir() {
+-                        continue;
+-                    }
+-                    if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
+-                        for session in subdirs.flatten() {
+-                            let session_path = session.path();
+-                            if session_path.file_name().is_some_and(|name| {
+-                                name.to_string_lossy().contains(&session_id_str)
+-                            }) {
+-                                found_exact_session_plan |= add_plan_candidates(
+-                                    &session_path.join("local"),
+-                                    None,
+-                                    false,
+-                                    &mut candidates,
+-                                );
+-                            }
+-                        }
+-                    }
+-                }
+-            }
+-
+-            if !found_exact_session_plan {
+-                if let Ok(buckets) = std::fs::read_dir(&session_dir) {
+-                    for bucket in buckets.flatten() {
+-                        let bucket_path = bucket.path();
+-                        if !bucket_path.is_dir() {
+-                            continue;
+-                        }
+-                        if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
+-                            for session in subdirs.flatten() {
+-                                add_plan_candidates(
+-                                    &session.path().join("local"),
+-                                    recent_cutoff,
+-                                    false,
+-                                    &mut candidates,
+-                                );
+-                            }
+-                        }
+-                    }
+-                }
++        if self.opened_plan_slugs.insert(slug) {
++            if let Some(workspace) = self.workspace.upgrade() {
++                workspace.update(cx, |ws, cx| {
++                    crate::open_plan_review(
++                        ws,
++                        self.session_id.clone(),
++                        plan_file.clone(),
++                        "Implementation Plan".into(),
++                        window,
++                        cx,
++                    );
++                });
+             }
+-
+-            add_plan_candidates(
+-                &base.join(".katalyst/plans"),
+-                recent_cutoff,
+-                false,
+-                &mut candidates,
+-            );
+-        }
+-
+-        for root in workspace_roots {
+-            add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
+         }
+-
+-        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+-        candidates.into_iter().next().map(|(_, path)| path)
++        Some(plan_file)
+     }
+ 
++
+     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let entry_count = self.thread.read(cx).entries().len();
+         for index in 0..entry_count {
+@@ -4059,6 +3920,28 @@ impl ThreadView {
+         self.send(window, cx);
+     }
+ 
++    fn accept_pending_plan_or_build(
++        &mut self,
++        plan_path: &std::path::Path,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if let Some(elicitation_id) = self.pending_plan_elicitation_id(cx) {
++            self.submit_elicitation(elicitation_id, window, cx);
++        } else {
++            let cmd = format!("/go {}", plan_path.display());
++            self.submit_slash_command(&cmd, window, cx);
++        }
++    }
++    pub(crate) fn submit_plan_from_review(
++        &mut self,
++        plan_path: &std::path::Path,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.accept_pending_plan_or_build(plan_path, window, cx);
++    }
++
+     fn render_inline_plan_card(
+         &self,
+         entry_ix: usize,
+@@ -4068,6 +3951,7 @@ impl ThreadView {
+         cx: &Context<Self>,
+     ) -> AnyElement {
+         let plan_path = info.plan_path.clone();
++        let session_id = self.session_id.clone();
+         let title = info.title;
+         let summary = info.summary;
+ 
+@@ -4103,7 +3987,7 @@ impl ThreadView {
+             .child(
+                 v_flex()
+                     .gap_0p5()
+-                    .child(Label::new(title).size(LabelSize::Default))
++                    .child(Label::new(title.clone()).size(LabelSize::Default))
+                     .child(
+                         Label::new(summary)
+                             .size(LabelSize::Small)
+@@ -4129,9 +4013,11 @@ impl ThreadView {
+                             move |_event, window, cx| {
+                                 if let Some(workspace) = workspace.upgrade() {
+                                     workspace.update(cx, |ws, cx| {
+-                                        crate::open_plan_in_right_pane(
++                                        crate::open_plan_review(
+                                             ws,
++                                            session_id.clone(),
+                                             plan_path.clone(),
++                                            title.clone().into(),
+                                             window,
+                                             cx,
+                                         );
+@@ -4155,8 +4041,7 @@ impl ThreadView {
+                         )
+                         .on_click(cx.listener(
+                             move |this, _event, window, cx| {
+-                                let cmd = format!("/go {}", plan_path.display());
+-                                this.submit_slash_command(&cmd, window, cx);
++                                this.accept_pending_plan_or_build(&plan_path, window, cx);
+                             },
+                         )),
+                     ),
+@@ -7248,12 +7133,45 @@ impl ThreadView {
+         window: &Window,
+         cx: &Context<Self>,
+     ) -> Option<AnyElement> {
++        let pending_plan = {
++            let thread = self.thread.read(cx);
++            thread.entries().iter().enumerate().find_map(|(ix, entry)| {
++                let AgentThreadEntry::Elicitation(id) = entry else {
++                    return None;
++                };
++                let (_, elicitation) = thread.elicitation(id)?;
++                (matches!(elicitation.status, ElicitationStatus::Pending { .. })
++                    && crate::plan_progress::is_plan_review_request(&elicitation.request.message))
++                .then(|| (ix, id.clone()))
++            })
++        };
++
++        if let Some((entry_ix, elicitation_id)) = pending_plan
++            && let Some(plan_path) = self.plan_review_paths.get(&elicitation_id)
++            && let Some(info) =
++                crate::plan_progress::extract_plan_proposal_info(&plan_path.to_string_lossy())
++        {
++            return Some(
++                v_flex()
++                    .w_full()
++                    .px_4()
++                    .py_2()
++                    .bg(cx.theme().colors().elevated_surface_background)
++                    .border_b_1()
++                    .border_color(cx.theme().colors().border)
++                    .shadow_md()
++                    .child(self.render_inline_plan_card(entry_ix, 0, info, window, cx))
++                    .into_any_element(),
++            );
++        }
++
+         let thread = self.thread.read(cx);
+         let entries = thread.entries();
+         let (entry_ix, elicitation) = entries.iter().enumerate().find_map(|(ix, entry)| {
+             if let AgentThreadEntry::Elicitation(elicitation_id) = entry {
+                 let (_, elicitation) = thread.elicitation(elicitation_id)?;
+                 if matches!(elicitation.status, ElicitationStatus::Pending { .. })
++                    && !crate::plan_progress::is_plan_review_request(&elicitation.request.message)
+                     && should_render_elicitation(elicitation)
+                 {
+                     return Some((ix, elicitation));
+diff --git a/crates/agent_ui/src/plan_progress.rs b/crates/agent_ui/src/plan_progress.rs
+index de1415a9ac..4defe3278a 100644
+--- a/crates/agent_ui/src/plan_progress.rs
++++ b/crates/agent_ui/src/plan_progress.rs
+@@ -278,6 +278,13 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
+     })
+ }
+ 
++/// Returns whether an elicitation is the plan-review gate.
++pub fn is_plan_review_request(text: &str) -> bool {
++    text.contains("Approve plan \"")
++        || (text.to_ascii_lowercase().contains("approve plan")
++            && (text.contains(".plan.md") || text.contains("-plan.md")))
++}
++
+ /// Detect whether text contains a proposal/mention of a plan file, and extract title/summary.
+ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+     let Some(home) = std::env::var_os("HOME") else {
+@@ -351,6 +358,7 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+     })
+ }
+ 
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -430,4 +438,14 @@ mod tests {
+         assert_eq!(body, "Here is the plan.");
+     }
+ 
++    #[test]
++    fn detects_plan_review_requests_only() {
++        assert!(is_plan_review_request(
++            "Approve plan \"sdk36-fix\" in ~/.katalyst/plans/sdk36-fix.plan.md"
++        ));
++        assert!(!is_plan_review_request(
++            "Plan saved to ~/.katalyst/plans/sdk36-fix.plan.md"
++        ));
++    }
++
+ }
+diff --git a/crates/agent_ui/src/plan_review.rs b/crates/agent_ui/src/plan_review.rs
+new file mode 100644
+index 0000000000..8986832acb
+--- /dev/null
++++ b/crates/agent_ui/src/plan_review.rs
+@@ -0,0 +1,730 @@
++use std::any::TypeId;
++use std::path::{Component, PathBuf};
++
++use agent_client_protocol::schema::v1 as acp;
++use anyhow::{Context as _, Result};
++
++#[derive(Clone, Debug, Eq, Hash, PartialEq)]
++pub(crate) struct PlanReviewKey {
++    pub(crate) session_id: acp::SessionId,
++    pub(crate) plan_path: PathBuf,
++}
++
++impl PlanReviewKey {
++    pub(crate) fn new(session_id: acp::SessionId, plan_path: PathBuf) -> Self {
++        Self {
++            session_id,
++            plan_path: normalize_path(plan_path),
++        }
++    }
++}
++
++fn normalize_path(path: PathBuf) -> PathBuf {
++    let mut normalized = PathBuf::new();
++    for component in path.components() {
++        match component {
++            Component::CurDir => {}
++            Component::ParentDir if !normalized.pop() => normalized.push(component.as_os_str()),
++            _ => normalized.push(component.as_os_str()),
++        }
++    }
++    normalized
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) enum PlanReviewMode {
++    Rendered,
++    Source,
++}
++
++impl PlanReviewMode {
++    fn toggle(&mut self) {
++        *self = match self {
++            Self::Rendered => Self::Source,
++            Self::Source => Self::Rendered,
++        };
++    }
++
++    fn to_db(self) -> i64 {
++        match self {
++            Self::Rendered => 0,
++            Self::Source => 1,
++        }
++    }
++
++    fn from_db(value: i64) -> Self {
++        match value {
++            1 => Self::Source,
++            _ => Self::Rendered,
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) enum PlanReviewAvailability {
++    Ready,
++    MissingFile,
++    SessionUnavailable,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) enum PlanReviewStepStatus {
++    Pending,
++    InProgress,
++    Completed,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) struct PlanReviewStep {
++    pub(crate) title: String,
++    pub(crate) status: PlanReviewStepStatus,
++}
++
++impl PlanReviewStep {
++    #[cfg(test)]
++    fn pending(title: &str) -> Self {
++        Self {
++            title: title.to_string(),
++            status: PlanReviewStepStatus::Pending,
++        }
++    }
++
++    #[cfg(test)]
++    fn in_progress(title: &str) -> Self {
++        Self {
++            title: title.to_string(),
++            status: PlanReviewStepStatus::InProgress,
++        }
++    }
++
++    #[cfg(test)]
++    fn completed(title: &str) -> Self {
++        Self {
++            title: title.to_string(),
++            status: PlanReviewStepStatus::Completed,
++        }
++    }
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) struct PlanReviewProjection {
++    pub(crate) availability: PlanReviewAvailability,
++    pub(crate) steps: Vec<PlanReviewStep>,
++}
++
++pub(crate) fn project_plan(
++    markdown: &str,
++    live_steps: Option<&[(String, acp::PlanEntryStatus)]>,
++) -> PlanReviewProjection {
++    let steps = live_steps
++        .filter(|steps| !steps.is_empty())
++        .map(|steps| {
++            steps
++                .iter()
++                .map(|(title, status)| PlanReviewStep {
++                    title: title.clone(),
++                    status: match status {
++                        acp::PlanEntryStatus::Completed => PlanReviewStepStatus::Completed,
++                        acp::PlanEntryStatus::InProgress => PlanReviewStepStatus::InProgress,
++                        acp::PlanEntryStatus::Pending => PlanReviewStepStatus::Pending,
++                        _ => PlanReviewStepStatus::Pending,
++                    },
++                })
++                .collect()
++        })
++        .unwrap_or_else(|| {
++            crate::plan_progress::parse_plan_phases(markdown)
++                .into_iter()
++                .map(|title| PlanReviewStep {
++                    title,
++                    status: PlanReviewStepStatus::Pending,
++                })
++                .collect()
++        });
++
++    PlanReviewProjection {
++        availability: PlanReviewAvailability::Ready,
++        steps,
++    }
++}
++
++pub(crate) fn availability_for(
++    plan_path: &std::path::Path,
++    session_available: bool,
++) -> PlanReviewAvailability {
++    if !plan_path.is_file() {
++        PlanReviewAvailability::MissingFile
++    } else if !session_available {
++        PlanReviewAvailability::SessionUnavailable
++    } else {
++        PlanReviewAvailability::Ready
++    }
++}
++
++use gpui::{
++    AnyEntity, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
++    IntoElement, Render, SharedString, Task, WeakEntity, Window,
++};
++use markdown_preview::markdown_preview_view::MarkdownPreviewView;
++use project::{Project, ProjectPath};
++use theme::ActiveTheme;
++use ui::{Icon, IconName, IconSize, Label, LabelSize, prelude::*};
++use workspace::{
++    delete_unloaded_items, ItemId, Workspace, WorkspaceId,
++    item::{Item, ItemHandle, SaveOptions, SerializableItem},
++};
++
++
++pub(crate) struct PlanReviewView {
++    key: PlanReviewKey,
++    title: SharedString,
++    source_editor: Entity<editor::Editor>,
++    markdown_view: Entity<MarkdownPreviewView>,
++    mode: PlanReviewMode,
++    focus_handle: FocusHandle,
++    projection: PlanReviewProjection,
++    workspace: WeakEntity<Workspace>,
++}
++
++impl PlanReviewView {
++    pub(crate) fn new(
++        key: PlanReviewKey,
++        title: SharedString,
++        source_editor: Entity<editor::Editor>,
++        markdown_view: Entity<MarkdownPreviewView>,
++        projection: PlanReviewProjection,
++        workspace: WeakEntity<Workspace>,
++        cx: &mut Context<Self>,
++    ) -> Self {
++        Self {
++            key,
++            title,
++            source_editor,
++            markdown_view,
++            mode: PlanReviewMode::Rendered,
++            focus_handle: cx.focus_handle(),
++            projection,
++            workspace,
++        }
++    }
++    pub(crate) fn key(&self) -> &PlanReviewKey {
++        &self.key
++    }
++
++
++    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
++        let completed = self
++            .projection
++            .steps
++            .iter()
++            .filter(|step| step.status == PlanReviewStepStatus::Completed)
++            .count();
++        let total = self.projection.steps.len();
++
++        h_flex()
++            .w_full()
++            .justify_between()
++            .items_center()
++            .px_3()
++            .py_2()
++            .border_b_1()
++            .border_color(cx.theme().colors().border)
++            .child(
++                h_flex()
++                    .min_w_0()
++                    .gap_2()
++                    .child(Icon::new(IconName::ListTodo).size(IconSize::Small))
++                    .child(Label::new(self.title.clone()).size(LabelSize::Default)),
++            )
++            .child(
++                Label::new(format!("{completed}/{total} steps"))
++                    .size(LabelSize::Small)
++                    .color(ui::Color::Muted),
++            )
++    }
++
++    fn render_steps(&self, _cx: &Context<Self>) -> impl IntoElement {
++        v_flex()
++            .w_full()
++            .px_3()
++            .py_2()
++            .gap_1()
++            .children(self.projection.steps.iter().map(|step| {
++                let icon = match step.status {
++                    PlanReviewStepStatus::Completed => IconName::TodoComplete,
++                    PlanReviewStepStatus::InProgress => IconName::TodoProgress,
++                    PlanReviewStepStatus::Pending => IconName::TodoPending,
++                };
++                h_flex()
++                    .gap_2()
++                    .items_center()
++                    .child(Icon::new(icon).size(IconSize::Small))
++                    .child(
++                        Label::new(step.title.clone())
++                            .size(LabelSize::Small)
++                            .color(ui::Color::Muted),
++                    )
++            }))
++            .when(self.projection.steps.is_empty(), |this| {
++                this.child(
++                    Label::new("No execution steps available")
++                        .size(LabelSize::Small)
++                        .color(ui::Color::Muted),
++                )
++            })
++    }
++}
++
++impl EventEmitter<()> for PlanReviewView {}
++
++impl Focusable for PlanReviewView {
++    fn focus_handle(&self, _: &App) -> FocusHandle {
++        self.focus_handle.clone()
++    }
++}
++
++impl Render for PlanReviewView {
++    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++        let mode = self.mode;
++        let body = match mode {
++            PlanReviewMode::Rendered => self.markdown_view.clone().into_any_element(),
++            PlanReviewMode::Source => self.source_editor.clone().into_any_element(),
++        };
++        let toggle_label = match mode {
++            PlanReviewMode::Rendered => "Edit Source",
++            PlanReviewMode::Source => "Render Plan",
++        };
++
++        v_flex()
++            .size_full()
++            .bg(cx.theme().colors().editor_background)
++            .child(self.render_header(cx))
++            .child(self.render_steps(cx))
++            .child(div().flex_1().min_h_0().child(body))
++            .child(
++                h_flex()
++                    .w_full()
++                    .justify_end()
++                    .gap_2()
++                    .px_3()
++                    .py_2()
++                    .border_t_1()
++                    .border_color(cx.theme().colors().border)
++                    .child(
++                        Button::new("plan-review-open-source-thread", "Open Source Thread")
++                            .label_size(LabelSize::Small)
++                            .size(ButtonSize::Compact)
++                            .style(ButtonStyle::Subtle)
++                            .on_click({
++                                let workspace = self.workspace.clone();
++                                let session_id = self.key.session_id.clone();
++                                move |_, window, cx| {
++                                    if let Some(workspace) = workspace.upgrade() {
++                                        workspace.update(cx, |workspace, cx| {
++                                            if let Some(panel) =
++                                                workspace.panel::<crate::AgentPanel>(cx)
++                                            {
++                                                panel.update(cx, |panel, cx| {
++                                                    panel.open_plan_source_session(
++                                                        &session_id,
++                                                        window,
++                                                        cx,
++                                                    );
++                                                });
++                                            }
++                                        });
++                                    }
++                                }
++                            }),
++                    )
++                    .child(
++                        Button::new("plan-review-build", "Approve & Build")
++                            .label_size(LabelSize::Small)
++                            .size(ButtonSize::Compact)
++                            .style(ButtonStyle::Filled)
++                            .on_click({
++                                let workspace = self.workspace.clone();
++                                let session_id = self.key.session_id.clone();
++                                let plan_path = self.key.plan_path.clone();
++                                move |_, window, cx| {
++                                    if let Some(workspace) = workspace.upgrade() {
++                                        workspace.update(cx, |workspace, cx| {
++                                            if let Some(panel) =
++                                                workspace.panel::<crate::AgentPanel>(cx)
++                                            {
++                                                panel.update(cx, |panel, cx| {
++                                                    let _ = panel.submit_plan_for_session(
++                                                        &session_id,
++                                                        &plan_path,
++                                                        window,
++                                                        cx,
++                                                    );
++                                                });
++                                            }
++                                        });
++                                    }
++                                }
++                            }),
++                    )
++                    .child(
++                        Button::new("plan-review-toggle-source", toggle_label)
++                            .label_size(LabelSize::Small)
++                            .size(ButtonSize::Compact)
++                            .style(ButtonStyle::Subtle)
++                            .on_click(cx.listener(|this, _, _, cx| {
++                                this.mode.toggle();
++                                cx.emit(());
++                                cx.notify();
++                            })),
++                    ),
++            )
++    }
++}
++
++impl Item for PlanReviewView {
++    type Event = ();
++
++    fn tab_content_text(&self, _: usize, _: &App) -> SharedString {
++        self.title.clone()
++    }
++
++    fn tab_icon(&self, _: &Window, _: &App) -> Option<Icon> {
++        Some(Icon::new(IconName::ListTodo))
++    }
++
++    fn telemetry_event_text(&self) -> Option<&'static str> {
++        Some("Plan Review Opened")
++    }
++
++    fn buffer_kind(&self, cx: &App) -> workspace::item::ItemBufferKind {
++        self.source_editor.read(cx).buffer_kind(cx)
++    }
++
++    fn active_project_path(&self, cx: &App) -> Option<ProjectPath> {
++        self.source_editor.read(cx).active_project_path(cx)
++    }
++
++    fn is_dirty(&self, cx: &App) -> bool {
++        self.source_editor.read(cx).is_dirty(cx)
++    }
++
++    fn has_deleted_file(&self, cx: &App) -> bool {
++        self.source_editor.read(cx).has_deleted_file(cx)
++    }
++
++    fn has_conflict(&self, cx: &App) -> bool {
++        self.source_editor.read(cx).has_conflict(cx)
++    }
++
++    fn can_save(&self, cx: &App) -> bool {
++        self.source_editor.read(cx).can_save(cx)
++    }
++
++    fn save(
++        &mut self,
++        options: SaveOptions,
++        project: Entity<Project>,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> Task<Result<()>> {
++        self.source_editor.save(options, project, window, cx)
++    }
++
++    fn save_as(
++        &mut self,
++        project: Entity<Project>,
++        path: ProjectPath,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> Task<Result<()>> {
++        self.source_editor.save_as(project, path, window, cx)
++    }
++
++    fn reload(
++        &mut self,
++        project: Entity<Project>,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> Task<Result<()>> {
++        self.source_editor.reload(project, window, cx)
++    }
++
++    fn act_as_type<'a>(
++        &'a self,
++        type_id: TypeId,
++        self_handle: &'a Entity<Self>,
++        cx: &'a App,
++    ) -> Option<AnyEntity> {
++        if type_id == TypeId::of::<editor::Editor>() {
++            Some(self.source_editor.clone().into())
++        } else {
++            <Self as Item>::act_as_type(self, type_id, self_handle, cx)
++        }
++    }
++}
++
++impl SerializableItem for PlanReviewView {
++    fn serialized_item_kind() -> &'static str {
++        "PlanReviewView"
++    }
++
++    fn cleanup(
++        workspace_id: WorkspaceId,
++        alive_items: Vec<ItemId>,
++        _window: &mut Window,
++        cx: &mut App,
++    ) -> Task<Result<()>> {
++        let db = persistence::PlanReviewDb::global(cx);
++        delete_unloaded_items(alive_items, workspace_id, "plan_reviews", &db, cx)
++    }
++
++    fn deserialize(
++        project: Entity<Project>,
++        workspace: WeakEntity<Workspace>,
++        workspace_id: WorkspaceId,
++        item_id: ItemId,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Task<Result<Entity<Self>>> {
++        let db = persistence::PlanReviewDb::global(cx);
++        window.spawn(cx, async move |cx| {
++            let (session_id, abs_path, title, mode_value) = db
++                .get_review(item_id, workspace_id)?
++                .context("No plan review entry found")?;
++            let mode = PlanReviewMode::from_db(mode_value);
++            let (worktree, relative_path) = project
++                .update(cx, |project, cx| {
++                    project.find_or_create_worktree(abs_path.clone(), false, cx)
++                })
++                .await
++                .context("Path not found")?;
++            let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
++            let project_path = ProjectPath {
++                worktree_id,
++                path: relative_path,
++            };
++            let buffer = project
++                .update(cx, |project, cx| project.open_buffer(project_path, cx))
++                .await?;
++            let markdown = buffer.read_with(cx, |buffer, _| buffer.text());
++
++            cx.update(|window, cx| {
++                let language_registry = project.read(cx).languages().clone();
++                let editor =
++                    cx.new(|cx| editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx));
++                let markdown_view = MarkdownPreviewView::new(
++                    markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
++                    editor.clone(),
++                    workspace.clone(),
++                    language_registry,
++                    window,
++                    cx,
++                );
++                let key = PlanReviewKey::new(acp::SessionId::new(session_id), abs_path.clone());
++                let mut projection = project_plan(&markdown, None);
++                projection.availability = availability_for(&abs_path, true);
++                cx.new(|cx| {
++                    let mut view = PlanReviewView::new(
++                        key,
++                        title.into(),
++                        editor,
++                        markdown_view,
++                        projection,
++                        workspace,
++                        cx,
++                    );
++                    view.mode = mode;
++                    view
++                })
++            })
++        })
++    }
++
++    fn serialize(
++        &mut self,
++        workspace: &mut Workspace,
++        item_id: ItemId,
++        _closing: bool,
++        cx: &mut Context<Self>,
++    ) -> Option<Task<Result<()>>> {
++        let workspace_id = workspace.database_id()?;
++        let abs_path = self.key.plan_path.clone();
++        let session_id = self.key.session_id.0.to_string();
++        let title = self.title.to_string();
++        let mode = self.mode.to_db();
++        let db = persistence::PlanReviewDb::global(cx);
++        Some(cx.background_spawn(async move {
++            db.save_review(item_id, workspace_id, session_id, abs_path, title, mode)
++                .await
++        }))
++    }
++
++    fn should_serialize(&self, _: &Self::Event) -> bool {
++        true
++    }
++}
++
++mod persistence {
++    use std::path::PathBuf;
++
++    use db::{
++        query,
++        sqlez::{domain::Domain, thread_safe_connection::ThreadSafeConnection},
++        sqlez_macros::sql,
++    };
++    use workspace::{ItemId, WorkspaceDb, WorkspaceId};
++
++    pub struct PlanReviewDb(ThreadSafeConnection);
++
++    impl Domain for PlanReviewDb {
++        const NAME: &str = stringify!(PlanReviewDb);
++        const MIGRATIONS: &[&str] = &[sql!(
++            CREATE TABLE plan_reviews (
++                workspace_id INTEGER,
++                item_id INTEGER,
++                session_id TEXT NOT NULL,
++                abs_path BLOB NOT NULL,
++                title TEXT NOT NULL,
++                mode INTEGER NOT NULL DEFAULT 0,
++                PRIMARY KEY(workspace_id, item_id),
++                FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id)
++                    ON DELETE CASCADE
++            ) STRICT;
++        )];
++    }
++
++    db::static_connection!(PlanReviewDb, [WorkspaceDb]);
++
++    impl PlanReviewDb {
++        query! {
++            pub async fn save_review(
++                item_id: ItemId,
++                workspace_id: WorkspaceId,
++                session_id: String,
++                abs_path: PathBuf,
++                title: String,
++                mode: i64
++            ) -> Result<()> {
++                INSERT OR REPLACE INTO plan_reviews(
++                    item_id, workspace_id, session_id, abs_path, title, mode
++                )
++                VALUES (?, ?, ?, ?, ?, ?)
++            }
++        }
++
++        query! {
++            pub fn get_review(
++                item_id: ItemId,
++                workspace_id: WorkspaceId
++            ) -> Result<Option<(String, PathBuf, String, i64)>> {
++                SELECT session_id, abs_path, title, mode
++                FROM plan_reviews
++                WHERE item_id = ? AND workspace_id = ?
++            }
++        }
++    }
++}
++
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++
++    use agent_client_protocol::schema::v1 as acp;
++
++    use super::PlanReviewKey;
++
++    #[test]
++    fn same_session_and_lexical_path_share_identity() {
++        let first = PlanReviewKey::new(
++            acp::SessionId::new("session-a"),
++            PathBuf::from("/workspace/./plans/feature.plan.md"),
++        );
++        let second = PlanReviewKey::new(
++            acp::SessionId::new("session-a"),
++            PathBuf::from("/workspace/plans/feature.plan.md"),
++        );
++
++        assert_eq!(first, second);
++    }
++
++    #[test]
++    fn same_path_from_different_sessions_is_not_reused() {
++        let first = PlanReviewKey::new(
++            acp::SessionId::new("session-a"),
++            PathBuf::from("/workspace/plans/feature.plan.md"),
++        );
++        let second = PlanReviewKey::new(
++            acp::SessionId::new("session-b"),
++            PathBuf::from("/workspace/plans/feature.plan.md"),
++        );
++
++        assert_ne!(first, second);
++    }
++    #[test]
++    fn projection_falls_back_to_markdown_phases_without_live_plan() {
++        let projection = super::project_plan(
++            "## Approach\n### Phase 1 — Inspect\n### Phase 2 — Verify\n",
++            None,
++        );
++
++        assert_eq!(
++            projection.steps,
++            vec![
++                super::PlanReviewStep::pending("Inspect"),
++                super::PlanReviewStep::pending("Verify"),
++            ]
++        );
++    }
++
++    #[test]
++    fn projection_prefers_live_acp_statuses_when_available() {
++        let live_steps = vec![
++            ("Inspect".to_string(), acp::PlanEntryStatus::Completed),
++            ("Verify".to_string(), acp::PlanEntryStatus::InProgress),
++        ];
++        let projection = super::project_plan("## Approach\n- stale markdown\n", Some(&live_steps));
++
++        assert_eq!(
++            projection.steps,
++            vec![
++                super::PlanReviewStep::completed("Inspect"),
++                super::PlanReviewStep::in_progress("Verify"),
++            ]
++        );
++    }
++
++    #[test]
++    fn availability_reports_missing_file_before_session_state() {
++        assert_eq!(
++            super::availability_for(
++                std::path::Path::new("/definitely/missing/feature.plan.md"),
++                false,
++            ),
++            super::PlanReviewAvailability::MissingFile,
++        );
++    }
++
++    #[test]
++    fn availability_reports_unavailable_session_for_existing_file() {
++        let path = std::env::temp_dir().join(format!(
++            "katalyst-plan-review-{}.plan.md",
++            std::process::id()
++        ));
++        std::fs::write(&path, "# Plan\n").unwrap();
++
++        assert_eq!(
++            super::availability_for(&path, false),
++            super::PlanReviewAvailability::SessionUnavailable,
++        );
++
++        std::fs::remove_file(path).unwrap();
++    }
++    #[test]
++    fn rendered_mode_toggles_to_source_and_back() {
++        let mut mode = super::PlanReviewMode::Rendered;
++        mode.toggle();
++        assert_eq!(mode, super::PlanReviewMode::Source);
++        mode.toggle();
++        assert_eq!(mode, super::PlanReviewMode::Rendered);
++    }
++}
+diff --git a/crates/markdown_preview/src/markdown_preview_view.rs b/crates/markdown_preview/src/markdown_preview_view.rs
+index 1d482df3e4..051a241194 100644
+--- a/crates/markdown_preview/src/markdown_preview_view.rs
++++ b/crates/markdown_preview/src/markdown_preview_view.rs
+@@ -150,8 +150,8 @@ impl MarkdownPreviewView {
+                     .map(|editor| Self::is_plan_editor(&editor, cx))
+                     .unwrap_or(false);
+ 
+-                if (!MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
+-                    && !is_plan)
++                if is_plan
++                    || !MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
+                     || workspace.is_restoring()
+                 {
+                     return;
+diff --git a/crates/zed/src/zed/quick_action_bar.rs b/crates/zed/src/zed/quick_action_bar.rs
+index dcd15d8c1f..f75d0aae4d 100644
+--- a/crates/zed/src/zed/quick_action_bar.rs
++++ b/crates/zed/src/zed/quick_action_bar.rs
+@@ -1,4 +1,3 @@
+-mod plan_build;
+ mod preview;
+ mod repl_menu;
+ 
+@@ -88,16 +87,6 @@ impl QuickActionBar {
+             .and_then(|item| item.downcast::<Editor>())
+     }
+ 
+-    /// Returns an Editor even when the active item is a MarkdownPreviewView
+-    /// (which exposes its source editor via `act_as`). Used so plan_build
+-    /// and the toolbar location can work in preview mode.
+-    fn active_editor_or_preview(&self, cx: &App) -> Option<Entity<Editor>> {
+-        self.active_editor().or_else(|| {
+-            self.active_item
+-                .as_ref()
+-                .and_then(|item| item.act_as::<Editor>(cx))
+-        })
+-    }
+ 
+     fn apply_settings(&mut self, cx: &mut Context<Self>) {
+         let new_show = EditorSettings::get_global(cx).toolbar.quick_actions;
+@@ -109,37 +98,18 @@ impl QuickActionBar {
+         }
+     }
+ 
+-    fn get_toolbar_item_location(&self, cx: &App) -> ToolbarItemLocation {
+-        if self.show && (self.active_editor().is_some() || self.has_plan_preview(cx)) {
++    fn get_toolbar_item_location(&self, _cx: &App) -> ToolbarItemLocation {
++        if self.show && self.active_editor().is_some() {
+             ToolbarItemLocation::PrimaryRight
+         } else {
+             ToolbarItemLocation::Hidden
+         }
+     }
+ 
+-    fn has_plan_preview(&self, cx: &App) -> bool {
+-        self.active_editor_or_preview(cx)
+-            .and_then(|editor| {
+-                let editor = editor.read(cx);
+-                let file = editor.file_at(editor::MultiBufferOffset(0), cx)?;
+-                let path = file.as_local().map(|f| f.abs_path(cx))?;
+-                let name = path.file_name()?.to_string_lossy();
+-                Some(plan_build::is_plan_filename(&name))
+-            })
+-            .unwrap_or(false)
+-    }
+ }
+ 
+ impl Render for QuickActionBar {
+     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+-        // If we're in a plan preview (not a real Editor), render only the
+-        // Build Locally button — skip code actions, inlay hints, etc.
+-        if self.active_editor().is_none() && self.has_plan_preview(cx) {
+-            return h_flex()
+-                .id("quick action bar")
+-                .gap(DynamicSpacing::Base01.rems(cx))
+-                .children(self.render_plan_build_button(cx));
+-        }
+ 
+         let Some(editor) = self.active_editor() else {
+             return h_flex().id("empty quick action bar");
+@@ -741,7 +711,6 @@ impl Render for QuickActionBar {
+             .gap(DynamicSpacing::Base01.rems(cx))
+             .children(self.render_repl_menu(cx))
+             .children(self.render_preview_button(cx))
+-            .children(self.render_plan_build_button(cx))
+             .children(search_button)
+             .when(
+                 AgentSettings::get_global(cx).enabled(cx) && AgentSettings::get_global(cx).button,
+diff --git a/crates/zed/src/zed/quick_action_bar/plan_build.rs b/crates/zed/src/zed/quick_action_bar/plan_build.rs
+deleted file mode 100644
+index c7563fcee6..0000000000
+--- a/crates/zed/src/zed/quick_action_bar/plan_build.rs
++++ /dev/null
+@@ -1,190 +0,0 @@
+-use std::path::PathBuf;
+-
+-use agent_ui::AgentPanel;
+-use editor::{Editor, MultiBufferOffset};
+-use gpui::{Anchor, AnyElement, ClipboardItem, Entity, TaskExt as _};
+-use project::ProjectPath;
+-use ui::{ButtonSize, ContextMenu, LabelSize, PopoverMenu, Tooltip, prelude::*};
+-use workspace::Toast;
+-use workspace::notifications::NotificationId;
+-
+-use super::QuickActionBar;
+-
+-struct PlanBuildToast;
+-
+-impl QuickActionBar {
+-    pub fn render_plan_build_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+-        // Prefer source editor even when the active tab is MarkdownPreviewView.
+-        let editor = self.active_editor_or_preview(cx)?;
+-        let plan_path = plan_path_for_editor(&editor, cx)?;
+-
+-        let workspace_handle = self.workspace.clone();
+-
+-        // Model Selector Button (Cursor-like "[ Auto ˅ ]")
+-        let active_model_name = workspace_handle
+-            .upgrade()
+-            .and_then(|ws| ws.read(cx).panel::<AgentPanel>(cx))
+-            .and_then(|panel| panel.read(cx).active_model_name(cx));
+-        let model_label = active_model_name.unwrap_or_else(|| "Auto".into());
+-
+-        let model_button = {
+-            let workspace_handle = workspace_handle.clone();
+-            Button::new("plan-select-model", model_label)
+-                .label_size(LabelSize::Small)
+-                .size(ButtonSize::Compact)
+-                .style(ButtonStyle::Subtle)
+-                .end_icon(
+-                    Icon::new(IconName::ChevronDown)
+-                        .size(IconSize::XSmall)
+-                        .color(Color::Muted),
+-                )
+-                .tooltip(Tooltip::text("Select execution model in Agent Panel"))
+-                .on_click(move |_, window, cx| {
+-                    let Some(workspace) = workspace_handle.upgrade() else {
+-                        return;
+-                    };
+-                    workspace.update(cx, |workspace, cx| {
+-                        if let Some(panel) = workspace.focus_panel::<AgentPanel>(window, cx) {
+-                            panel.update(cx, |panel, cx| {
+-                                panel.toggle_model_selector(window, cx);
+-                            });
+-                        }
+-                    });
+-                })
+-        };
+-
+-        let build_plan_path = plan_path.clone();
+-        let build_workspace_handle = workspace_handle.clone();
+-        let build_button = Button::new("plan-build-locally", "Build Locally")
+-            .label_size(LabelSize::Small)
+-            .size(ButtonSize::Compact)
+-            .style(ButtonStyle::Subtle)
+-            .start_icon(
+-                Icon::new(IconName::PlayOutlined)
+-                    .size(IconSize::Small)
+-                    .color(Color::Accent),
+-            )
+-            .tooltip(Tooltip::text("Run /go on this plan in the Agent Panel"))
+-            .on_click(move |_, window, cx| {
+-                let Some(workspace) = build_workspace_handle.upgrade() else {
+-                    return;
+-                };
+-                let command = format!("/go {}", build_plan_path.display());
+-                workspace.update(cx, |workspace, cx| {
+-                    if let Some(panel) = workspace.focus_panel::<AgentPanel>(window, cx) {
+-                        let submitted = panel.update(cx, |panel, cx| {
+-                            panel.submit_slash_command(&command, window, cx)
+-                        });
+-                        if submitted {
+-                            workspace.show_toast(
+-                                Toast::new(
+-                                    NotificationId::unique::<PlanBuildToast>(),
+-                                    "Building plan via /go…",
+-                                )
+-                                .autohide(),
+-                                cx,
+-                            );
+-                            return;
+-                        }
+-                    }
+-
+-                    cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+-                    workspace.show_toast(
+-                        Toast::new(
+-                            NotificationId::unique::<PlanBuildToast>(),
+-                            "Open an OMP agent thread first — /go command copied to clipboard",
+-                        )
+-                        .autohide(),
+-                        cx,
+-                    );
+-                });
+-            });
+-
+-        let overflow_menu = {
+-            let plan_path = plan_path.clone();
+-            PopoverMenu::new("plan-more-actions")
+-                .anchor(Anchor::TopRight)
+-                .menu(move |window, cx| {
+-                    let plan_path = plan_path.clone();
+-                    let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+-                        let plan_path = plan_path.clone();
+-                        menu.entry("Copy as Markdown", None, {
+-                            let plan_path = plan_path.clone();
+-                            move |_window, cx| {
+-                                if let Ok(text) = std::fs::read_to_string(&plan_path) {
+-                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+-                                }
+-                            }
+-                        })
+-                        .entry("Copy Plan Path", None, {
+-                            let plan_path = plan_path.clone();
+-                            move |_window, cx| {
+-                                cx.write_to_clipboard(ClipboardItem::new_string(
+-                                    plan_path.display().to_string(),
+-                                ));
+-                            }
+-                        })
+-                    });
+-                    Some(menu)
+-                })
+-                .trigger_with_tooltip(
+-                    IconButton::new("plan-more-options", IconName::Ellipsis)
+-                        .icon_size(IconSize::Small)
+-                        .style(ButtonStyle::Subtle),
+-                    Tooltip::text("More Plan Actions"),
+-                )
+-        };
+-
+-        let close_button = IconButton::new("plan-close-preview", IconName::Close)
+-            .icon_size(IconSize::Small)
+-            .style(ButtonStyle::Subtle)
+-            .tooltip(Tooltip::text("Hide Plan Panel"))
+-            .on_click({
+-                let workspace_handle = workspace_handle.clone();
+-                move |_, window, cx| {
+-                    if let Some(workspace) = workspace_handle.upgrade() {
+-                        workspace.update(cx, |workspace, cx| {
+-                            let active_pane = workspace.active_pane().clone();
+-                            active_pane.update(cx, |pane, cx| {
+-                                pane.close_active_item(&Default::default(), window, cx)
+-                                    .detach_and_log_err(cx);
+-                            });
+-                        });
+-                    }
+-                }
+-            });
+-
+-        Some(
+-            h_flex()
+-                .gap(DynamicSpacing::Base01.rems(cx))
+-                .child(model_button)
+-                .child(build_button)
+-                .child(overflow_menu)
+-                .child(close_button)
+-                .into_any_element(),
+-        )
+-    }
+-}
+-
+-fn plan_path_for_editor(editor: &Entity<Editor>, cx: &App) -> Option<PathBuf> {
+-    let editor = editor.read(cx);
+-    let file = editor.file_at(MultiBufferOffset(0), cx)?;
+-    let project_path = ProjectPath::from_file(file.as_ref(), cx);
+-    let absolute_path = editor
+-        .project()
+-        .and_then(|project| project.read(cx).absolute_path(&project_path, cx))
+-        .or_else(|| file.as_local().map(|file| file.abs_path(cx)))?;
+-
+-    let name = absolute_path.file_name()?.to_string_lossy();
+-    if is_plan_filename(&name) {
+-        Some(absolute_path)
+-    } else {
+-        None
+-    }
+-}
+-
+-/// Katalyst convention is `*.plan.md`. OMP plan-mode local:// paths historically
+-/// mirrored as `*-plan.md`; accept both so the Build toolbar stays visible.
+-pub(crate) fn is_plan_filename(name: &str) -> bool {
+-    name.ends_with(".plan.md") || name.ends_with("-plan.md")
+-}
