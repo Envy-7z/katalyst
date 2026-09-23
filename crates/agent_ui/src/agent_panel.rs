@@ -1,7 +1,7 @@
 use std::{
     cell::Cell,
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{
         Arc,
@@ -4446,8 +4446,8 @@ impl AgentPanel {
         true
     }
 
-    /// Focuses the active thread composer, sets its text, and submits — used by
-    /// the plan-file "Build Locally" toolbar button to run `/go <plan>`.
+    /// Focuses the active thread composer, sets its text, and submits a
+    /// slash command.
     pub fn submit_slash_command(
         &mut self,
         text: &str,
@@ -4471,6 +4471,40 @@ impl AgentPanel {
         });
         true
     }
+    pub fn submit_plan_for_session(
+        &mut self,
+        session_id: &acp::SessionId,
+        plan_path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(thread_view) = self.active_thread_view(cx) else {
+            return false;
+        };
+        if thread_view.read(cx).session_id != *session_id {
+            return false;
+        }
+        thread_view.update(cx, |view, cx| {
+            view.submit_plan_from_review(plan_path, window, cx);
+        });
+        true
+    }
+    pub fn open_plan_source_session(
+        &mut self,
+        session_id: &acp::SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_thread(
+            session_id.clone(),
+            None,
+            Some("Plan Source".into()),
+            window,
+            cx,
+        );
+    }
+
+
     pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
         let thread_view = self.active_thread_view(cx)?;
         let thread = thread_view.read(cx);

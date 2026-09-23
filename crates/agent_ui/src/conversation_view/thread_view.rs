@@ -602,7 +602,7 @@ pub struct ThreadView {
     pub subagent_scroll_handles: RefCell<HashMap<acp::SessionId, ScrollHandle>>,
     pub edits_expanded: bool,
     pub plan_expanded: bool,
-    /// Plan path seeded from Build Locally / `/go` for checklist progress sync.
+    /// Plan path used for checklist progress sync after `/go`.
     pub execution_plan_path: Option<PathBuf>,
     pub queue_expanded: bool,
     pub editor_expanded: bool,
@@ -616,9 +616,8 @@ pub struct ThreadView {
     pub resumed_without_history: bool,
     pub(crate) permission_selections: HashMap<acp::ToolCallId, PermissionSelection>,
     elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
+    plan_review_paths: HashMap<ElicitationEntryId, PathBuf>,
     opened_plan_slugs: HashSet<String>,
-    plan_scan_task: Option<Task<()>>,
-    last_plan_scan: Option<std::time::Instant>,
     pub _cancel_task: Option<Task<()>>,
     _save_task: Option<Task<()>>,
     _draft_resolve_task: Option<Task<()>>,
@@ -1034,9 +1033,8 @@ impl ThreadView {
             new_server_version_available: None,
             permission_selections: HashMap::default(),
             elicitation_form_states: HashMap::default(),
+            plan_review_paths: HashMap::default(),
             opened_plan_slugs: HashSet::default(),
-            plan_scan_task: None,
-            last_plan_scan: None,
             _cancel_task: None,
             _save_task: None,
             _draft_resolve_task: None,
@@ -2592,17 +2590,16 @@ impl ThreadView {
     }
 
     fn has_pending_request_elicitation(&self, cx: &App) -> bool {
-        self.server_view
-            .read_with(cx, |server_view, cx| {
-                server_view
-                    .request_elicitation_store()
-                    .is_some_and(|store| {
-                        store.read(cx).elicitations().iter().any(|elicitation| {
-                            matches!(elicitation.status, ElicitationStatus::Pending { .. })
-                        })
-                    })
+        let thread = self.thread.read(cx);
+        thread.entries().iter().any(|entry| {
+            let AgentThreadEntry::Elicitation(id) = entry else {
+                return false;
+            };
+            thread.elicitation(id).is_some_and(|(_, elicitation)| {
+                matches!(elicitation.status, ElicitationStatus::Pending { .. })
+                    && !crate::plan_progress::is_plan_review_request(&elicitation.request.message)
             })
-            .unwrap_or(false)
+        })
     }
 
     pub fn sync_elicitation_state_for_entry(
@@ -2640,16 +2637,36 @@ impl ThreadView {
             return;
         };
 
-        if is_pending
-            && let Some(schema) = schema
-            && !self.elicitation_form_states.contains_key(&id)
-        {
-            self.elicitation_form_states
-                .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
-            self.maybe_auto_open_elicitation_plan(&message, window, cx);
-        } else if !is_pending {
+        if is_pending {
+            if crate::plan_progress::is_plan_review_request(&message)
+                && let Some(plan_path) =
+                    self.maybe_auto_open_elicitation_plan(&message, window, cx)
+            {
+                self.plan_review_paths.insert(id.clone(), plan_path);
+            }
+            if let Some(schema) = schema
+                && !self.elicitation_form_states.contains_key(&id)
+            {
+                self.elicitation_form_states
+                    .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
+            }
+        } else {
             self.elicitation_form_states.remove(&id);
+            self.plan_review_paths.remove(&id);
         }
+    }
+
+    fn pending_plan_elicitation_id(&self, cx: &Context<Self>) -> Option<ElicitationEntryId> {
+        let thread = self.thread.read(cx);
+        thread.entries().iter().rev().find_map(|entry| {
+            let AgentThreadEntry::Elicitation(id) = entry else {
+                return None;
+            };
+            let (_, elicitation) = thread.elicitation(id)?;
+            (matches!(elicitation.status, ElicitationStatus::Pending { .. })
+                && crate::plan_progress::is_plan_review_request(&elicitation.request.message))
+            .then(|| id.clone())
+        })
     }
 
     fn maybe_auto_open_elicitation_plan(
@@ -2657,7 +2674,7 @@ impl ThreadView {
         message: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<PathBuf> {
         let markdown_start = message
             .split_inclusive('\n')
             .scan(0usize, |offset, line| {
@@ -2736,11 +2753,11 @@ impl ThreadView {
             })
         });
         let Some(slug) = marker_slug.or(local_slug).or(markdown_slug) else {
-            return;
+            return None;
         };
 
         let Some(home) = std::env::var_os("HOME") else {
-            return;
+            return None;
         };
         let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
         let _ = std::fs::create_dir_all(&global_plans_dir);
@@ -2781,182 +2798,26 @@ impl ThreadView {
             .unwrap_or(global_plan_file);
 
         if !plan_file.is_file() {
-            return;
+            return None;
         }
 
-        let key = slug.clone();
-        if !self.opened_plan_slugs.insert(key) {
-            return;
-        }
-
-        if let Some(workspace) = self.workspace.upgrade() {
-            workspace.update(cx, |ws, cx| {
-                crate::open_plan_in_right_pane(ws, plan_file, window, cx);
-            });
-        }
-    }
-
-    fn check_and_auto_open_active_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.plan_scan_task.is_some()
-            || self.last_plan_scan.is_some_and(|last_scan| {
-                last_scan.elapsed() < std::time::Duration::from_millis(250)
-            })
-        {
-            return;
-        }
-        self.last_plan_scan = Some(std::time::Instant::now());
-
-        let session_id = self.session_id.to_string();
-        let workspace_roots = self
-            .workspace
-            .upgrade()
-            .map(|workspace| {
-                workspace
-                    .read(cx)
-                    .project()
-                    .read(cx)
-                    .visible_worktrees(cx)
-                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let scan_task =
-            cx.background_spawn(async move { Self::find_active_plan(session_id, workspace_roots) });
-        let weak_self = cx.weak_entity();
-        self.plan_scan_task = Some(window.spawn(cx, async move |cx| {
-            let plan_file = scan_task.await;
-            weak_self
-                .update_in(cx, |this, window, cx| {
-                    this.plan_scan_task = None;
-                    let Some(plan_file) = plan_file else {
-                        return;
-                    };
-                    let key = plan_file
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.strip_suffix(".plan").unwrap_or(s))
-                        .unwrap_or("plan")
-                        .to_string();
-                    if !this.opened_plan_slugs.insert(key) {
-                        return;
-                    }
-                    if let Some(workspace) = this.workspace.upgrade() {
-                        workspace.update(cx, |ws, cx| {
-                            crate::open_plan_in_right_pane(ws, plan_file, window, cx);
-                        });
-                    }
-                })
-                .ok();
-        }));
-    }
-
-    fn find_active_plan(
-        session_id_str: String,
-        workspace_roots: Vec<std::path::PathBuf>,
-    ) -> Option<std::path::PathBuf> {
-        let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-        let recent_cutoff =
-            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(15 * 60));
-        let add_plan_candidates =
-            |dir: &std::path::Path,
-             recent_only: Option<std::time::SystemTime>,
-             require_dot_plan_suffix: bool,
-             candidates: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>| {
-                let Ok(files) = std::fs::read_dir(dir) else {
-                    return false;
-                };
-                let mut added = false;
-                for file in files.flatten() {
-                    let path = file.path();
-                    let is_plan = path.file_name().is_some_and(|name| {
-                        let name = name.to_string_lossy();
-                        if require_dot_plan_suffix {
-                            name.ends_with(".plan.md")
-                        } else {
-                            name.ends_with("plan.md")
-                        }
-                    });
-                    if !is_plan {
-                        continue;
-                    }
-                    let Ok(modified) =
-                        std::fs::metadata(&path).and_then(|metadata| metadata.modified())
-                    else {
-                        continue;
-                    };
-                    if recent_only.is_some_and(|cutoff| modified < cutoff) {
-                        continue;
-                    }
-                    candidates.push((modified, path));
-                    added = true;
-                }
-                added
-            };
-
-        if let Some(home) = std::env::var_os("HOME") {
-            let base = std::path::PathBuf::from(home);
-            let session_dir = base.join(".omp/agent/sessions");
-            let mut found_exact_session_plan = false;
-            if let Ok(buckets) = std::fs::read_dir(&session_dir) {
-                for bucket in buckets.flatten() {
-                    let bucket_path = bucket.path();
-                    if !bucket_path.is_dir() {
-                        continue;
-                    }
-                    if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
-                        for session in subdirs.flatten() {
-                            let session_path = session.path();
-                            if session_path.file_name().is_some_and(|name| {
-                                name.to_string_lossy().contains(&session_id_str)
-                            }) {
-                                found_exact_session_plan |= add_plan_candidates(
-                                    &session_path.join("local"),
-                                    None,
-                                    false,
-                                    &mut candidates,
-                                );
-                            }
-                        }
-                    }
-                }
+        if self.opened_plan_slugs.insert(slug) {
+            if let Some(workspace) = self.workspace.upgrade() {
+                workspace.update(cx, |ws, cx| {
+                    crate::open_plan_review(
+                        ws,
+                        self.session_id.clone(),
+                        plan_file.clone(),
+                        "Implementation Plan".into(),
+                        window,
+                        cx,
+                    );
+                });
             }
-
-            if !found_exact_session_plan {
-                if let Ok(buckets) = std::fs::read_dir(&session_dir) {
-                    for bucket in buckets.flatten() {
-                        let bucket_path = bucket.path();
-                        if !bucket_path.is_dir() {
-                            continue;
-                        }
-                        if let Ok(subdirs) = std::fs::read_dir(&bucket_path) {
-                            for session in subdirs.flatten() {
-                                add_plan_candidates(
-                                    &session.path().join("local"),
-                                    recent_cutoff,
-                                    false,
-                                    &mut candidates,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            add_plan_candidates(
-                &base.join(".katalyst/plans"),
-                recent_cutoff,
-                false,
-                &mut candidates,
-            );
         }
-
-        for root in workspace_roots {
-            add_plan_candidates(&root, recent_cutoff, true, &mut candidates);
-        }
-
-        candidates.sort_by(|a, b| b.0.cmp(&a.0));
-        candidates.into_iter().next().map(|(_, path)| path)
+        Some(plan_file)
     }
+
 
     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry_count = self.thread.read(cx).entries().len();
@@ -4059,6 +3920,28 @@ impl ThreadView {
         self.send(window, cx);
     }
 
+    fn accept_pending_plan_or_build(
+        &mut self,
+        plan_path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(elicitation_id) = self.pending_plan_elicitation_id(cx) {
+            self.submit_elicitation(elicitation_id, window, cx);
+        } else {
+            let cmd = format!("/go {}", plan_path.display());
+            self.submit_slash_command(&cmd, window, cx);
+        }
+    }
+    pub(crate) fn submit_plan_from_review(
+        &mut self,
+        plan_path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_pending_plan_or_build(plan_path, window, cx);
+    }
+
     fn render_inline_plan_card(
         &self,
         entry_ix: usize,
@@ -4068,6 +3951,7 @@ impl ThreadView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let plan_path = info.plan_path.clone();
+        let session_id = self.session_id.clone();
         let title = info.title;
         let summary = info.summary;
 
@@ -4103,7 +3987,7 @@ impl ThreadView {
             .child(
                 v_flex()
                     .gap_0p5()
-                    .child(Label::new(title).size(LabelSize::Default))
+                    .child(Label::new(title.clone()).size(LabelSize::Default))
                     .child(
                         Label::new(summary)
                             .size(LabelSize::Small)
@@ -4129,9 +4013,11 @@ impl ThreadView {
                             move |_event, window, cx| {
                                 if let Some(workspace) = workspace.upgrade() {
                                     workspace.update(cx, |ws, cx| {
-                                        crate::open_plan_in_right_pane(
+                                        crate::open_plan_review(
                                             ws,
+                                            session_id.clone(),
                                             plan_path.clone(),
+                                            title.clone().into(),
                                             window,
                                             cx,
                                         );
@@ -4155,8 +4041,7 @@ impl ThreadView {
                         )
                         .on_click(cx.listener(
                             move |this, _event, window, cx| {
-                                let cmd = format!("/go {}", plan_path.display());
-                                this.submit_slash_command(&cmd, window, cx);
+                                this.accept_pending_plan_or_build(&plan_path, window, cx);
                             },
                         )),
                     ),
@@ -7248,12 +7133,45 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
+        let pending_plan = {
+            let thread = self.thread.read(cx);
+            thread.entries().iter().enumerate().find_map(|(ix, entry)| {
+                let AgentThreadEntry::Elicitation(id) = entry else {
+                    return None;
+                };
+                let (_, elicitation) = thread.elicitation(id)?;
+                (matches!(elicitation.status, ElicitationStatus::Pending { .. })
+                    && crate::plan_progress::is_plan_review_request(&elicitation.request.message))
+                .then(|| (ix, id.clone()))
+            })
+        };
+
+        if let Some((entry_ix, elicitation_id)) = pending_plan
+            && let Some(plan_path) = self.plan_review_paths.get(&elicitation_id)
+            && let Some(info) =
+                crate::plan_progress::extract_plan_proposal_info(&plan_path.to_string_lossy())
+        {
+            return Some(
+                v_flex()
+                    .w_full()
+                    .px_4()
+                    .py_2()
+                    .bg(cx.theme().colors().elevated_surface_background)
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .shadow_md()
+                    .child(self.render_inline_plan_card(entry_ix, 0, info, window, cx))
+                    .into_any_element(),
+            );
+        }
+
         let thread = self.thread.read(cx);
         let entries = thread.entries();
         let (entry_ix, elicitation) = entries.iter().enumerate().find_map(|(ix, entry)| {
             if let AgentThreadEntry::Elicitation(elicitation_id) = entry {
                 let (_, elicitation) = thread.elicitation(elicitation_id)?;
                 if matches!(elicitation.status, ElicitationStatus::Pending { .. })
+                    && !crate::plan_progress::is_plan_review_request(&elicitation.request.message)
                     && should_render_elicitation(elicitation)
                 {
                     return Some((ix, elicitation));

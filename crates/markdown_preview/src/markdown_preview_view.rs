@@ -150,8 +150,8 @@ impl MarkdownPreviewView {
                     .map(|editor| Self::is_plan_editor(&editor, cx))
                     .unwrap_or(false);
 
-                if (!MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
-                    && !is_plan)
+                if is_plan
+                    || !MarkdownPreviewSettings::get_global(cx).open_markdown_files_in_preview
                     || workspace.is_restoring()
                 {
                     return;

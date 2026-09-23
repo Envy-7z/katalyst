@@ -24,6 +24,7 @@ mod mode_selector;
 mod model_selector;
 mod model_selector_popover;
 pub mod plan_progress;
+mod plan_review;
 mod profile_selector;
 mod terminal_codegen;
 mod terminal_inline_assistant;
@@ -50,8 +51,8 @@ use editor::{Editor, SelectionEffects, scroll::Autoscroll};
 use feature_flags::FeatureFlagAppExt as _;
 use fs::Fs;
 use gpui::{
-    Action, App, Context, Entity, ImageSource, ReadGlobal as _, Resource, SharedString, SharedUri,
-    TaskExt, Window, actions,
+    Action, App, AppContext as _, Context, Entity, ImageSource, ReadGlobal as _, Resource,
+    SharedString, SharedUri, TaskExt, Window, actions,
 };
 use language::{
     LanguageRegistry,
@@ -68,7 +69,7 @@ use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore, SidebarSide};
 use std::any::TypeId;
 use std::path::{Path, PathBuf};
-use workspace::{OpenOptions, Workspace};
+use workspace::{OpenOptions, SplitDirection, Workspace};
 
 use crate::agent_configuration::ManageProfilesModal;
 pub use crate::agent_connection_store::{ActiveAcpConnection, AgentConnectionStore};
@@ -186,61 +187,85 @@ pub(crate) fn open_abs_path_at_point(
         .detach_and_log_err(cx);
 }
 
-pub(crate) fn open_plan_in_right_pane(
+pub(crate) fn open_plan_review(
     workspace: &mut Workspace,
+    session_id: acp::SessionId,
     abs_path: PathBuf,
+    title: SharedString,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
     if !std::fs::metadata(&abs_path).is_ok_and(|metadata| metadata.is_file()) {
-        log::error!("Cannot auto-open missing plan file: {abs_path:?}");
+        log::error!("Cannot open missing plan file: {abs_path:?}");
         return;
     }
-    // 1. If any pane in the workspace is empty (items_len == 0), reuse it!
-    // This fills the initial center pane directly adjacent to the Agent dock,
-    // eliminating any blank gap between the Agent panel and the editor!
-    let target_pane = if let Some(empty_pane) = workspace
+
+    let key = crate::plan_review::PlanReviewKey::new(session_id, abs_path.clone());
+    let existing = {
+        workspace
+            .items_of_type::<crate::plan_review::PlanReviewView>(cx)
+            .find(|view| view.read(cx).key() == &key)
+    };
+    if let Some(existing) = existing {
+        workspace.activate_item(&existing, true, true, window, cx);
+        return;
+    }
+
+    let target_pane = workspace
         .panes()
         .iter()
-        .find(|pane| pane.read(cx).items_len() == 0)
-    {
-        empty_pane.clone()
-    } else if let Some(last_pane) = workspace.panes().last() {
-        // If a center pane already exists, reuse it as a tab!
-        // Because the chat is docked on the left, the center pane is already on the right.
-        // This prevents creating duplicate split columns.
-        last_pane.clone()
-    } else {
-        let active_pane = workspace.active_pane().clone();
-        workspace.adjacent_pane_of(&active_pane, window, cx)
-    };
+        .find(|pane| pane.read(cx).items_of_type::<crate::plan_review::PlanReviewView>().next().is_some())
+        .cloned()
+        .unwrap_or_else(|| {
+            workspace.split_pane(workspace.active_pane().clone(), SplitDirection::Right, window, cx)
+        });
+    let target_pane = target_pane.downgrade();
+    let project = workspace.project().clone();
+    let language_registry = project.read(cx).languages().clone();
+    let workspace_handle = workspace.weak_handle();
+    let project_path_task =
+        Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
     let path_for_log = abs_path.clone();
-    let open_task = workspace.open_paths(
-        vec![abs_path],
-        workspace::OpenOptions {
-            focus: Some(false),
-            visible: Some(workspace::OpenVisible::None),
-            ..Default::default()
-        },
-        Some(target_pane.downgrade()),
-        window,
-        cx,
-    );
+
     window
-        .spawn(cx, async move |_cx| {
-            for result in open_task.await {
-                match result {
-                    Some(Ok(_)) => {}
-                    Some(Err(error)) => {
-                        log::error!("Cannot auto-open plan file {path_for_log:?}: {error:#}");
-                    }
-                    None => {
-                        log::error!(
-                            "Cannot auto-open plan file {path_for_log:?}: workspace returned no item"
-                        );
-                    }
-                }
-            }
+        .spawn(cx, async move |cx| {
+            let (_, project_path) = project_path_task.await?;
+            let buffer = project
+                .update(cx, |project, cx| project.open_buffer(project_path, cx))
+                .await?;
+            let markdown = std::fs::read_to_string(&path_for_log).unwrap_or_default();
+            let mut projection = crate::plan_review::project_plan(&markdown, None);
+            projection.availability =
+                crate::plan_review::availability_for(&path_for_log, true);
+            let view = cx.update(|window, cx| {
+                let editor = cx.new(|cx| {
+                    editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
+                });
+                let markdown_view = markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
+                    markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
+                    editor.clone(),
+                    workspace_handle.clone(),
+                    language_registry,
+                    window,
+                    cx,
+                );
+                cx.new(|cx| {
+                    crate::plan_review::PlanReviewView::new(
+                        key,
+                        title,
+                        editor,
+                        markdown_view,
+                        projection,
+                        workspace_handle,
+                        cx,
+                    )
+                })
+            })?;
+            target_pane
+                .update_in(cx, |pane, window, cx| {
+                    pane.add_item(Box::new(view), true, true, None, window, cx);
+                })
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
@@ -686,6 +711,7 @@ pub fn init(
         init_language_model_settings(cx);
     }
     agent_panel::init(cx);
+    workspace::register_serializable_item::<crate::plan_review::PlanReviewView>(cx);
     context_server_configuration::init(language_registry, fs.clone(), cx);
     thread_metadata_store::init(cx);
     terminal_thread_metadata_store::init(cx);

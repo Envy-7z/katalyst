@@ -504,6 +504,7 @@ dependencies = [
  "lru",
  "lsp",
  "markdown",
+ "markdown_preview",
  "menu",
  "multi_buffer",
  "notifications",

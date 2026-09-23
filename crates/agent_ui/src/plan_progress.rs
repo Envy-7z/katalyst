@@ -278,6 +278,13 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
     })
 }
 
+/// Returns whether an elicitation is the plan-review gate.
+pub fn is_plan_review_request(text: &str) -> bool {
+    text.contains("Approve plan \"")
+        || (text.to_ascii_lowercase().contains("approve plan")
+            && (text.contains(".plan.md") || text.contains("-plan.md")))
+}
+
 /// Detect whether text contains a proposal/mention of a plan file, and extract title/summary.
 pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
     let Some(home) = std::env::var_os("HOME") else {
@@ -350,6 +357,7 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
         plan_path,
     })
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -428,6 +436,16 @@ mod tests {
         let (skills, body) = extract_active_skills(text).expect("should extract skills");
         assert_eq!(skills, "token-saving, caveman-lite");
         assert_eq!(body, "Here is the plan.");
+    }
+
+    #[test]
+    fn detects_plan_review_requests_only() {
+        assert!(is_plan_review_request(
+            "Approve plan \"sdk36-fix\" in ~/.katalyst/plans/sdk36-fix.plan.md"
+        ));
+        assert!(!is_plan_review_request(
+            "Plan saved to ~/.katalyst/plans/sdk36-fix.plan.md"
+        ));
     }
 
 }
