@@ -11,6 +11,7 @@ mod context;
 mod context_server_configuration;
 pub(crate) mod conversation_view;
 mod diagnostics;
+mod discord_modal;
 pub mod draft_prompt_store;
 mod entry_view_state;
 mod external_source_prompt;
@@ -32,7 +33,6 @@ pub mod terminal_thread_metadata_store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod thread_import;
-mod discord_modal;
 pub mod thread_metadata_store;
 pub mod thread_worktree_archive;
 
@@ -84,6 +84,7 @@ pub use crate::thread_metadata_store::ThreadId;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
 pub use conversation_view::open_markdown_in_workspace;
 pub use conversation_view::{ConversationView, StateChange};
+pub use discord_modal::DiscordRemoteModal;
 pub use external_source_prompt::ExternalSourcePrompt;
 pub(crate) use mode_selector::ModeSelector;
 pub(crate) use model_selector::ModelSelector;
@@ -92,7 +93,6 @@ pub use thread_import::{
     AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
     channels_with_threads, import_threads_from_other_channels,
 };
-pub use discord_modal::DiscordRemoteModal;
 use zed_actions;
 pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
 
@@ -214,17 +214,26 @@ pub(crate) fn open_plan_review(
     let target_pane = workspace
         .panes()
         .iter()
-        .find(|pane| pane.read(cx).items_of_type::<crate::plan_review::PlanReviewView>().next().is_some())
+        .find(|pane| {
+            pane.read(cx)
+                .items_of_type::<crate::plan_review::PlanReviewView>()
+                .next()
+                .is_some()
+        })
         .cloned()
         .unwrap_or_else(|| {
-            workspace.split_pane(workspace.active_pane().clone(), SplitDirection::Right, window, cx)
+            workspace.split_pane(
+                workspace.active_pane().clone(),
+                SplitDirection::Right,
+                window,
+                cx,
+            )
         });
     let target_pane = target_pane.downgrade();
     let project = workspace.project().clone();
     let language_registry = project.read(cx).languages().clone();
     let workspace_handle = workspace.weak_handle();
-    let project_path_task =
-        Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
+    let project_path_task = Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
     let path_for_log = abs_path.clone();
 
     window
@@ -235,20 +244,20 @@ pub(crate) fn open_plan_review(
                 .await?;
             let markdown = std::fs::read_to_string(&path_for_log).unwrap_or_default();
             let mut projection = crate::plan_review::project_plan(&markdown, None);
-            projection.availability =
-                crate::plan_review::availability_for(&path_for_log, true);
+            projection.availability = crate::plan_review::availability_for(&path_for_log, true);
             let view = cx.update(|window, cx| {
                 let editor = cx.new(|cx| {
                     editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
                 });
-                let markdown_view = markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
-                    markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
-                    editor.clone(),
-                    workspace_handle.clone(),
-                    language_registry,
-                    window,
-                    cx,
-                );
+                let markdown_view =
+                    markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
+                        markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
+                        editor.clone(),
+                        workspace_handle.clone(),
+                        language_registry,
+                        window,
+                        cx,
+                    );
                 cx.new(|cx| {
                     crate::plan_review::PlanReviewView::new(
                         key,

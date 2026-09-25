@@ -1454,7 +1454,10 @@ impl MessageEditor {
             let mut images = Vec::new();
             for path in paths.iter() {
                 if supports_images && crate::mention_set::is_raster_image_path(path.as_path()) {
-                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(path.as_path(), &default_image_name) {
+                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(
+                        path.as_path(),
+                        &default_image_name,
+                    ) {
                         images.push((image, name));
                     }
                 }
@@ -1473,7 +1476,6 @@ impl MessageEditor {
         })
         .detach_and_log_err(cx);
     }
-
 
     pub fn insert_branch_diff_crease(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.workspace.upgrade() else {

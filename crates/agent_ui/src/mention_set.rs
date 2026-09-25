@@ -263,7 +263,8 @@ impl MentionSet {
                 .read(cx)
                 .project_path_for_absolute_path(&abs_path, cx)
             {
-                let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
+                let image_task =
+                    project.update(cx, |project, cx| project.open_image(project_path, cx));
                 cx.spawn(async move |_, cx| {
                     let image = image_task.await.map_err(|e| e.to_string())?;
                     let image = image.update(cx, |image, _| image.image.clone());

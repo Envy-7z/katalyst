@@ -2638,17 +2638,28 @@ impl ThreadView {
         };
 
         if is_pending {
-            if crate::plan_progress::is_plan_review_request(&message)
-                && let Some(plan_path) =
-                    self.maybe_auto_open_elicitation_plan(&message, window, cx)
-            {
-                self.plan_review_paths.insert(id.clone(), plan_path);
-            }
+            let is_plan_review = crate::plan_progress::is_plan_review_request(&message);
+            let plan_ready = is_plan_review
+                && self
+                    .maybe_auto_open_elicitation_plan(&message, window, cx)
+                    .is_some_and(|plan_path| {
+                        self.plan_review_paths.insert(id.clone(), plan_path);
+                        true
+                    });
             if let Some(schema) = schema
                 && !self.elicitation_form_states.contains_key(&id)
             {
                 self.elicitation_form_states
                     .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
+            }
+            let auto_approve = plan_ready
+                && std::env::var_os("HOME").is_some_and(|home| {
+                    Self::omp_plan_auto_approval_enabled(
+                        &PathBuf::from(home).join(".omp/agent/config.yml"),
+                    )
+                });
+            if auto_approve {
+                self.submit_elicitation(id, window, cx);
             }
         } else {
             self.elicitation_form_states.remove(&id);
@@ -2667,6 +2678,91 @@ impl ThreadView {
                 && crate::plan_progress::is_plan_review_request(&elicitation.request.message))
             .then(|| id.clone())
         })
+    }
+    fn write_plan_if_missing(path: &std::path::Path, markdown: Option<&str>) {
+        if path.is_file() {
+            return;
+        }
+        if let Some(markdown) = markdown {
+            let _ = std::fs::write(path, markdown);
+        }
+    }
+    fn canonical_session_plan(
+        omp_root: &std::path::Path,
+        home: &std::path::Path,
+        work_dir: &std::path::Path,
+        session_id: &str,
+        slug: &str,
+    ) -> Option<PathBuf> {
+        let session_suffix = format!("_{session_id}");
+        let find_under = |parent: &std::path::Path| {
+            std::fs::read_dir(parent)
+                .ok()?
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .find_map(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if !name.ends_with(&session_suffix) {
+                        return None;
+                    }
+
+                    let local_dir = entry.path().join("local");
+                    [
+                        local_dir.join(format!("{slug}-plan.md")),
+                        local_dir.join(format!("{slug}.plan.md")),
+                    ]
+                    .into_iter()
+                    .find(|path| path.is_file())
+                })
+        };
+
+        let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+        let work_dir = std::fs::canonicalize(work_dir).unwrap_or_else(|_| work_dir.to_path_buf());
+        let default_plan = work_dir.strip_prefix(home).ok().and_then(|relative| {
+            let encoded = relative.to_string_lossy().replace(['/', '\\', ':'], "-");
+            let project_dir = if encoded.is_empty() {
+                "-".to_string()
+            } else {
+                format!("-{encoded}")
+            };
+            find_under(&omp_root.join("agent/sessions").join(project_dir))
+        });
+        if default_plan.is_some() {
+            return default_plan;
+        }
+
+        std::fs::read_dir(omp_root)
+            .ok()?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .find_map(|entry| find_under(&entry.path()))
+    }
+
+    fn materialize_plan(
+        target: &std::path::Path,
+        canonical: Option<&std::path::Path>,
+        markdown: Option<&str>,
+    ) {
+        if let Some(canonical) = canonical {
+            let _ = std::fs::copy(canonical, target);
+        } else {
+            Self::write_plan_if_missing(target, markdown);
+        }
+    }
+
+    fn omp_plan_auto_approval_enabled(config_path: &std::path::Path) -> bool {
+        let Ok(config) = std::fs::read_to_string(config_path) else {
+            return false;
+        };
+        let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&config) else {
+            return false;
+        };
+        config
+            .get("tools")
+            .and_then(|tools| tools.get("approvalMode"))
+            .and_then(serde_yaml::Value::as_str)
+            == Some("yolo")
     }
 
     fn maybe_auto_open_elicitation_plan(
@@ -2756,15 +2852,27 @@ impl ThreadView {
             return None;
         };
 
-        let Some(home) = std::env::var_os("HOME") else {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
             return None;
         };
-        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
+        let work_dir = self
+            .thread
+            .read(cx)
+            .work_dirs()
+            .and_then(|dirs| dirs.ordered_paths().next().map(|path| path.to_path_buf()));
+        let canonical_plan = work_dir.as_deref().and_then(|work_dir| {
+            Self::canonical_session_plan(
+                &home.join(".omp"),
+                &home,
+                work_dir,
+                self.session_id.0.as_ref(),
+                &slug,
+            )
+        });
+        let global_plans_dir = home.join(".katalyst/plans");
         let _ = std::fs::create_dir_all(&global_plans_dir);
         let global_plan_file = global_plans_dir.join(format!("{slug}.plan.md"));
-        if let Some(md_content) = markdown {
-            let _ = std::fs::write(&global_plan_file, md_content);
-        }
+        Self::materialize_plan(&global_plan_file, canonical_plan.as_deref(), markdown);
 
         let plan_file = self
             .workspace
@@ -2781,10 +2889,16 @@ impl ThreadView {
                     let ws_plans_dir = root.join(".katalyst/plans");
                     let _ = std::fs::create_dir_all(&ws_plans_dir);
                     let ws_plan_file = ws_plans_dir.join(format!("{slug}.plan.md"));
-                    if let Some(md_content) = markdown {
-                        let _ = std::fs::write(&ws_plan_file, md_content);
-                    } else if global_plan_file.is_file() && !ws_plan_file.is_file() {
-                        let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
+                    if canonical_plan.is_some() || !ws_plan_file.is_file() {
+                        if global_plan_file.is_file() {
+                            let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
+                        } else {
+                            Self::materialize_plan(
+                                &ws_plan_file,
+                                canonical_plan.as_deref(),
+                                markdown,
+                            );
+                        }
                     }
                     if ws_plan_file.is_file() {
                         Some(ws_plan_file)
@@ -2803,21 +2917,25 @@ impl ThreadView {
 
         if self.opened_plan_slugs.insert(slug) {
             if let Some(workspace) = self.workspace.upgrade() {
-                workspace.update(cx, |ws, cx| {
-                    crate::open_plan_review(
-                        ws,
-                        self.session_id.clone(),
-                        plan_file.clone(),
-                        "Implementation Plan".into(),
-                        window,
-                        cx,
-                    );
+                let session_id = self.session_id.clone();
+                let plan_file_for_open = plan_file.clone();
+                let title: SharedString = "Implementation Plan".into();
+                window.defer(cx, move |window, cx| {
+                    workspace.update(cx, |ws, cx| {
+                        crate::open_plan_review(
+                            ws,
+                            session_id,
+                            plan_file_for_open,
+                            title,
+                            window,
+                            cx,
+                        );
+                    });
                 });
             }
         }
         Some(plan_file)
     }
-
 
     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry_count = self.thread.read(cx).entries().len();
@@ -13483,6 +13601,110 @@ mod tests {
         acp::AvailableCommand::new(name, "").meta(acp_thread::meta_with_command_category(
             acp_thread::CommandCategory::Mcp,
         ))
+    }
+
+    #[test]
+    fn canonical_session_plan_replaces_elicitation_excerpt() {
+        let root = std::env::temp_dir().join(format!(
+            "katalyst-canonical-plan-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let home = root.join("home");
+        let work_dir = home.join("Documents/Projects");
+        let omp_root = root.join(".omp");
+        let local_dir = omp_root
+            .join("agent/sessions")
+            .join("-Documents-Projects")
+            .join("2026-09-24T16-00-00_session-id")
+            .join("local");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        std::fs::create_dir_all(&local_dir).unwrap();
+
+        let source = local_dir.join("promo-code-system-plan.md");
+        let complete = "# Plan\n\n## Phase 1\nFull canonical content\n";
+        std::fs::write(&source, complete).unwrap();
+
+        let resolved = ThreadView::canonical_session_plan(
+            &omp_root,
+            &home,
+            &work_dir,
+            "session-id",
+            "promo-code-system",
+        );
+        assert_eq!(resolved.as_deref(), Some(source.as_path()));
+
+        let target = root.join("promo-code-system.plan.md");
+        std::fs::write(&target, "# Plan\n\n…").unwrap();
+        ThreadView::materialize_plan(&target, resolved.as_deref(), Some("# Plan\n\n…"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), complete);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_session_plan_supports_custom_session_root() {
+        let root = std::env::temp_dir().join(format!(
+            "katalyst-custom-session-plan-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let home = root.join("home");
+        let work_dir = home.join("Documents/Projects");
+        let omp_root = root.join(".omp");
+        let local_dir = omp_root
+            .join("custom-session-dir")
+            .join("2026-09-24T16-00-00_custom-session-id")
+            .join("local");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        std::fs::create_dir_all(&local_dir).unwrap();
+
+        let source = local_dir.join("custom-plan.md");
+        std::fs::write(&source, "# Custom plan\n").unwrap();
+
+        let resolved = ThreadView::canonical_session_plan(
+            &omp_root,
+            &home,
+            &work_dir,
+            "custom-session-id",
+            "custom",
+        );
+        assert_eq!(resolved.as_deref(), Some(source.as_path()));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plan_auto_approval_requires_explicit_yolo_config() {
+        let path = std::env::temp_dir().join(format!(
+            "katalyst-plan-approval-{}-{}.yml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+
+        std::fs::write(&path, "tools:\n  approvalMode: yolo\n").unwrap();
+        assert!(ThreadView::omp_plan_auto_approval_enabled(&path));
+
+        std::fs::write(&path, "tools:\n  approvalMode: write\n").unwrap();
+        assert!(!ThreadView::omp_plan_auto_approval_enabled(&path));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn plan_excerpt_does_not_overwrite_existing_plan() {
+        let path = std::env::temp_dir().join(format!(
+            "katalyst-plan-preserve-{}-{}.plan.md",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let complete = "# Plan\n\n## Phase 1\nFull content\n";
+        std::fs::write(&path, complete).unwrap();
+
+        ThreadView::write_plan_if_missing(&path, Some("# Plan\n\n…"));
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), complete);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

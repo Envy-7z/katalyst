@@ -1044,6 +1044,10 @@ impl ConversationView {
         cx.notify();
     }
 
+    fn should_start_fresh_session_after_restore_error(error: &anyhow::Error) -> bool {
+        error.to_string().contains("ACP session not found")
+    }
+
     fn initial_state(
         agent: Rc<dyn AgentServer>,
         connection_store: Entity<AgentConnectionStore>,
@@ -1203,8 +1207,8 @@ impl ConversationView {
                                     connection.clone().resume_session(
                                         session_id,
                                         project.clone(),
-                                        session_work_dirs,
-                                        title,
+                                        session_work_dirs.clone(),
+                                        title.clone(),
                                         cx,
                                     )
                                 })
@@ -1233,8 +1237,8 @@ impl ConversationView {
                                 connection.clone().resume_session(
                                     session_id,
                                     project.clone(),
-                                    session_work_dirs,
-                                    title,
+                                    session_work_dirs.clone(),
+                                    title.clone(),
                                     cx,
                                 )
                             })
@@ -1253,6 +1257,33 @@ impl ConversationView {
                         )))
                     }
                 }
+            };
+
+            let result = match result {
+                Err(error)
+                    if resume_session_id.is_some()
+                        && Self::should_start_fresh_session_after_restore_error(&error) =>
+                {
+                    log::warn!(
+                        "restored ACP session is unavailable; starting a fresh session: {error:#}"
+                    );
+                    let fresh_session = cx
+                        .update(|_, cx| {
+                            connection.clone().new_session(
+                                project.clone(),
+                                session_work_dirs,
+                                cx,
+                            )
+                        })
+                        .log_err();
+                    if let Some(fresh_session) = fresh_session {
+                        resumed_without_history = false;
+                        fresh_session.await.map_err(|error| anyhow!(error))
+                    } else {
+                        Err(error)
+                    }
+                }
+                result => result,
             };
 
             this.update_in(cx, |this, window, cx| {
@@ -3368,7 +3399,6 @@ impl ConversationView {
         }
     }
 
-
     /// Inserts the selected text into the message editor or the message being
     /// edited, if any.
     pub(crate) fn insert_selection(
@@ -4664,6 +4694,20 @@ pub(crate) mod tests {
         }
 
         fn cancel(&self, _session_id: &acp::SessionId, _cx: &mut App) {}
+    }
+
+    #[test]
+    fn missing_acp_session_errors_start_a_fresh_session() {
+        assert!(
+            ConversationView::should_start_fresh_session_after_restore_error(&anyhow!(
+                r#"Internal error: {{ "details": "ACP session not found: expired-session" }}"#
+            ),)
+        );
+        assert!(
+            !ConversationView::should_start_fresh_session_after_restore_error(&anyhow!(
+                "transport disconnected"
+            ),)
+        );
     }
 
     #[gpui::test]

@@ -55,11 +55,7 @@ pub fn parse_plan_phases(markdown: &str) -> Vec<String> {
             .or_else(|| trimmed.strip_prefix("- [X] "))
             .or_else(|| trimmed.strip_prefix("- "))
             .or_else(|| {
-                if trimmed
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_digit())
-                {
+                if trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                     trimmed
                         .trim_start_matches(|c: char| c.is_ascii_digit())
                         .strip_prefix(". ")
@@ -225,7 +221,6 @@ pub fn completed_count_from_disk(path: &Path, phases: &[String]) -> usize {
     completed
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanProposalInfo {
     pub title: String,
@@ -274,7 +269,10 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
         } else {
             String::new()
         };
-        (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
+        (
+            skills_text,
+            remaining.trim_start_matches(['\r', '\n']).to_string(),
+        )
     })
 }
 
@@ -295,7 +293,9 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
     // Look for path candidates ending in .plan.md or -plan.md, or local://...
     let mut found_path = None;
     for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>');
+        let clean = word.trim_matches(|c: char| {
+            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>'
+        });
         if clean.ends_with(".plan.md") || clean.ends_with("-plan.md") {
             if clean.starts_with("~/") {
                 found_path = Some(home_path.join(&clean[2..]));
@@ -348,7 +348,10 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
     let summary = if !context_lines.is_empty() {
         context_lines.join(" ")
     } else {
-        format!("Plan with {} execution steps.", parse_plan_phases(&content).len())
+        format!(
+            "Plan with {} execution steps.",
+            parse_plan_phases(&content).len()
+        )
     };
 
     Some(PlanProposalInfo {
@@ -357,7 +360,6 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
         plan_path,
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -447,5 +449,4 @@ mod tests {
             "Plan saved to ~/.katalyst/plans/sdk36-fix.plan.md"
         ));
     }
-
 }

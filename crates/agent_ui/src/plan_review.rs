@@ -1,4 +1,3 @@
-use std::any::TypeId;
 use std::path::{Component, PathBuf};
 
 use agent_client_protocol::schema::v1 as acp;
@@ -161,18 +160,17 @@ pub(crate) fn availability_for(
 }
 
 use gpui::{
-    AnyEntity, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, Render, SharedString, Task, WeakEntity, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    Render, SharedString, Task, WeakEntity, Window,
 };
 use markdown_preview::markdown_preview_view::MarkdownPreviewView;
 use project::{Project, ProjectPath};
 use theme::ActiveTheme;
 use ui::{Icon, IconName, IconSize, Label, LabelSize, prelude::*};
 use workspace::{
-    delete_unloaded_items, ItemId, Workspace, WorkspaceId,
+    ItemId, Workspace, WorkspaceId, delete_unloaded_items,
     item::{Item, ItemHandle, SaveOptions, SerializableItem},
 };
-
 
 pub(crate) struct PlanReviewView {
     key: PlanReviewKey,
@@ -209,7 +207,6 @@ impl PlanReviewView {
     pub(crate) fn key(&self) -> &PlanReviewKey {
         &self.key
     }
-
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let completed = self
@@ -299,7 +296,7 @@ impl Render for PlanReviewView {
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(cx))
             .child(self.render_steps(cx))
-            .child(div().flex_1().min_h_0().child(body))
+            .child(v_flex().flex_1().min_h_0().child(body))
             .child(
                 h_flex()
                     .w_full()
@@ -447,19 +444,6 @@ impl Item for PlanReviewView {
     ) -> Task<Result<()>> {
         self.source_editor.reload(project, window, cx)
     }
-
-    fn act_as_type<'a>(
-        &'a self,
-        type_id: TypeId,
-        self_handle: &'a Entity<Self>,
-        cx: &'a App,
-    ) -> Option<AnyEntity> {
-        if type_id == TypeId::of::<editor::Editor>() {
-            Some(self.source_editor.clone().into())
-        } else {
-            <Self as Item>::act_as_type(self, type_id, self_handle, cx)
-        }
-    }
 }
 
 impl SerializableItem for PlanReviewView {
@@ -487,9 +471,9 @@ impl SerializableItem for PlanReviewView {
     ) -> Task<Result<Entity<Self>>> {
         let db = persistence::PlanReviewDb::global(cx);
         window.spawn(cx, async move |cx| {
-            let (session_id, abs_path, title, mode_value) = db
-                .get_review(item_id, workspace_id)?
-                .context("No plan review entry found")?;
+            let (session_id, abs_path, title, mode_value) =
+                db.get_review(item_id, workspace_id)?
+                    .context("No plan review entry found")?;
             let mode = PlanReviewMode::from_db(mode_value);
             let (worktree, relative_path) = project
                 .update(cx, |project, cx| {
@@ -509,8 +493,9 @@ impl SerializableItem for PlanReviewView {
 
             cx.update(|window, cx| {
                 let language_registry = project.read(cx).languages().clone();
-                let editor =
-                    cx.new(|cx| editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx));
+                let editor = cx.new(|cx| {
+                    editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
+                });
                 let markdown_view = MarkdownPreviewView::new(
                     markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
                     editor.clone(),
@@ -623,7 +608,6 @@ mod persistence {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

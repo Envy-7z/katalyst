@@ -1,10 +1,10 @@
 use gpui::{
-    ClipboardItem, DismissEvent, EventEmitter, FocusHandle, Focusable, Window, App, Context,
+    App, ClipboardItem, Context, DismissEvent, EventEmitter, FocusHandle, Focusable, Window,
     prelude::*,
 };
 use ui::{
-    Button, ButtonStyle, Color, Icon, IconName, IconSize, Label, LabelSize, Modal,
-    ModalFooter, ModalHeader, Section, prelude::*,
+    Button, ButtonStyle, Color, Icon, IconName, IconSize, Label, LabelSize, Modal, ModalFooter,
+    ModalHeader, Section, prelude::*,
 };
 use workspace::ModalView;
 
@@ -34,9 +34,18 @@ impl DiscordRemoteModal {
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(discord) = json.get("katalyst.discord") {
-                    let enabled = discord.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let token = discord.get("bot_token").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let channel = discord.get("channel_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let enabled = discord
+                        .get("enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let token = discord
+                        .get("bot_token")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let channel = discord
+                        .get("channel_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
 
                     if enabled && token.as_ref().is_some_and(|t| !t.trim().is_empty()) {
                         let masked = token.map(|t| {

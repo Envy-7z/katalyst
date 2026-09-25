@@ -97,6 +97,7 @@ search.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_json_lenient.workspace = true
+serde_yaml.workspace = true
 settings.workspace = true
 streaming_diff.workspace = true
 task.workspace = true

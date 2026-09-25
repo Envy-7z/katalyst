@@ -4504,7 +4504,6 @@ impl AgentPanel {
         );
     }
 
-
     pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
         let thread_view = self.active_thread_view(cx)?;
         let thread = thread_view.read(cx);
@@ -6647,9 +6646,15 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::ThreadsSidebarRightClosed, "Show Plan & Editor Panel (⌥⌘B)")
+            (
+                IconName::ThreadsSidebarRightClosed,
+                "Show Plan & Editor Panel (⌥⌘B)",
+            )
         } else {
-            (IconName::ThreadsSidebarRightOpen, "Hide Plan & Editor Panel (⌥⌘B)")
+            (
+                IconName::ThreadsSidebarRightOpen,
+                "Hide Plan & Editor Panel (⌥⌘B)",
+            )
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)
