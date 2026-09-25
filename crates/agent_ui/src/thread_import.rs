@@ -929,7 +929,7 @@ fn import_threads_from_other_channels_in(
         let mut imported_threads = Vec::new();
 
         for channel in &ReleaseChannel::ALL {
-            if *channel == current_channel || *channel == ReleaseChannel::Dev {
+            if *channel == current_channel {
                 continue;
             }
 
