@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.2] - 2026-09-25
+
+### Added
+- **Plan Mode Auto-Approval**: Integrated ACP plan approval with OMP `tools.approvalMode: yolo`. Plans submitted via `xd://propose` or elicitation forms are auto-approved in sub-200ms when YOLO mode is configured.
+- **Resilient ACP Session Restoration**: Automatically detects stale/expired ACP sessions (`ACP session not found`) during workspace recovery and initializes a fresh session seamlessly rather than failing to launch.
+
+### Fixed
+- **Plan Truncation on Review Reopen**: Replaced 12-line elicitation excerpts with the full canonical session plan file, preserving comprehensive markdown plans (>700 lines) intact across reviews and reopens.
+
 ## [0.3.1] - 2026-09-23
 
 ### Added

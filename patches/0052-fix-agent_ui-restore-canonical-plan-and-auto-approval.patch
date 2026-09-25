@@ -1,0 +1,909 @@
+From 114ea3ae9516d3813cdd3784bbb1ab6e067f7afd Mon Sep 17 00:00:00 2001
+From: Katalyst <release@katalyst.dev>
+Date: Fri, 25 Sep 2026 09:51:22 +0700
+Subject: [PATCH] fix(agent_ui): restore canonical plan, enable yolo plan
+ auto-approval, and auto-recover stale acp sessions
+
+---
+ Cargo.lock                                    |   1 +
+ crates/agent_ui/Cargo.toml                    |   1 +
+ crates/agent_ui/src/agent_panel.rs            |  11 +-
+ crates/agent_ui/src/agent_ui.rs               |  41 +--
+ crates/agent_ui/src/conversation_view.rs      |  54 +++-
+ .../src/conversation_view/elicitation.rs      |  13 +-
+ .../src/conversation_view/thread_view.rs      | 272 ++++++++++++++++--
+ crates/agent_ui/src/discord_modal.rs          |  21 +-
+ crates/agent_ui/src/mention_set.rs            |   3 +-
+ crates/agent_ui/src/message_editor.rs         |   6 +-
+ crates/agent_ui/src/plan_progress.rs          |  23 +-
+ crates/agent_ui/src/plan_review.rs            |  36 +--
+ crates/zed/Cargo.toml                         |   2 +-
+ 13 files changed, 384 insertions(+), 100 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index ff0d3d5bb8..2148b8dbc6 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -531,6 +531,7 @@ dependencies = [
+  "serde",
+  "serde_json",
+  "serde_json_lenient",
++ "serde_yaml",
+  "settings",
+  "shlex 1.3.0",
+  "streaming_diff",
+diff --git a/crates/agent_ui/Cargo.toml b/crates/agent_ui/Cargo.toml
+index fa0bfabae5..cd39a78d5a 100644
+--- a/crates/agent_ui/Cargo.toml
++++ b/crates/agent_ui/Cargo.toml
+@@ -97,6 +97,7 @@ search.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+ serde_json_lenient.workspace = true
++serde_yaml.workspace = true
+ settings.workspace = true
+ streaming_diff.workspace = true
+ task.workspace = true
+diff --git a/crates/agent_ui/src/agent_panel.rs b/crates/agent_ui/src/agent_panel.rs
+index df9a480604..675bdc51b5 100644
+--- a/crates/agent_ui/src/agent_panel.rs
++++ b/crates/agent_ui/src/agent_panel.rs
+@@ -4504,7 +4504,6 @@ impl AgentPanel {
+         );
+     }
+ 
+-
+     pub fn active_model_name(&self, cx: &App) -> Option<SharedString> {
+         let thread_view = self.active_thread_view(cx)?;
+         let thread = thread_view.read(cx);
+@@ -6647,9 +6646,15 @@ impl AgentPanel {
+ 
+         let is_full_screen = self.is_zoomed(window, cx);
+         let (icon_name, tooltip_text) = if is_full_screen {
+-            (IconName::ThreadsSidebarRightClosed, "Show Plan & Editor Panel (⌥⌘B)")
++            (
++                IconName::ThreadsSidebarRightClosed,
++                "Show Plan & Editor Panel (⌥⌘B)",
++            )
+         } else {
+-            (IconName::ThreadsSidebarRightOpen, "Hide Plan & Editor Panel (⌥⌘B)")
++            (
++                IconName::ThreadsSidebarRightOpen,
++                "Hide Plan & Editor Panel (⌥⌘B)",
++            )
+         };
+         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
+             .icon_size(IconSize::Small)
+diff --git a/crates/agent_ui/src/agent_ui.rs b/crates/agent_ui/src/agent_ui.rs
+index 0ff6af02da..c3526080fd 100644
+--- a/crates/agent_ui/src/agent_ui.rs
++++ b/crates/agent_ui/src/agent_ui.rs
+@@ -11,6 +11,7 @@ mod context;
+ mod context_server_configuration;
+ pub(crate) mod conversation_view;
+ mod diagnostics;
++mod discord_modal;
+ pub mod draft_prompt_store;
+ mod entry_view_state;
+ mod external_source_prompt;
+@@ -32,7 +33,6 @@ pub mod terminal_thread_metadata_store;
+ #[cfg(any(test, feature = "test-support"))]
+ pub mod test_support;
+ mod thread_import;
+-mod discord_modal;
+ pub mod thread_metadata_store;
+ pub mod thread_worktree_archive;
+ 
+@@ -84,6 +84,7 @@ pub use crate::thread_metadata_store::ThreadId;
+ pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
+ pub use conversation_view::open_markdown_in_workspace;
+ pub use conversation_view::{ConversationView, StateChange};
++pub use discord_modal::DiscordRemoteModal;
+ pub use external_source_prompt::ExternalSourcePrompt;
+ pub(crate) use mode_selector::ModeSelector;
+ pub(crate) use model_selector::ModelSelector;
+@@ -92,7 +93,6 @@ pub use thread_import::{
+     AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
+     channels_with_threads, import_threads_from_other_channels,
+ };
+-pub use discord_modal::DiscordRemoteModal;
+ use zed_actions;
+ pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
+ 
+@@ -214,17 +214,26 @@ pub(crate) fn open_plan_review(
+     let target_pane = workspace
+         .panes()
+         .iter()
+-        .find(|pane| pane.read(cx).items_of_type::<crate::plan_review::PlanReviewView>().next().is_some())
++        .find(|pane| {
++            pane.read(cx)
++                .items_of_type::<crate::plan_review::PlanReviewView>()
++                .next()
++                .is_some()
++        })
+         .cloned()
+         .unwrap_or_else(|| {
+-            workspace.split_pane(workspace.active_pane().clone(), SplitDirection::Right, window, cx)
++            workspace.split_pane(
++                workspace.active_pane().clone(),
++                SplitDirection::Right,
++                window,
++                cx,
++            )
+         });
+     let target_pane = target_pane.downgrade();
+     let project = workspace.project().clone();
+     let language_registry = project.read(cx).languages().clone();
+     let workspace_handle = workspace.weak_handle();
+-    let project_path_task =
+-        Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
++    let project_path_task = Workspace::project_path_for_path(project.clone(), &abs_path, false, cx);
+     let path_for_log = abs_path.clone();
+ 
+     window
+@@ -235,20 +244,20 @@ pub(crate) fn open_plan_review(
+                 .await?;
+             let markdown = std::fs::read_to_string(&path_for_log).unwrap_or_default();
+             let mut projection = crate::plan_review::project_plan(&markdown, None);
+-            projection.availability =
+-                crate::plan_review::availability_for(&path_for_log, true);
++            projection.availability = crate::plan_review::availability_for(&path_for_log, true);
+             let view = cx.update(|window, cx| {
+                 let editor = cx.new(|cx| {
+                     editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
+                 });
+-                let markdown_view = markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
+-                    markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
+-                    editor.clone(),
+-                    workspace_handle.clone(),
+-                    language_registry,
+-                    window,
+-                    cx,
+-                );
++                let markdown_view =
++                    markdown_preview::markdown_preview_view::MarkdownPreviewView::new(
++                        markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
++                        editor.clone(),
++                        workspace_handle.clone(),
++                        language_registry,
++                        window,
++                        cx,
++                    );
+                 cx.new(|cx| {
+                     crate::plan_review::PlanReviewView::new(
+                         key,
+diff --git a/crates/agent_ui/src/conversation_view.rs b/crates/agent_ui/src/conversation_view.rs
+index df0ddfa18c..2ee6312492 100644
+--- a/crates/agent_ui/src/conversation_view.rs
++++ b/crates/agent_ui/src/conversation_view.rs
+@@ -1044,6 +1044,10 @@ impl ConversationView {
+         cx.notify();
+     }
+ 
++    fn should_start_fresh_session_after_restore_error(error: &anyhow::Error) -> bool {
++        error.to_string().contains("ACP session not found")
++    }
++
+     fn initial_state(
+         agent: Rc<dyn AgentServer>,
+         connection_store: Entity<AgentConnectionStore>,
+@@ -1203,8 +1207,8 @@ impl ConversationView {
+                                     connection.clone().resume_session(
+                                         session_id,
+                                         project.clone(),
+-                                        session_work_dirs,
+-                                        title,
++                                        session_work_dirs.clone(),
++                                        title.clone(),
+                                         cx,
+                                     )
+                                 })
+@@ -1233,8 +1237,8 @@ impl ConversationView {
+                                 connection.clone().resume_session(
+                                     session_id,
+                                     project.clone(),
+-                                    session_work_dirs,
+-                                    title,
++                                    session_work_dirs.clone(),
++                                    title.clone(),
+                                     cx,
+                                 )
+                             })
+@@ -1255,6 +1259,33 @@ impl ConversationView {
+                 }
+             };
+ 
++            let result = match result {
++                Err(error)
++                    if resume_session_id.is_some()
++                        && Self::should_start_fresh_session_after_restore_error(&error) =>
++                {
++                    log::warn!(
++                        "restored ACP session is unavailable; starting a fresh session: {error:#}"
++                    );
++                    let fresh_session = cx
++                        .update(|_, cx| {
++                            connection.clone().new_session(
++                                project.clone(),
++                                session_work_dirs,
++                                cx,
++                            )
++                        })
++                        .log_err();
++                    if let Some(fresh_session) = fresh_session {
++                        resumed_without_history = false;
++                        fresh_session.await.map_err(|error| anyhow!(error))
++                    } else {
++                        Err(error)
++                    }
++                }
++                result => result,
++            };
++
+             this.update_in(cx, |this, window, cx| {
+                 match result {
+                     Ok(thread) => {
+@@ -3368,7 +3399,6 @@ impl ConversationView {
+         }
+     }
+ 
+-
+     /// Inserts the selected text into the message editor or the message being
+     /// edited, if any.
+     pub(crate) fn insert_selection(
+@@ -4666,6 +4696,20 @@ pub(crate) mod tests {
+         fn cancel(&self, _session_id: &acp::SessionId, _cx: &mut App) {}
+     }
+ 
++    #[test]
++    fn missing_acp_session_errors_start_a_fresh_session() {
++        assert!(
++            ConversationView::should_start_fresh_session_after_restore_error(&anyhow!(
++                r#"Internal error: {{ "details": "ACP session not found: expired-session" }}"#
++            ),)
++        );
++        assert!(
++            !ConversationView::should_start_fresh_session_after_restore_error(&anyhow!(
++                "transport disconnected"
++            ),)
++        );
++    }
++
+     #[gpui::test]
+     async fn test_load_error_falls_back_to_resume_session(cx: &mut TestAppContext) {
+         init_test(cx);
+diff --git a/crates/agent_ui/src/conversation_view/elicitation.rs b/crates/agent_ui/src/conversation_view/elicitation.rs
+index 8ec73b8187..283b743759 100644
+--- a/crates/agent_ui/src/conversation_view/elicitation.rs
++++ b/crates/agent_ui/src/conversation_view/elicitation.rs
+@@ -1672,7 +1672,12 @@ impl<'a> ElicitationCard<'a> {
+             let row_id = format!("elicitation-bool-row-{}-{field_name}", self.entry_ix);
+             let checkbox_id = format!("elicitation-bool-{}-{field_name}", self.entry_ix);
+ 
+-            if field_name == "value" && self.form_state.as_ref().is_some_and(|s| s.fields.len() == 1) {
++            if field_name == "value"
++                && self
++                    .form_state
++                    .as_ref()
++                    .is_some_and(|s| s.fields.len() == 1)
++            {
+                 return div().into_any_element();
+             }
+ 
+@@ -2023,9 +2028,9 @@ impl<'a> ElicitationCard<'a> {
+         let is_accepted_url =
+             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
+         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
+-        let is_confirmation = self.form_state.is_some_and(|state| {
+-            state.fields.len() == 1 && state.fields.contains_key("value")
+-        });
++        let is_confirmation = self
++            .form_state
++            .is_some_and(|state| state.fields.len() == 1 && state.fields.contains_key("value"));
+         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
+             ("Open Again", IconName::ArrowUpRight, Color::Muted)
+         } else if open_url.is_some() {
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+index 91ff860f37..284affff3c 100644
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -2638,18 +2638,29 @@ impl ThreadView {
+         };
+ 
+         if is_pending {
+-            if crate::plan_progress::is_plan_review_request(&message)
+-                && let Some(plan_path) =
+-                    self.maybe_auto_open_elicitation_plan(&message, window, cx)
+-            {
+-                self.plan_review_paths.insert(id.clone(), plan_path);
+-            }
++            let is_plan_review = crate::plan_progress::is_plan_review_request(&message);
++            let plan_ready = is_plan_review
++                && self
++                    .maybe_auto_open_elicitation_plan(&message, window, cx)
++                    .is_some_and(|plan_path| {
++                        self.plan_review_paths.insert(id.clone(), plan_path);
++                        true
++                    });
+             if let Some(schema) = schema
+                 && !self.elicitation_form_states.contains_key(&id)
+             {
+                 self.elicitation_form_states
+                     .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
+             }
++            let auto_approve = plan_ready
++                && std::env::var_os("HOME").is_some_and(|home| {
++                    Self::omp_plan_auto_approval_enabled(
++                        &PathBuf::from(home).join(".omp/agent/config.yml"),
++                    )
++                });
++            if auto_approve {
++                self.submit_elicitation(id, window, cx);
++            }
+         } else {
+             self.elicitation_form_states.remove(&id);
+             self.plan_review_paths.remove(&id);
+@@ -2668,6 +2679,91 @@ impl ThreadView {
+             .then(|| id.clone())
+         })
+     }
++    fn write_plan_if_missing(path: &std::path::Path, markdown: Option<&str>) {
++        if path.is_file() {
++            return;
++        }
++        if let Some(markdown) = markdown {
++            let _ = std::fs::write(path, markdown);
++        }
++    }
++    fn canonical_session_plan(
++        omp_root: &std::path::Path,
++        home: &std::path::Path,
++        work_dir: &std::path::Path,
++        session_id: &str,
++        slug: &str,
++    ) -> Option<PathBuf> {
++        let session_suffix = format!("_{session_id}");
++        let find_under = |parent: &std::path::Path| {
++            std::fs::read_dir(parent)
++                .ok()?
++                .filter_map(Result::ok)
++                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
++                .find_map(|entry| {
++                    let name = entry.file_name();
++                    let name = name.to_string_lossy();
++                    if !name.ends_with(&session_suffix) {
++                        return None;
++                    }
++
++                    let local_dir = entry.path().join("local");
++                    [
++                        local_dir.join(format!("{slug}-plan.md")),
++                        local_dir.join(format!("{slug}.plan.md")),
++                    ]
++                    .into_iter()
++                    .find(|path| path.is_file())
++                })
++        };
++
++        let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
++        let work_dir = std::fs::canonicalize(work_dir).unwrap_or_else(|_| work_dir.to_path_buf());
++        let default_plan = work_dir.strip_prefix(home).ok().and_then(|relative| {
++            let encoded = relative.to_string_lossy().replace(['/', '\\', ':'], "-");
++            let project_dir = if encoded.is_empty() {
++                "-".to_string()
++            } else {
++                format!("-{encoded}")
++            };
++            find_under(&omp_root.join("agent/sessions").join(project_dir))
++        });
++        if default_plan.is_some() {
++            return default_plan;
++        }
++
++        std::fs::read_dir(omp_root)
++            .ok()?
++            .filter_map(Result::ok)
++            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
++            .find_map(|entry| find_under(&entry.path()))
++    }
++
++    fn materialize_plan(
++        target: &std::path::Path,
++        canonical: Option<&std::path::Path>,
++        markdown: Option<&str>,
++    ) {
++        if let Some(canonical) = canonical {
++            let _ = std::fs::copy(canonical, target);
++        } else {
++            Self::write_plan_if_missing(target, markdown);
++        }
++    }
++
++    fn omp_plan_auto_approval_enabled(config_path: &std::path::Path) -> bool {
++        let Ok(config) = std::fs::read_to_string(config_path) else {
++            return false;
++        };
++        let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(&config) else {
++            return false;
++        };
++        config
++            .get("tools")
++            .and_then(|tools| tools.get("approvalMode"))
++            .and_then(serde_yaml::Value::as_str)
++            == Some("yolo")
++    }
+ 
+     fn maybe_auto_open_elicitation_plan(
+         &mut self,
+@@ -2756,15 +2852,27 @@ impl ThreadView {
+             return None;
+         };
+ 
+-        let Some(home) = std::env::var_os("HOME") else {
++        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+             return None;
+         };
+-        let global_plans_dir = std::path::PathBuf::from(home).join(".katalyst/plans");
++        let work_dir = self
++            .thread
++            .read(cx)
++            .work_dirs()
++            .and_then(|dirs| dirs.ordered_paths().next().map(|path| path.to_path_buf()));
++        let canonical_plan = work_dir.as_deref().and_then(|work_dir| {
++            Self::canonical_session_plan(
++                &home.join(".omp"),
++                &home,
++                work_dir,
++                self.session_id.0.as_ref(),
++                &slug,
++            )
++        });
++        let global_plans_dir = home.join(".katalyst/plans");
+         let _ = std::fs::create_dir_all(&global_plans_dir);
+         let global_plan_file = global_plans_dir.join(format!("{slug}.plan.md"));
+-        if let Some(md_content) = markdown {
+-            let _ = std::fs::write(&global_plan_file, md_content);
+-        }
++        Self::materialize_plan(&global_plan_file, canonical_plan.as_deref(), markdown);
+ 
+         let plan_file = self
+             .workspace
+@@ -2781,10 +2889,16 @@ impl ThreadView {
+                     let ws_plans_dir = root.join(".katalyst/plans");
+                     let _ = std::fs::create_dir_all(&ws_plans_dir);
+                     let ws_plan_file = ws_plans_dir.join(format!("{slug}.plan.md"));
+-                    if let Some(md_content) = markdown {
+-                        let _ = std::fs::write(&ws_plan_file, md_content);
+-                    } else if global_plan_file.is_file() && !ws_plan_file.is_file() {
+-                        let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
++                    if canonical_plan.is_some() || !ws_plan_file.is_file() {
++                        if global_plan_file.is_file() {
++                            let _ = std::fs::copy(&global_plan_file, &ws_plan_file);
++                        } else {
++                            Self::materialize_plan(
++                                &ws_plan_file,
++                                canonical_plan.as_deref(),
++                                markdown,
++                            );
++                        }
+                     }
+                     if ws_plan_file.is_file() {
+                         Some(ws_plan_file)
+@@ -2803,22 +2917,26 @@ impl ThreadView {
+ 
+         if self.opened_plan_slugs.insert(slug) {
+             if let Some(workspace) = self.workspace.upgrade() {
+-                workspace.update(cx, |ws, cx| {
+-                    crate::open_plan_review(
+-                        ws,
+-                        self.session_id.clone(),
+-                        plan_file.clone(),
+-                        "Implementation Plan".into(),
+-                        window,
+-                        cx,
+-                    );
++                let session_id = self.session_id.clone();
++                let plan_file_for_open = plan_file.clone();
++                let title: SharedString = "Implementation Plan".into();
++                window.defer(cx, move |window, cx| {
++                    workspace.update(cx, |ws, cx| {
++                        crate::open_plan_review(
++                            ws,
++                            session_id,
++                            plan_file_for_open,
++                            title,
++                            window,
++                            cx,
++                        );
++                    });
+                 });
+             }
+         }
+         Some(plan_file)
+     }
+ 
+-
+     fn sync_existing_elicitation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let entry_count = self.thread.read(cx).entries().len();
+         for index in 0..entry_count {
+@@ -13485,6 +13603,110 @@ mod tests {
+         ))
+     }
+ 
++    #[test]
++    fn canonical_session_plan_replaces_elicitation_excerpt() {
++        let root = std::env::temp_dir().join(format!(
++            "katalyst-canonical-plan-{}-{}",
++            std::process::id(),
++            std::thread::current().name().unwrap_or("test")
++        ));
++        let home = root.join("home");
++        let work_dir = home.join("Documents/Projects");
++        let omp_root = root.join(".omp");
++        let local_dir = omp_root
++            .join("agent/sessions")
++            .join("-Documents-Projects")
++            .join("2026-09-24T16-00-00_session-id")
++            .join("local");
++        std::fs::create_dir_all(&work_dir).unwrap();
++        std::fs::create_dir_all(&local_dir).unwrap();
++
++        let source = local_dir.join("promo-code-system-plan.md");
++        let complete = "# Plan\n\n## Phase 1\nFull canonical content\n";
++        std::fs::write(&source, complete).unwrap();
++
++        let resolved = ThreadView::canonical_session_plan(
++            &omp_root,
++            &home,
++            &work_dir,
++            "session-id",
++            "promo-code-system",
++        );
++        assert_eq!(resolved.as_deref(), Some(source.as_path()));
++
++        let target = root.join("promo-code-system.plan.md");
++        std::fs::write(&target, "# Plan\n\n…").unwrap();
++        ThreadView::materialize_plan(&target, resolved.as_deref(), Some("# Plan\n\n…"));
++        assert_eq!(std::fs::read_to_string(&target).unwrap(), complete);
++
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn canonical_session_plan_supports_custom_session_root() {
++        let root = std::env::temp_dir().join(format!(
++            "katalyst-custom-session-plan-{}-{}",
++            std::process::id(),
++            std::thread::current().name().unwrap_or("test")
++        ));
++        let home = root.join("home");
++        let work_dir = home.join("Documents/Projects");
++        let omp_root = root.join(".omp");
++        let local_dir = omp_root
++            .join("custom-session-dir")
++            .join("2026-09-24T16-00-00_custom-session-id")
++            .join("local");
++        std::fs::create_dir_all(&work_dir).unwrap();
++        std::fs::create_dir_all(&local_dir).unwrap();
++
++        let source = local_dir.join("custom-plan.md");
++        std::fs::write(&source, "# Custom plan\n").unwrap();
++
++        let resolved = ThreadView::canonical_session_plan(
++            &omp_root,
++            &home,
++            &work_dir,
++            "custom-session-id",
++            "custom",
++        );
++        assert_eq!(resolved.as_deref(), Some(source.as_path()));
++
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn plan_auto_approval_requires_explicit_yolo_config() {
++        let path = std::env::temp_dir().join(format!(
++            "katalyst-plan-approval-{}-{}.yml",
++            std::process::id(),
++            std::thread::current().name().unwrap_or("test")
++        ));
++
++        std::fs::write(&path, "tools:\n  approvalMode: yolo\n").unwrap();
++        assert!(ThreadView::omp_plan_auto_approval_enabled(&path));
++
++        std::fs::write(&path, "tools:\n  approvalMode: write\n").unwrap();
++        assert!(!ThreadView::omp_plan_auto_approval_enabled(&path));
++
++        let _ = std::fs::remove_file(path);
++    }
++
++    #[test]
++    fn plan_excerpt_does_not_overwrite_existing_plan() {
++        let path = std::env::temp_dir().join(format!(
++            "katalyst-plan-preserve-{}-{}.plan.md",
++            std::process::id(),
++            std::thread::current().name().unwrap_or("test")
++        ));
++        let complete = "# Plan\n\n## Phase 1\nFull content\n";
++        std::fs::write(&path, complete).unwrap();
++
++        ThreadView::write_plan_if_missing(&path, Some("# Plan\n\n…"));
++
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), complete);
++        let _ = std::fs::remove_file(path);
++    }
++
+     #[test]
+     fn test_leading_native_command_matches_bare_and_with_remainder() {
+         let commands = [native_command("compact"), mcp_command("deploy")];
+diff --git a/crates/agent_ui/src/discord_modal.rs b/crates/agent_ui/src/discord_modal.rs
+index 353417a93e..97abc13ae6 100644
+--- a/crates/agent_ui/src/discord_modal.rs
++++ b/crates/agent_ui/src/discord_modal.rs
+@@ -1,10 +1,10 @@
+ use gpui::{
+-    ClipboardItem, DismissEvent, EventEmitter, FocusHandle, Focusable, Window, App, Context,
++    App, ClipboardItem, Context, DismissEvent, EventEmitter, FocusHandle, Focusable, Window,
+     prelude::*,
+ };
+ use ui::{
+-    Button, ButtonStyle, Color, Icon, IconName, IconSize, Label, LabelSize, Modal,
+-    ModalFooter, ModalHeader, Section, prelude::*,
++    Button, ButtonStyle, Color, Icon, IconName, IconSize, Label, LabelSize, Modal, ModalFooter,
++    ModalHeader, Section, prelude::*,
+ };
+ use workspace::ModalView;
+ 
+@@ -34,9 +34,18 @@ impl DiscordRemoteModal {
+         if let Ok(content) = std::fs::read_to_string(path) {
+             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                 if let Some(discord) = json.get("katalyst.discord") {
+-                    let enabled = discord.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+-                    let token = discord.get("bot_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+-                    let channel = discord.get("channel_id").and_then(|v| v.as_str()).map(|s| s.to_string());
++                    let enabled = discord
++                        .get("enabled")
++                        .and_then(|v| v.as_bool())
++                        .unwrap_or(false);
++                    let token = discord
++                        .get("bot_token")
++                        .and_then(|v| v.as_str())
++                        .map(|s| s.to_string());
++                    let channel = discord
++                        .get("channel_id")
++                        .and_then(|v| v.as_str())
++                        .map(|s| s.to_string());
+ 
+                     if enabled && token.as_ref().is_some_and(|t| !t.trim().is_empty()) {
+                         let masked = token.map(|t| {
+diff --git a/crates/agent_ui/src/mention_set.rs b/crates/agent_ui/src/mention_set.rs
+index aaee89afbe..04b0d1ba34 100644
+--- a/crates/agent_ui/src/mention_set.rs
++++ b/crates/agent_ui/src/mention_set.rs
+@@ -263,7 +263,8 @@ impl MentionSet {
+                 .read(cx)
+                 .project_path_for_absolute_path(&abs_path, cx)
+             {
+-                let image_task = project.update(cx, |project, cx| project.open_image(project_path, cx));
++                let image_task =
++                    project.update(cx, |project, cx| project.open_image(project_path, cx));
+                 cx.spawn(async move |_, cx| {
+                     let image = image_task.await.map_err(|e| e.to_string())?;
+                     let image = image.update(cx, |image, _| image.image.clone());
+diff --git a/crates/agent_ui/src/message_editor.rs b/crates/agent_ui/src/message_editor.rs
+index 2f7cc0aead..d1a2f078de 100644
+--- a/crates/agent_ui/src/message_editor.rs
++++ b/crates/agent_ui/src/message_editor.rs
+@@ -1454,7 +1454,10 @@ impl MessageEditor {
+             let mut images = Vec::new();
+             for path in paths.iter() {
+                 if supports_images && crate::mention_set::is_raster_image_path(path.as_path()) {
+-                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(path.as_path(), &default_image_name) {
++                    if let Some((image, name)) = crate::mention_set::load_external_image_from_path(
++                        path.as_path(),
++                        &default_image_name,
++                    ) {
+                         images.push((image, name));
+                     }
+                 }
+@@ -1474,7 +1477,6 @@ impl MessageEditor {
+         .detach_and_log_err(cx);
+     }
+ 
+-
+     pub fn insert_branch_diff_crease(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         let Some(workspace) = self.workspace.upgrade() else {
+             return;
+diff --git a/crates/agent_ui/src/plan_progress.rs b/crates/agent_ui/src/plan_progress.rs
+index 4defe3278a..8845d60f34 100644
+--- a/crates/agent_ui/src/plan_progress.rs
++++ b/crates/agent_ui/src/plan_progress.rs
+@@ -55,11 +55,7 @@ pub fn parse_plan_phases(markdown: &str) -> Vec<String> {
+             .or_else(|| trimmed.strip_prefix("- [X] "))
+             .or_else(|| trimmed.strip_prefix("- "))
+             .or_else(|| {
+-                if trimmed
+-                    .chars()
+-                    .next()
+-                    .is_some_and(|c| c.is_ascii_digit())
+-                {
++                if trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                     trimmed
+                         .trim_start_matches(|c: char| c.is_ascii_digit())
+                         .strip_prefix(". ")
+@@ -225,7 +221,6 @@ pub fn completed_count_from_disk(path: &Path, phases: &[String]) -> usize {
+     completed
+ }
+ 
+-
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct PlanProposalInfo {
+     pub title: String,
+@@ -274,7 +269,10 @@ pub fn extract_active_skills(text: &str) -> Option<(String, String)> {
+         } else {
+             String::new()
+         };
+-        (skills_text, remaining.trim_start_matches(['\r', '\n']).to_string())
++        (
++            skills_text,
++            remaining.trim_start_matches(['\r', '\n']).to_string(),
++        )
+     })
+ }
+ 
+@@ -295,7 +293,9 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+     // Look for path candidates ending in .plan.md or -plan.md, or local://...
+     let mut found_path = None;
+     for word in text.split_whitespace() {
+-        let clean = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>');
++        let clean = word.trim_matches(|c: char| {
++            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == '<' || c == '>'
++        });
+         if clean.ends_with(".plan.md") || clean.ends_with("-plan.md") {
+             if clean.starts_with("~/") {
+                 found_path = Some(home_path.join(&clean[2..]));
+@@ -348,7 +348,10 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+     let summary = if !context_lines.is_empty() {
+         context_lines.join(" ")
+     } else {
+-        format!("Plan with {} execution steps.", parse_plan_phases(&content).len())
++        format!(
++            "Plan with {} execution steps.",
++            parse_plan_phases(&content).len()
++        )
+     };
+ 
+     Some(PlanProposalInfo {
+@@ -358,7 +361,6 @@ pub fn extract_plan_proposal_info(text: &str) -> Option<PlanProposalInfo> {
+     })
+ }
+ 
+-
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -447,5 +449,4 @@ mod tests {
+             "Plan saved to ~/.katalyst/plans/sdk36-fix.plan.md"
+         ));
+     }
+-
+ }
+diff --git a/crates/agent_ui/src/plan_review.rs b/crates/agent_ui/src/plan_review.rs
+index 8986832acb..507565749b 100644
+--- a/crates/agent_ui/src/plan_review.rs
++++ b/crates/agent_ui/src/plan_review.rs
+@@ -1,4 +1,3 @@
+-use std::any::TypeId;
+ use std::path::{Component, PathBuf};
+ 
+ use agent_client_protocol::schema::v1 as acp;
+@@ -161,19 +160,18 @@ pub(crate) fn availability_for(
+ }
+ 
+ use gpui::{
+-    AnyEntity, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+-    IntoElement, Render, SharedString, Task, WeakEntity, Window,
++    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
++    Render, SharedString, Task, WeakEntity, Window,
+ };
+ use markdown_preview::markdown_preview_view::MarkdownPreviewView;
+ use project::{Project, ProjectPath};
+ use theme::ActiveTheme;
+ use ui::{Icon, IconName, IconSize, Label, LabelSize, prelude::*};
+ use workspace::{
+-    delete_unloaded_items, ItemId, Workspace, WorkspaceId,
++    ItemId, Workspace, WorkspaceId, delete_unloaded_items,
+     item::{Item, ItemHandle, SaveOptions, SerializableItem},
+ };
+ 
+-
+ pub(crate) struct PlanReviewView {
+     key: PlanReviewKey,
+     title: SharedString,
+@@ -210,7 +208,6 @@ impl PlanReviewView {
+         &self.key
+     }
+ 
+-
+     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
+         let completed = self
+             .projection
+@@ -299,7 +296,7 @@ impl Render for PlanReviewView {
+             .bg(cx.theme().colors().editor_background)
+             .child(self.render_header(cx))
+             .child(self.render_steps(cx))
+-            .child(div().flex_1().min_h_0().child(body))
++            .child(v_flex().flex_1().min_h_0().child(body))
+             .child(
+                 h_flex()
+                     .w_full()
+@@ -447,19 +444,6 @@ impl Item for PlanReviewView {
+     ) -> Task<Result<()>> {
+         self.source_editor.reload(project, window, cx)
+     }
+-
+-    fn act_as_type<'a>(
+-        &'a self,
+-        type_id: TypeId,
+-        self_handle: &'a Entity<Self>,
+-        cx: &'a App,
+-    ) -> Option<AnyEntity> {
+-        if type_id == TypeId::of::<editor::Editor>() {
+-            Some(self.source_editor.clone().into())
+-        } else {
+-            <Self as Item>::act_as_type(self, type_id, self_handle, cx)
+-        }
+-    }
+ }
+ 
+ impl SerializableItem for PlanReviewView {
+@@ -487,9 +471,9 @@ impl SerializableItem for PlanReviewView {
+     ) -> Task<Result<Entity<Self>>> {
+         let db = persistence::PlanReviewDb::global(cx);
+         window.spawn(cx, async move |cx| {
+-            let (session_id, abs_path, title, mode_value) = db
+-                .get_review(item_id, workspace_id)?
+-                .context("No plan review entry found")?;
++            let (session_id, abs_path, title, mode_value) =
++                db.get_review(item_id, workspace_id)?
++                    .context("No plan review entry found")?;
+             let mode = PlanReviewMode::from_db(mode_value);
+             let (worktree, relative_path) = project
+                 .update(cx, |project, cx| {
+@@ -509,8 +493,9 @@ impl SerializableItem for PlanReviewView {
+ 
+             cx.update(|window, cx| {
+                 let language_registry = project.read(cx).languages().clone();
+-                let editor =
+-                    cx.new(|cx| editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx));
++                let editor = cx.new(|cx| {
++                    editor::Editor::for_buffer(buffer, Some(project.clone()), window, cx)
++                });
+                 let markdown_view = MarkdownPreviewView::new(
+                     markdown_preview::markdown_preview_view::MarkdownPreviewMode::Default,
+                     editor.clone(),
+@@ -624,7 +609,6 @@ mod persistence {
+     }
+ }
+ 
+-
+ #[cfg(test)]
+ mod tests {
+     use std::path::PathBuf;
+diff --git a/crates/zed/Cargo.toml b/crates/zed/Cargo.toml
+index d9562b672b..69e669717f 100644
+--- a/crates/zed/Cargo.toml
++++ b/crates/zed/Cargo.toml
+@@ -283,7 +283,7 @@ search = { workspace = true, features = ["test-support"] }
+ repl = { workspace = true, features = ["test-support"] }
+ 
+ 
+-[package.metadata.bundle-dev]
++[package.metadata.bundle]
+ icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
+ identifier = "dev.zed.Zed-Dev"
+ name = "Zed Dev"
+-- 
+2.50.1 (Apple Git-155)
+
