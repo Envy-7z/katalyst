@@ -2652,15 +2652,6 @@ impl ThreadView {
                 self.elicitation_form_states
                     .insert(id.clone(), ElicitationFormState::new(&schema, window, cx));
             }
-            let auto_approve = plan_ready
-                && std::env::var_os("HOME").is_some_and(|home| {
-                    Self::omp_plan_auto_approval_enabled(
-                        &PathBuf::from(home).join(".omp/agent/config.yml"),
-                    )
-                });
-            if auto_approve {
-                self.submit_elicitation(id, window, cx);
-            }
         } else {
             self.elicitation_form_states.remove(&id);
             self.plan_review_paths.remove(&id);
