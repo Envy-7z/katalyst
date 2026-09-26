@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.3] - 2026-09-25
+
+### Fixed
+- **Cross-Channel Thread Migration**: Removed the exclusion of the `Dev` release channel so Katalyst automatically imports and syncs history from `0-dev` database into `0-stable` on update and startup.
+- **Manual Plan Review Approval**: Removed premature plan auto-submission so generated implementation plans always open for review and wait for manual user confirmation before starting code changes.
+
 ## [0.3.2] - 2026-09-25
 
 ### Added
