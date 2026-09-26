@@ -1,0 +1,26 @@
+From c6c7ec6e5a46edb5d33f2000c8333e0d0ef1de93 Mon Sep 17 00:00:00 2001
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+Date: Fri, 25 Sep 2026 15:40:22 +0700
+Subject: [PATCH 53/54] fix(agent_ui): allow cross-channel thread migration
+ from dev channel database
+
+---
+ crates/agent_ui/src/thread_import.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/crates/agent_ui/src/thread_import.rs b/crates/agent_ui/src/thread_import.rs
+index aaa055ecb1..20b2426b99 100644
+--- a/crates/agent_ui/src/thread_import.rs
++++ b/crates/agent_ui/src/thread_import.rs
+@@ -929,7 +929,7 @@ fn import_threads_from_other_channels_in(
+         let mut imported_threads = Vec::new();
+ 
+         for channel in &ReleaseChannel::ALL {
+-            if *channel == current_channel || *channel == ReleaseChannel::Dev {
++            if *channel == current_channel {
+                 continue;
+             }
+ 
+-- 
+2.50.1 (Apple Git-155)
+
