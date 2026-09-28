@@ -35,6 +35,7 @@ use project::{
     CompletionIntent, InlayHint, InlayHintLabel, InlayId, Project, ProjectPath, Worktree,
 };
 use rope::Point;
+use std::path::{Path, PathBuf};
 use settings::Settings;
 use std::{cmp::min, fmt::Write, ops::Range, rc::Rc, sync::Arc};
 use text::LineEnding;
@@ -305,10 +306,92 @@ fn insert_mention_for_project_path(
         )
     }))
 }
+fn insert_mention_for_abs_path(
+    abs_path: &Path,
+    editor: &Entity<Editor>,
+    mention_set: &Entity<MentionSet>,
+    workspace: &Entity<Workspace>,
+    supports_images: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Task<()>> {
+    let file_name: SharedString = abs_path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| abs_path.to_string_lossy().to_string())
+        .into();
+    let mention_uri = if abs_path.is_dir() {
+        MentionUri::Directory {
+            abs_path: abs_path.to_path_buf(),
+        }
+    } else {
+        MentionUri::File {
+            abs_path: abs_path.to_path_buf(),
+        }
+    };
+
+    let mention_text = mention_uri.as_link().to_string();
+    let content_len = mention_text.len();
+
+    let text_anchor = editor.update(cx, |editor, cx| {
+        let buffer = editor.buffer().read(cx);
+        let snapshot = buffer.snapshot(cx);
+        let buffer_snapshot = snapshot.as_singleton()?;
+        let text_anchor = snapshot
+            .anchor_to_buffer_anchor(editor.selections.newest_anchor().start)?
+            .0
+            .bias_left(&buffer_snapshot);
+
+        editor.insert(&mention_text, window, cx);
+        editor.insert(" ", window, cx);
+
+        Some(text_anchor)
+    })?;
+
+    Some(mention_set.update(cx, |mention_set, cx| {
+        mention_set.confirm_mention_completion(
+            file_name,
+            text_anchor,
+            content_len,
+            mention_uri,
+            supports_images,
+            editor.clone(),
+            workspace,
+            window,
+            cx,
+        )
+    }))
+}
+
+fn insert_external_path_as_context(
+    abs_path: PathBuf,
+    editor: Entity<Editor>,
+    mention_set: Entity<MentionSet>,
+    workspace: WeakEntity<Workspace>,
+    supports_images: bool,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<Task<()>> {
+    let workspace = workspace.upgrade()?;
+
+    cx.update(move |window, cx| {
+        insert_mention_for_abs_path(
+            &abs_path,
+            &editor,
+            &mention_set,
+            &workspace,
+            supports_images,
+            window,
+            cx,
+        )
+    })
+    .ok()
+    .flatten()
+}
 
 enum ResolvedPastedContextItem {
     Image(gpui::Image, gpui::SharedString),
     ProjectPath(ProjectPath),
+    ExternalPath(PathBuf),
 }
 
 async fn resolve_pasted_context_items(
@@ -358,10 +441,10 @@ async fn resolve_pasted_context_items(
                         continue;
                     }
 
-                    let path = path.clone();
+                    let path_to_resolve = path.clone();
                     let Ok(resolve_task) = cx.update({
                         let project = project.clone();
-                        move |_, cx| Workspace::project_path_for_path(project, &path, false, cx)
+                        move |_, cx| Workspace::project_path_for_path(project, &path_to_resolve, false, cx)
                     }) else {
                         continue;
                     };
@@ -369,6 +452,8 @@ async fn resolve_pasted_context_items(
                     if let Some((worktree, project_path)) = resolve_task.await.log_err() {
                         added_worktrees.push(worktree);
                         items.push(ResolvedPastedContextItem::ProjectPath(project_path));
+                    } else if path.exists() {
+                        items.push(ResolvedPastedContextItem::ExternalPath(path.clone()));
                     }
                 }
             }
@@ -431,6 +516,18 @@ async fn insert_resolved_pasted_context_items(
             ResolvedPastedContextItem::ProjectPath(project_path) => {
                 if let Some(task) = insert_project_path_as_context(
                     project_path,
+                    editor.clone(),
+                    mention_set.clone(),
+                    workspace.clone(),
+                    supports_images,
+                    cx,
+                ) {
+                    path_mention_tasks.push(task);
+                }
+            }
+            ResolvedPastedContextItem::ExternalPath(abs_path) => {
+                if let Some(task) = insert_external_path_as_context(
+                    abs_path,
                     editor.clone(),
                     mention_set.clone(),
                     workspace.clone(),
@@ -1452,6 +1549,7 @@ impl MessageEditor {
 
         cx.spawn_in(window, async move |_this, mut cx| {
             let mut images = Vec::new();
+            let mut external_files = Vec::new();
             for path in paths.iter() {
                 if supports_images && crate::mention_set::is_raster_image_path(path.as_path()) {
                     if let Some((image, name)) = crate::mention_set::load_external_image_from_path(
@@ -1460,18 +1558,34 @@ impl MessageEditor {
                     ) {
                         images.push((image, name));
                     }
+                } else if path.exists() {
+                    external_files.push(path.clone());
                 }
             }
             if !images.is_empty() {
                 crate::mention_set::insert_images_as_context(
                     images,
-                    editor,
-                    mention_set,
-                    workspace_weak,
+                    editor.clone(),
+                    mention_set.clone(),
+                    workspace_weak.clone(),
                     &mut cx,
                 )
                 .await;
             }
+            let mut tasks = Vec::new();
+            for path in external_files {
+                if let Some(task) = insert_external_path_as_context(
+                    path,
+                    editor.clone(),
+                    mention_set.clone(),
+                    workspace_weak.clone(),
+                    supports_images,
+                    &mut cx,
+                ) {
+                    tasks.push(task);
+                }
+            }
+            join_all(tasks).await;
             Ok::<(), anyhow::Error>(())
         })
         .detach_and_log_err(cx);

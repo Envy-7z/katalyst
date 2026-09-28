@@ -2639,7 +2639,7 @@ impl ThreadView {
 
         if is_pending {
             let is_plan_review = crate::plan_progress::is_plan_review_request(&message);
-            let plan_ready = is_plan_review
+            let _plan_ready = is_plan_review
                 && self
                     .maybe_auto_open_elicitation_plan(&message, window, cx)
                     .is_some_and(|plan_path| {
@@ -2742,6 +2742,7 @@ impl ThreadView {
         }
     }
 
+    #[allow(dead_code)]
     fn omp_plan_auto_approval_enabled(config_path: &std::path::Path) -> bool {
         let Ok(config) = std::fs::read_to_string(config_path) else {
             return false;
