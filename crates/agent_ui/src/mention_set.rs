@@ -401,6 +401,9 @@ impl MentionSet {
             .read(cx)
             .project_path_for_absolute_path(&abs_path, cx)
         else {
+            if abs_path.exists() {
+                return Task::ready(Ok(Mention::Link));
+            }
             return Task::ready(Err(anyhow!(
                 "project path not found for file mention {abs_path:?}"
             )));
