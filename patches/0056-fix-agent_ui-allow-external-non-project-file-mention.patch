@@ -1,0 +1,26 @@
+From a51daa5f3be3e48379af94b7ebd8ee2e64e7df3b Mon Sep 17 00:00:00 2001
+From: Katalyst <release@katalyst.dev>
+Date: Mon, 28 Sep 2026 20:44:40 +0700
+Subject: [PATCH 56/60] fix(agent_ui): allow external non-project file mentions
+ as Link mentions
+
+From: Katalyst Contributors <noreply@katalyst.dev>
+
+---
+ crates/agent_ui/src/mention_set.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/crates/agent_ui/src/mention_set.rs b/crates/agent_ui/src/mention_set.rs
+index 04b0d1ba34..c15bf199a9 100644
+--- a/crates/agent_ui/src/mention_set.rs
++++ b/crates/agent_ui/src/mention_set.rs
+@@ -401,6 +401,9 @@ impl MentionSet {
+             .read(cx)
+             .project_path_for_absolute_path(&abs_path, cx)
+         else {
++            if abs_path.exists() {
++                return Task::ready(Ok(Mention::Link));
++            }
+             return Task::ready(Err(anyhow!(
+                 "project path not found for file mention {abs_path:?}"
+             )));

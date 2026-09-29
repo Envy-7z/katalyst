@@ -1,0 +1,82 @@
+From b76f164a2ab70a14257534841357fdeb05ddae9f Mon Sep 17 00:00:00 2001
+From: Katalyst <release@katalyst.dev>
+Date: Mon, 28 Sep 2026 21:10:51 +0700
+Subject: [PATCH 57/60] feat(agent_ui): support pasting external files from
+ Finder via Cmd+V as mention pills
+
+From: Katalyst Contributors <noreply@katalyst.dev>
+
+---
+ crates/agent_ui/src/message_editor.rs | 35 +++++++++------------------
+ 1 file changed, 12 insertions(+), 23 deletions(-)
+
+diff --git a/crates/agent_ui/src/message_editor.rs b/crates/agent_ui/src/message_editor.rs
+index b1a82a58a1..39ae57284c 100644
+--- a/crates/agent_ui/src/message_editor.rs
++++ b/crates/agent_ui/src/message_editor.rs
+@@ -390,19 +390,20 @@ fn insert_external_path_as_context(
+ 
+ enum ResolvedPastedContextItem {
+     Image(gpui::Image, gpui::SharedString),
++    #[allow(dead_code)]
+     ProjectPath(ProjectPath),
+     ExternalPath(PathBuf),
+ }
+ 
+ async fn resolve_pasted_context_items(
+-    project: Entity<Project>,
+-    project_is_local: bool,
++    _project: Entity<Project>,
++    _project_is_local: bool,
+     supports_images: bool,
+     entries: Vec<ClipboardEntry>,
+     cx: &mut gpui::AsyncWindowContext,
+ ) -> (Vec<ResolvedPastedContextItem>, Vec<Entity<Worktree>>) {
+     let mut items = Vec::new();
+-    let mut added_worktrees = Vec::new();
++    let added_worktrees = Vec::new();
+     let default_image_name: SharedString = "Image".into();
+ 
+     for entry in entries {
+@@ -437,22 +438,7 @@ async fn resolve_pasted_context_items(
+                         continue;
+                     }
+ 
+-                    if !project_is_local {
+-                        continue;
+-                    }
+-
+-                    let path_to_resolve = path.clone();
+-                    let Ok(resolve_task) = cx.update({
+-                        let project = project.clone();
+-                        move |_, cx| Workspace::project_path_for_path(project, &path_to_resolve, false, cx)
+-                    }) else {
+-                        continue;
+-                    };
+-
+-                    if let Some((worktree, project_path)) = resolve_task.await.log_err() {
+-                        added_worktrees.push(worktree);
+-                        items.push(ResolvedPastedContextItem::ProjectPath(project_path));
+-                    } else if path.exists() {
++                    if path.exists() {
+                         items.push(ResolvedPastedContextItem::ExternalPath(path.clone()));
+                     }
+                 }
+@@ -1451,10 +1437,13 @@ impl MessageEditor {
+         window: &mut Window,
+         cx: &mut Context<Self>,
+     ) -> bool {
+-        if matches!(
+-            clipboard.entries().first(),
+-            Some(ClipboardEntry::String(_)) | None
+-        ) {
++        let has_context_entries = clipboard.entries().iter().any(|entry| {
++            matches!(
++                entry,
++                ClipboardEntry::ExternalPaths(_) | ClipboardEntry::Image(_)
++            )
++        });
++        if !has_context_entries {
+             return false;
+         }
+ 
