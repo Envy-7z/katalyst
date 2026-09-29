@@ -2059,10 +2059,6 @@ impl AgentPanel {
     }
 
     pub fn new_thread(&mut self, _action: &NewThread, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         self.new_thread_with_workspace(None, window, cx);
     }
 
@@ -2086,10 +2082,6 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         self.set_last_created_entry_kind_from_user_action(AgentPanelEntryKind::Thread, cx);
 
         // If the user is viewing a *parked* draft and the ephemeral
@@ -2168,10 +2160,6 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         let active_matching = match &self.base_view {
             BaseView::AgentThread { conversation_view }
                 if conversation_view.read(cx).thread_id == thread_id =>
@@ -2232,10 +2220,6 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         self.selected_agent = action.agent.clone().into();
         self.activate_new_thread(true, AgentThreadSource::AgentPanel, window, cx);
     }
@@ -3237,10 +3221,6 @@ impl AgentPanel {
     }
 
     fn ensure_native_agent_connection(&self, cx: &mut Context<Self>) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         let fs = self.fs.clone();
         let thread_store = self.thread_store.clone();
         self.connection_store.update(cx, |store, cx| {
@@ -3259,10 +3239,6 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_open_project(cx) {
-            return;
-        }
-
         let draft = self.ensure_draft(source, window, cx);
         if let BaseView::AgentThread { conversation_view } = &self.base_view {
             if conversation_view.entity_id() == draft.entity_id() {
@@ -3807,9 +3783,6 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if resume_thread_id.is_none() && !self.has_open_project(cx) {
-            return;
-        }
 
         let agent = agent_choice.unwrap_or_else(|| self.selected_agent(cx));
         let thread = self.create_agent_thread_with_server(
@@ -6374,7 +6347,7 @@ impl AgentPanel {
 
         let focus_handle = self.focus_handle(cx);
 
-        let can_create_entries = self.has_open_project(cx);
+        let can_create_entries = true;
         let supports_terminal = self.supports_terminal(cx);
         let showing_terminal = matches!(self.visible_surface(), VisibleSurface::Terminal(_));
 

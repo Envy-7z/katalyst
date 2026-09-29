@@ -2820,15 +2820,13 @@ impl Sidebar {
                     .gap_px()
                     .pr_1p5()
                     .children(opaque_window.then(|| gradient_overlay()))
-                    .when(!key.path_list().is_empty(), |this| {
-                        this.child(self.render_new_thread_button(
-                            ix,
-                            id_prefix,
-                            key,
-                            &group_name,
-                            cx,
-                        ))
-                    })
+                    .child(self.render_new_thread_button(
+                        ix,
+                        id_prefix,
+                        key,
+                        &group_name,
+                        cx,
+                    ))
                     .child(self.render_project_header_ellipsis_menu(
                         ix,
                         id_prefix,
@@ -7475,10 +7473,6 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if workspace_path_list(workspace, cx).paths().is_empty() {
-            return;
-        }
-
         if self.should_create_terminal_for_workspace(workspace, cx) {
             self.create_new_terminal(workspace, window, cx);
         } else {
@@ -7503,10 +7497,6 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if workspace_path_list(workspace, cx).paths().is_empty() {
-            return;
-        }
-
         let Some(multi_workspace) = self.multi_workspace.upgrade() else {
             return;
         };
