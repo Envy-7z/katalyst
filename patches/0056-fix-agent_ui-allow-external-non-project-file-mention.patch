@@ -4,7 +4,7 @@ Date: Mon, 28 Sep 2026 20:44:40 +0700
 Subject: [PATCH 56/60] fix(agent_ui): allow external non-project file mentions
  as Link mentions
 
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 
 ---
  crates/agent_ui/src/mention_set.rs | 3 +++

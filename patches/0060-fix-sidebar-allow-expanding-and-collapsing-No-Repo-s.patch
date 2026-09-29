@@ -4,7 +4,7 @@ Date: Tue, 29 Sep 2026 15:52:31 +0700
 Subject: [PATCH 60/60] fix(sidebar): allow expanding and collapsing No Repo
  section
 
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst Contributors <noreply@katalyst.dev>
 
 ---
  crates/workspace/src/multi_workspace.rs | 6 ++++++
