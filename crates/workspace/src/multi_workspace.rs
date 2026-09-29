@@ -878,6 +878,12 @@ impl MultiWorkspace {
         &mut self,
         key: &ProjectGroupKey,
     ) -> Option<&mut ProjectGroupState> {
+        if !self.project_groups.iter().any(|group| group.key == *key) {
+            self.project_groups.push(ProjectGroupState {
+                key: key.clone(),
+                expanded: true,
+            });
+        }
         self.project_groups
             .iter_mut()
             .find(|group| group.key == *key)
