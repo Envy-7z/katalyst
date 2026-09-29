@@ -1,0 +1,29 @@
+From 1c6eed1724e7966f3543a8c25ca6eef25b555093 Mon Sep 17 00:00:00 2001
+From: Katalyst <release@katalyst.dev>
+Date: Tue, 29 Sep 2026 15:52:31 +0700
+Subject: [PATCH 60/60] fix(sidebar): allow expanding and collapsing No Repo
+ section
+
+From: Wisnuuu <wisnu.andrian@geniebook.com>
+
+---
+ crates/workspace/src/multi_workspace.rs | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/crates/workspace/src/multi_workspace.rs b/crates/workspace/src/multi_workspace.rs
+index acd83f753c..024920188b 100644
+--- a/crates/workspace/src/multi_workspace.rs
++++ b/crates/workspace/src/multi_workspace.rs
+@@ -878,6 +878,12 @@ impl MultiWorkspace {
+         &mut self,
+         key: &ProjectGroupKey,
+     ) -> Option<&mut ProjectGroupState> {
++        if !self.project_groups.iter().any(|group| group.key == *key) {
++            self.project_groups.push(ProjectGroupState {
++                key: key.clone(),
++                expanded: true,
++            });
++        }
+         self.project_groups
+             .iter_mut()
+             .find(|group| group.key == *key)

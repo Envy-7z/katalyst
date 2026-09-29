@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.4] - 2026-09-29
+
+### Added
+- **External File Mentions**: Dragging or pasting non-image files from Finder creates mention pills, including PDFs and other files outside the project.
+- **No Repo Threads**: The No Repo section can create agent threads and select models without an open project.
+
+### Fixed
+- **No Repo Navigation**: Direct No Repo clicks open the agent panel and create a new thread when needed.
+- **No Repo Collapse**: The No Repo section now persists its expanded/collapsed state.
+- **External File Links**: External non-project file mentions are serialized as link mentions.
+
+---
 ## [0.3.3] - 2026-09-25
 
 ### Fixed

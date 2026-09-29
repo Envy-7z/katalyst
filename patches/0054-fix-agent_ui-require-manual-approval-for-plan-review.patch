@@ -1,5 +1,5 @@
 From 91ce1caf9c8f60480dcc701cff27a42c4badbbcd Mon Sep 17 00:00:00 2001
-From: Wisnuuu <wisnu.andrian@geniebook.com>
+From: Katalyst <release@katalyst.dev>
 Date: Fri, 25 Sep 2026 15:54:23 +0700
 Subject: [PATCH 54/54] fix(agent_ui): require manual approval for plan review
  elicitations
