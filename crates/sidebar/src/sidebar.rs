@@ -2918,7 +2918,7 @@ impl Sidebar {
             .map(|mw| mw.read(cx).workspaces_for_project_group(key, cx))
             .unwrap_or_default();
 
-        if open_workspaces.is_empty() {
+        if open_workspaces.is_empty() || key.path_list().is_empty() {
             let key = key.clone();
             return button
                 .tooltip(move |_, cx| {
@@ -2927,7 +2927,9 @@ impl Sidebar {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.set_group_expanded(&key, true, cx);
                     this.selection = None;
-                    if let Some(workspace) = this.workspace_for_group(&key, cx) {
+                    let workspace = this.workspace_for_group(&key, cx)
+                        .or_else(|| if key.path_list().is_empty() { this.active_workspace(cx) } else { None });
+                    if let Some(workspace) = workspace {
                         this.create_new_entry(&workspace, window, cx);
                     } else {
                         this.open_workspace_and_create_entry(
@@ -7511,6 +7513,7 @@ impl Sidebar {
                 panel.activate_new_thread(true, AgentThreadSource::Sidebar, window, cx);
                 panel.active_thread_id(cx)
             });
+            workspace.open_panel::<AgentPanel>(window, cx);
             workspace.focus_panel::<AgentPanel>(window, cx);
             draft_id
         });
