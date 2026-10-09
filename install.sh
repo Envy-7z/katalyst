@@ -223,6 +223,7 @@ fi
 mv "$KATALYST_DATA_HOME.new" "$KATALYST_DATA_HOME"
 DATA_ACTIVATED=1
 printf '%s\n' "$KATALYST_VERSION" > "$KATALYST_DATA_HOME/VERSION"
+printf '%s\n' "$KATALYST_VERSION" > "$KATALYST_DATA_HOME/APP_VERSION"
 
 if [[ -d "$KATALYST_STATE_HOME/.git" ]]; then
   LEGACY_SOURCE_BACKUP="$HOME/.local/share/katalyst-v0.1-source-$(date +%Y%m%d-%H%M%S)"

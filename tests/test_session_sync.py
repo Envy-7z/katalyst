@@ -94,6 +94,23 @@ class SessionSyncTests(unittest.TestCase):
         self.assertEqual(session.title, "Archived Cursor fixture")
         self.assertEqual(session.branches, '["main"]')
 
+    def test_cursor_scan_preserves_embedded_message_times(self) -> None:
+        session_id = "20202020-2020-4020-8020-202020202020"
+        transcript = self.cursor_root / "demo" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        write_jsonl(transcript, [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "<timestamp>Friday, Aug 21, 2026, 6:53 PM (UTC+7)</timestamp>\nFirst question"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "<timestamp>Friday, Aug 21, 2026, 7:04 PM (UTC+7)</timestamp>\nFirst answer"}]}},
+        ])
+
+        sessions = sync.scan_cursor(self.cursor_root, self.home)
+
+        self.assertEqual(sessions[0].timestamp, "2026-08-21T11:53:00Z")
+        self.assertEqual(sessions[0].title, "First question")
+        self.assertEqual([message.timestamp for message in sessions[0].messages], [
+            "2026-08-21T11:53:00Z",
+            "2026-08-21T12:04:00Z",
+        ])
+
     def test_discovery_deduplicates_moved_cursor_transcript_by_newest_copy(self) -> None:
         session_id = "12121212-1212-4121-8121-121212121212"
         older = self.cursor_root / "old-project" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
@@ -338,6 +355,36 @@ class SessionSyncTests(unittest.TestCase):
         updated = sync.load_state(self.state_path)["sessions"][key]
         self.assertEqual(updated["historyProjectionPath"], str(projection))
 
+    def test_malformed_owned_legacy_session_is_preserved_without_fatal_sync(self) -> None:
+        session_id = "45454545-4545-4454-8454-454545454546"
+        transcript = self.cursor_root / "legacy-project" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        write_jsonl(transcript, [{"role": "user", "message": {"content": [{"type": "text", "text": "legacy source"}]}}])
+        sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        state = sync.load_state(self.state_path)
+        key = f"cursor:{session_id}"
+        record = state["sessions"][key]
+        canonical_target = Path(record["targetPath"])
+        legacy_target = self.omp_root / "-legacy-workspace" / canonical_target.name
+        legacy_target.parent.mkdir(parents=True)
+        canonical_target.replace(legacy_target)
+        raw_cursor = transcript.read_bytes()
+        legacy_target.write_bytes(raw_cursor)
+        record["targetPath"] = str(legacy_target)
+        record["ownedByOmp"] = True
+        sync.atomic_write(self.state_path, (json.dumps(state) + "\n").encode())
+
+        result = sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["warnings"], 1)
+        self.assertEqual(result["skipped"], [{
+            "source": "cursor", "sourceId": session_id, "reason": "OMP transcript has no session record"
+        }])
+        self.assertEqual(result["owned_by_omp"], 1)
+        self.assertEqual(legacy_target.read_bytes(), raw_cursor)
+        self.assertFalse(canonical_target.exists())
+        self.assertEqual(sync.load_state(self.state_path)["sessions"][key]["targetPath"], str(legacy_target))
+
     def test_sync_is_idempotent_and_does_not_overwrite_continued_session(self) -> None:
         session_id = "33333333-3333-4333-8333-333333333333"
         transcript = (
@@ -368,6 +415,34 @@ class SessionSyncTests(unittest.TestCase):
 
         self.assertEqual(third["owned_by_omp"], 1)
         self.assertIn("continued", target.read_text())
+
+    def test_old_import_is_rebuilt_once_without_replacing_session_identity(self) -> None:
+        session_id = "33333333-3333-4333-8333-333333333334"
+        transcript = self.cursor_root / "demo" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        write_jsonl(transcript, [{"role": "user", "message": {"content": [{"type": "text", "text": "<timestamp>Friday, Aug 21, 2026, 6:53 PM (UTC+7)</timestamp>\nOriginal"}]}}])
+        sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        state = sync.load_state(self.state_path)
+        record = state["sessions"][f"cursor:{session_id}"]
+        target = Path(record["targetPath"])
+        old_rows = [json.loads(line) for line in target.read_text().splitlines()]
+        next(row for row in old_rows if row["type"] == "session")["timestamp"] = "2026-10-09T17:06:37Z"
+        next(row for row in old_rows if row["type"] == "session")["title"] = "<timestamp>Friday, Aug 21, 2026, 6:53 PM (UTC+7)</timestamp>"
+        next(row for row in old_rows if row["type"] == "message")["message"]["timestamp"] = 1791565597000
+        target.write_text("\n".join(json.dumps(row) for row in old_rows) + "\n")
+        record["targetHash"] = sync.file_hash(target)
+        record["renderVersion"] = 2
+        sync.atomic_write(self.state_path, (json.dumps(state) + "\n").encode())
+
+        rebuilt = sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        unchanged = sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        rows = [json.loads(line) for line in target.read_text().splitlines()]
+
+        self.assertEqual(rebuilt["updated"], 1)
+        self.assertEqual(unchanged["unchanged"], 1)
+        self.assertEqual(next(row for row in rows if row["type"] == "session")["id"], record["targetId"])
+        self.assertEqual(next(row for row in rows if row["type"] == "session")["timestamp"], "2026-08-21T11:53:00Z")
+        self.assertEqual(next(row for row in rows if row["type"] == "session")["title"], "Original")
+        self.assertEqual(next(row for row in rows if row["type"] == "message")["message"]["timestamp"], 1787313180000)
 
     def test_source_update_reuses_stable_target_without_duplication(self) -> None:
         session_id = "88888888-8888-4888-8888-888888888888"

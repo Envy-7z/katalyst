@@ -77,6 +77,8 @@ katalyst-session-sync status --json
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
 
+Cursor transcript messages with embedded `<timestamp>` tags retain their original times; absent timestamps fall back to the source file's modification time. If an OMP-owned legacy transcript lacks a valid session header, sync preserves it, reports its ID under `skipped`, and continues importing other chats. Check `katalyst-session-sync status` for skipped IDs; inspect the original file before deciding whether to repair it manually.
+
 ### v0.3.x Desktop UI & Autonomous Superpowers
 
 Katalyst v0.3.0 introduces developer superpower workflow parity with Cursor and Codex, combined with native GPU-accelerated Rust performance:
@@ -235,6 +237,25 @@ Instead of asking for messy blind edits, prompt the agent to create a plan:
    * Click **`[ ▶ Build Locally ]`**
 4. The agent executes the plan systematically, verifying each checkpoint.
 
+For a one-file fix, work directly in the agent panel; reserve the plan preview for tasks that need a durable checklist or span sessions. Run independent agents in separate Git worktrees, then integrate and verify their changes in one place. The plan panel is not a substitute for tests, a running app check, or reviewing the resulting diff.
+
+### QA handoff (manual)
+
+After verifying the deployed environment, fill in the actual results and send this once through your team's existing channel:
+
+```text
+Ticket and title:
+Deployed branch and commit:
+Environment URL:
+Developer test results (case | action | expected | observed | evidence | pass/fail):
+- Happy path |
+- Error/precondition |
+- Relevant boundary or repeat action |
+Known limitations:
+```
+
+Do not infer test outcomes from a passing build. A Google Chat incoming webhook can post this message to one configured space, but cannot read replies or confirm QA sign-off. Store its URL only in local secret storage; no webhook is bundled, no notification is sent automatically when an agent finishes, and no extra MCP server is required.
+
 ---
 
 ## ⌨️ Essential Keyboard Shortcuts
@@ -387,6 +408,8 @@ To install the latest signed or ad-hoc signed Katalyst release and update OMP:
 ```bash
 katalyst-update
 ```
+
+`katalyst-update` still checks OMP when no newer desktop release is available. Desktop upgrades wait until Katalyst has quit. Installer-managed releases record their version in `~/.local/share/katalyst/APP_VERSION`; older manually built apps without that marker are **not** replaced automatically. Their Info.plist version belongs to upstream Zed, not Katalyst. Verify the app build and use the installer explicitly before assigning a release version to it.
 
 Every morning at 09:00 AM, a gentle macOS notification banner will also let you know if any new updates are available.
 

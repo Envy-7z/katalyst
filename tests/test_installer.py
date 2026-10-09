@@ -1,4 +1,5 @@
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import shutil
@@ -32,12 +33,130 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("brew install --cask zed", result.stdout)
             self.assertFalse((Path(home) / ".katalyst").exists())
 
+    def test_update_does_not_downgrade_runtime_newer_than_latest_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            (data / "VERSION").write_text("0.3.2\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            curl = bin_dir / "curl"
+            curl.write_text('#!/bin/sh\nprintf \'{"tag_name":"v0.3.1"}\\n\'\n')
+            curl.chmod(0o755)
+            omp = bin_dir / "omp"
+            omp.write_text(f'#!/bin/sh\nprintf "omp update invoked\\n" >> "{root / "updates"}"\n')
+            omp.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "bin/katalyst-update")],
+                env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                     "KATALYST_DATA_HOME": str(data), "KATALYST_APPLICATIONS_HOME": str(root / "Applications")},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("newer than latest release", result.stdout)
+            self.assertTrue((root / "updates").exists())
+
+    def test_update_never_replaces_newer_app_when_runtime_version_lags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            (data / "VERSION").write_text("0.3.0\n")
+            (data / "APP_VERSION").write_text("0.3.2\n")
+            app = root / "Applications/Katalyst.app/Contents"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "0.3.2"}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            curl = bin_dir / "curl"
+            curl.write_text('#!/bin/sh\nprintf \'{"tag_name":"v0.3.1"}\\n\'\n')
+            curl.chmod(0o755)
+            omp = bin_dir / "omp"
+            omp.write_text("#!/bin/sh\nexit 0\n")
+            omp.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "bin/katalyst-update")],
+                env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                     "KATALYST_DATA_HOME": str(data), "KATALYST_APPLICATIONS_HOME": str(root / "Applications")},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("installed app 0.3.2", result.stdout)
+            self.assertIn("newer than latest release", result.stdout)
+            self.assertEqual((app / "Info.plist").read_bytes(), plistlib.dumps({"CFBundleShortVersionString": "0.3.2"}))
+
+    def test_update_does_not_guess_app_version_from_zed_bundle_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            (data / "VERSION").write_text("0.3.0\n")
+            app = root / "Applications/Katalyst.app/Contents"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "1.21.0"}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            curl = bin_dir / "curl"
+            curl.write_text('#!/bin/sh\nprintf \'{"tag_name":"v0.3.1"}\\n\'\n')
+            curl.chmod(0o755)
+            omp = bin_dir / "omp"
+            omp.write_text("#!/bin/sh\nexit 0\n")
+            omp.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "bin/katalyst-update")],
+                env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                     "KATALYST_DATA_HOME": str(data), "KATALYST_APPLICATIONS_HOME": str(root / "Applications")},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("app release version unknown", result.stdout)
+            self.assertEqual((data / "VERSION").read_text().strip(), "0.3.0")
+
+    def test_update_defers_app_install_while_editor_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            (data / "VERSION").write_text("0.3.0\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            curl = bin_dir / "curl"
+            curl.write_text(f'#!/bin/sh\nprintf "x\\n" >> "{root / "requests"}"\nprintf \'{{"tag_name":"v0.3.1"}}\\n\'\n')
+            curl.chmod(0o755)
+            pgrep = bin_dir / "pgrep"
+            pgrep.write_text("#!/bin/sh\nexit 0\n")
+            pgrep.chmod(0o755)
+            omp = bin_dir / "omp"
+            omp.write_text("#!/bin/sh\nexit 0\n")
+            omp.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "bin/katalyst-update")],
+                env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                     "KATALYST_DATA_HOME": str(data), "KATALYST_APPLICATIONS_HOME": str(root / "Applications")},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("quit it before installing", result.stdout)
+            self.assertEqual((root / "requests").read_text().splitlines(), ["x"])
+
     def test_installed_session_sync_wrapper_finds_sibling_module(self) -> None:
         with tempfile.TemporaryDirectory() as home:
             install_bin = Path(home) / ".local/bin"
             install_bin.mkdir(parents=True)
             shutil.copy2(ROOT / "bin/katalyst-session-sync", install_bin)
             shutil.copy2(ROOT / "lib/katalyst_session_sync.py", install_bin)
+            stale_lib = install_bin.parent / "lib"
+            stale_lib.mkdir()
+            (stale_lib / "katalyst_session_sync.py").write_text('raise RuntimeError("shadowed by stale importer")\n')
             result = subprocess.run(
                 [str(install_bin / "katalyst-session-sync"), "status", "--json"],
                 env={**os.environ, "HOME": home},
@@ -63,6 +182,40 @@ class InstallerTests(unittest.TestCase):
         installer = (ROOT / "install.sh").read_text()
         self.assertNotIn('rm -rf "$KATALYST_STATE_HOME/skills"\n', installer)
         self.assertIn('ditto "$KATALYST_DATA_HOME/skills" "$KATALYST_STATE_HOME/skills"', installer)
+
+    @unittest.skipUnless(sys.platform == "darwin", "installer integration requires macOS ditto")
+    def test_successful_install_records_app_release_separately_from_zed_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            home.mkdir()
+            payload = root / "payload/Katalyst.app"
+            payload.mkdir(parents=True)
+            (payload / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "1.21.0"}))
+            release = root / "release"
+            release.mkdir()
+            version = (ROOT / "VERSION").read_text().strip()
+            asset = release / f"Katalyst-v{version}-macOS-arm64.zip"
+            subprocess.run(["ditto", "-c", "-k", "--keepParent", str(payload), str(asset)], check=True)
+            checksum = subprocess.check_output(["shasum", "-a", "256", str(asset)], text=True).split()[0]
+            (release / "SHA256SUMS").write_text(f"{checksum}  {asset.name}\n")
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "install.sh")], cwd=ROOT,
+                env={**os.environ, "HOME": str(home), "KATALYST_ARCH": "arm64",
+                     "KATALYST_APPLICATIONS_HOME": str(root / "Applications"),
+                     "KATALYST_RELEASE_BASE": release.as_uri(), "KATALYST_SKIP_LAUNCHCTL": "1"},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            installed_data = home / ".local/share/katalyst"
+            self.assertEqual((installed_data / "VERSION").read_text().strip(), version)
+            self.assertEqual((installed_data / "APP_VERSION").read_text().strip(), version)
+            self.assertEqual(
+                plistlib.loads((root / "Applications/Katalyst.app/Info.plist").read_bytes())["CFBundleShortVersionString"],
+                "1.21.0",
+            )
 
     @unittest.skipUnless(sys.platform == "darwin", "installer integration requires macOS ditto")
     def test_v01_late_upgrade_failure_restores_all_user_state(self) -> None:
