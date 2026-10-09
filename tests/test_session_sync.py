@@ -270,19 +270,17 @@ class SessionSyncTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("omp"), "OMP is not installed")
     def test_imported_session_lists_and_loads_over_omp_acp(self) -> None:
-        cwd = self.home / "project"
-        cwd.mkdir()
-        target_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-        session = sync.ImportedSession(
-            "codex", "id", Path("/tmp/source"), str(cwd), "ACP imported fixture",
-            "2026-09-11T00:00:00Z", "2026-09-11T00:00:00Z", False,
-            [sync.ImportedMessage("user", "hello ACP", "2026-09-11T00:00:00Z")], "hash",
-        )
+        source_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        transcript = self.cursor_root / "project" / "agent-transcripts" / source_id / f"{source_id}.jsonl"
+        write_jsonl(transcript, [{"role": "user", "timestamp": "2026-09-11T00:00:00Z",
+                                 "message": {"content": [{"type": "text", "text": "hello ACP"}]}}])
+        result = sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        self.assertEqual(result["imported"], 1)
+        record = sync.load_state(self.state_path)["sessions"][f"cursor:{source_id}"]
+        target_id = record["targetId"]
+        target = Path(record["targetPath"])
         history = self.home / ".katalyst" / "history"
-        target = self.omp_root / sync.omp_bucket(str(history), self.home) / f"2026-09-11T00-00-00Z_{target_id}.jsonl"
-        target.parent.mkdir(parents=True)
         history.mkdir(parents=True)
-        target.write_bytes(sync.render_omp_session(session, target_id, str(history)))
         rows = [json.loads(line) for line in target.read_text().splitlines()]
         self.assertEqual(next(row for row in rows if row.get("type") == "session")["cwd"], str(history))
         process = subprocess.Popen(
@@ -308,6 +306,7 @@ class SessionSyncTests(unittest.TestCase):
             request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
             listed = request(2, "session/list", {"cwd": str(history)})
             self.assertEqual(listed["result"]["sessions"][0]["sessionId"], target_id)
+            self.assertEqual(sync.iso_timestamp(listed["result"]["sessions"][0]["updatedAt"]), "2026-09-11T00:00:00Z")
             loaded = request(3, "session/load", {"sessionId": target_id, "cwd": str(history), "mcpServers": []})
             self.assertIn("configOptions", loaded["result"])
         finally:
@@ -338,6 +337,8 @@ class SessionSyncTests(unittest.TestCase):
                 rows[index] = json.dumps(row, separators=(",", ":"))
                 break
         legacy_target.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        historical_time = 1787313180
+        os.utime(legacy_target, (historical_time, historical_time))
         record["targetHash"] = sync.file_hash(legacy_target)
         record["ownedByOmp"] = True
         record.pop("runtimeCwd", None)
@@ -350,10 +351,23 @@ class SessionSyncTests(unittest.TestCase):
         self.assertEqual(result["owned_by_omp"], 1)
         self.assertEqual(legacy_target.read_text(encoding="utf-8").count("/legacy/workspace"), 1)
         self.assertTrue(projection.is_file())
+        self.assertEqual(projection.stat().st_mtime, historical_time)
         projection_rows = [json.loads(line) for line in projection.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(next(row for row in projection_rows if row.get("type") == "session")["cwd"], str(history))
         updated = sync.load_state(self.state_path)["sessions"][key]
         self.assertEqual(updated["historyProjectionPath"], str(projection))
+        with projection.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "custom", "id": "user-continued", "parentId": None,
+                                     "timestamp": "2026-09-11T00:00:00Z", "customType": "continued"}) + "\n")
+        continued = projection.read_bytes()
+        with legacy_target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "custom", "id": "legacy-continued", "parentId": None,
+                                     "timestamp": "2026-09-12T00:00:00Z", "customType": "continued"}) + "\n")
+        repeated = sync.run_sync(["cursor"], self.home, self.cursor_root, self.codex_root, self.omp_root, self.state_path)
+        self.assertEqual(repeated["failed"], 0)
+        self.assertEqual(projection.read_bytes(), continued)
+        self.assertEqual(repeated["skipped"][0]["reason"], "history projection continued in OMP")
+
 
     def test_malformed_owned_legacy_session_is_preserved_without_fatal_sync(self) -> None:
         session_id = "45454545-4545-4454-8454-454545454546"

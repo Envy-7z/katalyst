@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Cursor imports retain embedded per-message timestamps and refresh older importer-owned copies without changing session IDs or touching OMP-owned transcripts.
+- Imported session files and safe legacy history projections retain their original last-activity modification time so OMP ACP sorts the sidebar chronologically; continued projections are never overwritten.
 - Malformed OMP-owned legacy transcripts remain untouched and appear as skipped warnings instead of failing the periodic sync job.
 - Installed sync wrappers prefer their sibling importer module over a stale legacy `.local/lib` copy.
 - Privacy auditing ignores the isolated worktree's `.git` pointer. The updater never replaces an app while it is running or when its Katalyst release version is unknown/newer; installers record that version separately from Zed's bundle version.

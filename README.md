@@ -77,7 +77,7 @@ katalyst-session-sync status --json
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
 
-Cursor transcript messages with embedded `<timestamp>` tags retain their original times; absent timestamps fall back to the source file's modification time. If an OMP-owned legacy transcript lacks a valid session header, sync preserves it, reports its ID under `skipped`, and continues importing other chats. Check `katalyst-session-sync status` for skipped IDs; inspect the original file before deciding whether to repair it manually.
+Cursor transcript messages with embedded `<timestamp>` tags retain their original times; absent timestamps fall back to the source file's modification time. Imported files also retain the source conversation's last-activity time as their file modification time, which OMP ACP uses to sort the history sidebar. Legacy history projections use the OMP-owned original's modification time; sync leaves a projection untouched if it has since been continued in OMP. If an OMP-owned legacy transcript lacks a valid session header, sync preserves it, reports its ID under `skipped`, and continues importing other chats. Check `katalyst-session-sync status` for skipped IDs; inspect the original file before deciding whether to repair it manually.
 
 ### v0.3.x Desktop UI & Autonomous Superpowers
 

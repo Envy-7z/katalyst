@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 SESSION_NAMESPACE = uuid.UUID("b82684c4-41de-4bc0-a9ec-66bd09f55454")
 PROVENANCE_TYPE = "dev.katalyst.foreign-session"
-RENDER_VERSION = 3
+RENDER_VERSION = 4
 
 
 @dataclasses.dataclass
@@ -539,12 +539,14 @@ def load_state(path: Path) -> dict[str, Any]:
     return {"version": 1, "sessions": {}}
 
 
-def atomic_write(path: Path, content: bytes) -> None:
+def atomic_write(path: Path, content: bytes, mtime: float | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
+        if mtime is not None:
+            os.utime(temp_name, (mtime, mtime))
         os.replace(temp_name, path)
     finally:
         if os.path.exists(temp_name):
@@ -686,15 +688,27 @@ def _run_sync(
                     try:
                         projection = render_history_projection(recorded_target, runtime_cwd)
                         projection_hash = hashlib.sha256(projection).hexdigest()
-                        if record.get("historyProjectionHash") == projection_hash and canonical_target.is_file():
+                        if canonical_target.is_file() and record.get("historyProjectionHash") != file_hash(canonical_target):
+                            counters["warnings"] += 1
+                            counters["skipped"].append(
+                                {"source": session.source, "sourceId": session.source_id,
+                                 "reason": "history projection continued in OMP"}
+                            )
+                            continue
+                        if (
+                            record.get("historyProjectionHash") == projection_hash
+                            and record.get("historyProjectionMtimeVersion") == 1
+                            and canonical_target.is_file()
+                        ):
                             counters["unchanged"] += 1
                         elif dry_run:
                             counters["would_update"] += 1
                         else:
-                            atomic_write(canonical_target, projection)
+                            atomic_write(canonical_target, projection, mtime=recorded_target.stat().st_mtime)
                             record["historyProjectionPath"] = str(canonical_target)
                             record["historyProjectionHash"] = projection_hash
                             record["historyProjectionRuntimeCwd"] = runtime_cwd
+                            record["historyProjectionMtimeVersion"] = 1
                             state["sessions"][key] = record
                             counters["updated"] += 1
                     except ValueError as error:
@@ -711,16 +725,12 @@ def _run_sync(
                 # A clean legacy import is migrated to the canonical history
                 # location. Its original file remains untouched as a backup.
                 target = canonical_target
-                needs_timestamp_refresh = (
-                    session.source == "cursor"
-                    and record.get("renderVersion") != RENDER_VERSION
-                    and any(cursor_embedded_timestamp(message.text) for message in session.messages)
-                )
+                needs_metadata_refresh = record.get("renderVersion") != RENDER_VERSION
                 if (
                     target == recorded_target
                     and record.get("sourceHash") == session.source_hash
                     and record.get("runtimeCwd") == runtime_cwd
-                    and not needs_timestamp_refresh
+                    and not needs_metadata_refresh
                 ):
                     counters["unchanged"] += 1
                     continue
@@ -750,7 +760,10 @@ def _run_sync(
             counters["would_update" if record else "would_import"] += 1
             continue
         try:
-            atomic_write(target, content)
+            atomic_write(
+                target, content,
+                mtime=dt.datetime.fromisoformat(session.updated_at.replace("Z", "+00:00")).timestamp(),
+            )
             state["sessions"][key] = {
                 "source": session.source,
                 "sourceId": session.source_id,
