@@ -13,7 +13,7 @@ ERRORS=0
 
 # 1. Hardcoded /Users/ or /home/ local paths
 echo -n "Checking for hardcoded local user paths (/Users/ or /home/)... "
-LOCAL_PATHS="$(grep -rEn --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "(/(Users|home)/[a-zA-Z0-9_-]+)" . 2>/dev/null | grep -v "/api/users/" || true)"
+LOCAL_PATHS="$(grep -rEn --exclude=".git" --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "(/(Users|home)/[a-zA-Z0-9_-]+)" . 2>/dev/null | grep -v "/api/users/" || true)"
 if [[ -n "$LOCAL_PATHS" ]]; then
   echo "FAILED!"
   echo "$LOCAL_PATHS"
@@ -25,7 +25,7 @@ fi
 # 2. Private Auth Tokens and Secret Keys
 echo -n "Checking for secret API keys, auth tokens, and personal profile identifiers... "
 TOKEN_PATTERNS="(ghp_[a-zA-Z0-9]{20,}|glpat-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk-[a-zA-Z0-9_-]{20,}|AIzaSy[a-zA-Z0-9_-]{33}|xoxb-[a-zA-Z0-9-]+|BEGIN[A-Z ]*PRIVATE KEY|[a-zA-Z0-9._%+-]+@(gmail|yahoo|hotmail|corp)\.[a-zA-Z]{2,})"
-MATCHES_TOKENS="$(grep -rEn --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$TOKEN_PATTERNS" . 2>/dev/null || true)"
+MATCHES_TOKENS="$(grep -rEn --exclude=".git" --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$TOKEN_PATTERNS" . 2>/dev/null || true)"
 if [[ -n "$MATCHES_TOKENS" ]]; then
   echo "FAILED!"
   echo "$MATCHES_TOKENS"
@@ -37,7 +37,7 @@ fi
 # 3. Custom Private Keywords (optional via env var)
 if [[ -n "${KATALYST_AUDIT_KEYWORDS:-}" ]]; then
   echo -n "Checking custom private keywords ($KATALYST_AUDIT_KEYWORDS)... "
-  MATCHES_CUSTOM="$(grep -rEni --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$KATALYST_AUDIT_KEYWORDS" . 2>/dev/null || true)"
+  MATCHES_CUSTOM="$(grep -rEni --exclude=".git" --exclude-dir=".git" --exclude-dir="__pycache__" --exclude="audit-privacy.sh" "$KATALYST_AUDIT_KEYWORDS" . 2>/dev/null || true)"
   if [[ -n "$MATCHES_CUSTOM" ]]; then
     echo "FAILED!"
     echo "$MATCHES_CUSTOM"

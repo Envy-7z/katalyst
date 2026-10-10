@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.5] - 2026-10-10
+
+### Fixed
+- Imported Cursor and Codex chats preserve historical activity times and original assistant attribution; configured OMP models can resume imported chats without rewriting sessions already continued in OMP.
+- The installer preserves existing OMP ACP settings, including its server command, model, and credential environment. Sync wrappers load their installed importer module, and the updater leaves running or newer applications untouched.
+- Backported Zed's fixes for pending Vim input on read-only buffers and empty-sided merge-conflict row highlights.
+- The About window and macOS bundle report the Katalyst release version rather than the pinned Zed source version.
+
+---
+
 ## [0.3.4] - 2026-09-29
 
 ### Added

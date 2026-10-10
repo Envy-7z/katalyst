@@ -1,0 +1,311 @@
+From 3f9ddf1befabb4d89361d9ff4896a5491c10e906 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Tue, 22 Sep 2026 14:25:51 +0000
+Subject: [PATCH] editor: Fix crash when a row highlight's anchors are reversed
+ (#64604)
+
+# Objective
+
+Fixes ZED-BJQ (`slice index starts at N but ends at N-1` in
+`Editor::highlighted_display_rows_in_range`).
+
+Since #63395, rendering only looks at the row highlights that intersect
+the viewport, found with two binary searches over the stored ranges. If
+a stored range has `start > end`, the two searches can cross and we
+panic.
+
+That happens with merge conflicts where one side is empty (one branch
+deleted the block). The conflict parser built every side as
+`anchor_after(start)..anchor_before(end)`, so an empty side became a
+zero-width range whose start sorts after its end. When you type your
+resolution at that spot, the start anchor moves past the new text while
+the end stays put, and until the conflict set re-parses the highlight is
+inside out. If the viewport lands inside the typed text on that frame,
+Zed crashes.
+
+## Solution
+
+We now search for the start index only within the prefix that ends at
+the end index, so an inverted range can never produce an inverted slice;
+the existing per-highlight filter drops it. The parser also emits empty
+sides as `anchor_before..anchor_after`, so they stay ordered and grow
+around text typed into them, which also means the typed lines get the
+"ours"/"theirs" color immediately instead of after the re-parse.
+
+## Testing
+
+- `test_row_highlights_for_empty_conflict_side_after_edit` parses an
+empty-side conflict, stores its highlight plus a hand-built inside-out
+range, types into the empty side, and renders every viewport. It panics
+without the editor change.
+- `test_parse_conflicts_with_empty_sides` checks the parser emits
+ordered ranges for empty sides and that typed text lands inside them.
+- To reproduce manually on `main`: open a file with a conflict whose
+`ours` side is empty, put the cursor at the start of the `=======` line,
+paste more lines than fit on screen, then scroll so only the pasted text
+is visible before the conflict re-parses (easiest with a nonzero
+`git.gutter_debounce`).
+
+## Self-Review Checklist:
+
+- [x] I've reviewed my own diff for quality, security, and reliability
+- [x] Unsafe blocks (if any) have justifying comments
+- [x] The content adheres to Zed's UI standards
+([UX/UI](https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#uiux-checklist)
+and
+[icon](https://github.com/zed-industries/zed/blob/main/crates/icons/README.md)
+guidelines)
+- [x] Tests cover the new/changed behavior
+- [x] Performance impact has been considered and is acceptable
+
+Release Notes:
+
+- Fixed a crash when typing into an empty side of a merge conflict.
+
+(cherry picked from commit a982949071beaa4ad5464bf7f9a8e7db66400e95)
+---
+ crates/editor/src/editor.rs                   |  17 +--
+ crates/editor/src/editor_tests.rs             | 102 ++++++++++++++++++
+ crates/project/src/git_store/conflict_set.rs  |  20 ++--
+ crates/project/tests/integration/git_store.rs |  38 +++++++
+ 4 files changed, 164 insertions(+), 13 deletions(-)
+
+diff --git a/crates/editor/src/editor.rs b/crates/editor/src/editor.rs
+index f001d24b..dff72266 100644
+--- a/crates/editor/src/editor.rs
++++ b/crates/editor/src/editor.rs
+@@ -9329,13 +9329,6 @@ impl Editor {
+         self.highlighted_rows
+             .values()
+             .flat_map(|highlighted_rows| {
+-                let start_index = highlighted_rows.partition_point(|highlight| {
+-                    highlight
+-                        .range
+-                        .end
+-                        .cmp(&anchor_range.start, buffer_snapshot)
+-                        .is_lt()
+-                });
+                 let end_index = highlighted_rows.partition_point(|highlight| {
+                     highlight
+                         .range
+@@ -9343,6 +9336,16 @@ impl Editor {
+                         .cmp(&anchor_range.end, buffer_snapshot)
+                         .is_le()
+                 });
++                // Search within `..end_index` so a highlight whose anchors
++                // have drifted to `start > end` can't produce an inverted
++                // slice; the filter below drops it either way.
++                let start_index = highlighted_rows[..end_index].partition_point(|highlight| {
++                    highlight
++                        .range
++                        .end
++                        .cmp(&anchor_range.start, buffer_snapshot)
++                        .is_lt()
++                });
+                 highlighted_rows[start_index..end_index]
+                     .iter()
+                     .filter(|highlight| {
+diff --git a/crates/editor/src/editor_tests.rs b/crates/editor/src/editor_tests.rs
+index f3b165be..fff9afad 100644
+--- a/crates/editor/src/editor_tests.rs
++++ b/crates/editor/src/editor_tests.rs
+@@ -28647,6 +28647,108 @@ async fn test_diff_base_change_with_expanded_diff_hunks(
+     );
+ }
+ 
++#[gpui::test]
++async fn test_row_highlights_for_empty_conflict_side_after_edit(
++    executor: BackgroundExecutor,
++    cx: &mut TestAppContext,
++) {
++    struct ReversedHighlight;
++
++    init_test(cx, |_| {});
++    let mut cx = EditorTestContext::new(cx).await;
++
++    cx.set_state(
++        &r#"
++            ˇ<<<<<<< HEAD
++            =======
++            theirs
++            >>>>>>> branch
++            after
++        "#
++        .unindent(),
++    );
++    executor.run_until_parked();
++
++    // Mirrors what `git_ui::conflict_view::update_conflict_highlighting` does
++    // with the ranges produced by the conflict parser, and additionally
++    // stores the inside-out range that empty sides used to produce.
++    cx.update_editor(|editor, _, cx| {
++        let buffer = editor.buffer().read(cx).as_singleton().unwrap();
++        let conflicts = project::ConflictSet::parse(&buffer.read(cx).text_snapshot());
++        assert_eq!(conflicts.conflicts.len(), 1);
++        let conflict = &conflicts.conflicts[0];
++        let snapshot = editor.buffer().read(cx).snapshot(cx);
++        let ours = snapshot
++            .buffer_anchor_range_to_anchor_range(conflict.ours.clone())
++            .unwrap();
++        assert!(ours.start.cmp(&ours.end, &snapshot).is_le());
++        editor.highlight_rows::<ConflictsOurs>(
++            ours,
++            |cx| cx.theme().colors().version_control_conflict_marker_ours,
++            RowHighlightOptions {
++                include_gutter: true,
++                ..Default::default()
++            },
++            cx,
++        );
++
++        let marker_start = Point::new(1, 0);
++        editor.highlight_rows::<ReversedHighlight>(
++            snapshot.anchor_after(marker_start)..snapshot.anchor_before(marker_start),
++            |cx| cx.theme().colors().editor_highlighted_line_background,
++            RowHighlightOptions::default(),
++            cx,
++        );
++    });
++
++    // The user types a resolution into the empty "ours" side, on the line
++    // where the `=======` marker currently sits.
++    cx.update_editor(|editor, window, cx| {
++        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
++            selections.select_ranges([Point::new(1, 0)..Point::new(1, 0)]);
++        });
++        editor.handle_input("one\ntwo\nthree\nfour\nfive\nsix\n", window, cx);
++    });
++
++    // Render every possible viewport, the same way `EditorElement::prepaint`
++    // does, before the conflict set has been re-parsed. The typed rows carry
++    // the "ours" highlight; the inside-out range never contributes.
++    cx.update_editor(|editor, window, cx| {
++        let snapshot = editor.snapshot(window, cx).display_snapshot;
++        let ours_type_id = Some(TypeId::of::<ConflictsOurs>());
++        for start_row in 0..snapshot.max_point().row().0 {
++            for end_row in start_row + 1..=snapshot.max_point().row().0 {
++                let start = snapshot
++                    .buffer_snapshot()
++                    .anchor_before(Point::new(start_row, 0));
++                let end = snapshot
++                    .buffer_snapshot()
++                    .anchor_before(Point::new(end_row, 0));
++                let highlighted_rows = editor.highlighted_display_rows_in_range(
++                    start..end,
++                    DisplayRow(start_row)..DisplayRow(end_row),
++                    &snapshot,
++                    cx,
++                );
++                let expected_rows = (start_row.max(1)..end_row.min(7))
++                    .map(DisplayRow)
++                    .collect::<Vec<_>>();
++                assert_eq!(
++                    highlighted_rows.keys().copied().collect::<Vec<_>>(),
++                    expected_rows,
++                    "viewport {start_row}..{end_row}"
++                );
++                assert!(
++                    highlighted_rows
++                        .values()
++                        .all(|highlight| highlight.type_id == ours_type_id),
++                    "viewport {start_row}..{end_row}"
++                );
++            }
++        }
++    });
++}
++
+ #[gpui::test]
+ async fn test_go_to_singleton_buffer_point_with_expanded_deleted_hunks(
+     executor: BackgroundExecutor,
+diff --git a/crates/project/src/git_store/conflict_set.rs b/crates/project/src/git_store/conflict_set.rs
+index 5647e7f3..9b81cc70 100644
+--- a/crates/project/src/git_store/conflict_set.rs
++++ b/crates/project/src/git_store/conflict_set.rs
+@@ -90,6 +90,17 @@ impl ConflictSetSnapshot {
+     }
+ }
+ 
++/// Anchors for one side of a conflict. A non-empty side excludes text typed at
++/// its boundaries, while an empty side must be ordered (`start <= end`) and
++/// grow around text typed into it, so its anchors use the opposite biases.
++fn side_range(buffer: &text::BufferSnapshot, start: usize, end: usize) -> Range<Anchor> {
++    if start == end {
++        buffer.anchor_before(start)..buffer.anchor_after(end)
++    } else {
++        buffer.anchor_after(start)..buffer.anchor_before(end)
++    }
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct ConflictRegion {
+     pub ours_branch_name: SharedString,
+@@ -233,14 +244,11 @@ impl ConflictSet {
+ 
+                 let range = buffer.anchor_after(conflict_start.unwrap())
+                     ..buffer.anchor_before(conflict_end);
+-                let ours = buffer.anchor_after(ours_start.unwrap())
+-                    ..buffer.anchor_before(ours_end.unwrap());
+-                let theirs =
+-                    buffer.anchor_after(theirs_start.unwrap())..buffer.anchor_before(theirs_end);
+-
++                let ours = side_range(buffer, ours_start.unwrap(), ours_end.unwrap());
++                let theirs = side_range(buffer, theirs_start.unwrap(), theirs_end);
+                 let base = base_start
+                     .zip(base_end)
+-                    .map(|(start, end)| buffer.anchor_after(start)..buffer.anchor_before(end));
++                    .map(|(start, end)| side_range(buffer, start, end));
+ 
+                 conflicts.push(ConflictRegion {
+                     ours_branch_name: ours_branch_name
+diff --git a/crates/project/tests/integration/git_store.rs b/crates/project/tests/integration/git_store.rs
+index 450c6c3d..ac54aee1 100644
+--- a/crates/project/tests/integration/git_store.rs
++++ b/crates/project/tests/integration/git_store.rs
+@@ -98,6 +98,44 @@ mod conflict_set_tests {
+         assert_eq!(conflicts_in_range.len(), 0);
+     }
+ 
++    #[test]
++    fn test_parse_conflicts_with_empty_sides() {
++        let test_content = r#"
++            <<<<<<< HEAD
++            =======
++            their version
++            >>>>>>> branch
++            <<<<<<< HEAD
++            our version
++            =======
++            >>>>>>> branch
++        "#
++        .unindent();
++
++        let mut buffer = Buffer::new(ReplicaId::LOCAL, BufferId::new(1).unwrap(), test_content);
++        let conflict_snapshot = ConflictSet::parse(&buffer.snapshot());
++        assert_eq!(conflict_snapshot.conflicts.len(), 2);
++
++        for conflict in conflict_snapshot.conflicts.iter() {
++            for side in [&conflict.ours, &conflict.theirs] {
++                assert!(side.start.cmp(&side.end, &buffer).is_le(), "{side:?}");
++            }
++        }
++        assert_eq!(
++            conflict_snapshot.conflicts[0].ours.to_point(&buffer),
++            Point::new(1, 0)..Point::new(1, 0)
++        );
++        assert_eq!(
++            conflict_snapshot.conflicts[1].theirs.to_point(&buffer),
++            Point::new(7, 0)..Point::new(7, 0)
++        );
++
++        // Text typed into an empty side becomes part of that side.
++        let ours = conflict_snapshot.conflicts[0].ours.clone();
++        buffer.edit([(Point::new(1, 0)..Point::new(1, 0), "resolution\n")]);
++        assert_eq!(ours.to_point(&buffer), Point::new(1, 0)..Point::new(2, 0));
++    }
++
+     #[test]
+     fn test_nested_conflict_markers() {
+         // Create a buffer with nested conflict markers
+-- 
+2.50.1 (Apple Git-155)

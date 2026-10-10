@@ -223,6 +223,7 @@ fi
 mv "$KATALYST_DATA_HOME.new" "$KATALYST_DATA_HOME"
 DATA_ACTIVATED=1
 printf '%s\n' "$KATALYST_VERSION" > "$KATALYST_DATA_HOME/VERSION"
+printf '%s\n' "$KATALYST_VERSION" > "$KATALYST_DATA_HOME/APP_VERSION"
 
 if [[ -d "$KATALYST_STATE_HOME/.git" ]]; then
   LEGACY_SOURCE_BACKUP="$HOME/.local/share/katalyst-v0.1-source-$(date +%Y%m%d-%H%M%S)"
@@ -255,7 +256,7 @@ if destination.is_symlink() or destination.exists():
     destination.unlink()
 destination.parent.mkdir(parents=True, exist_ok=True)
 current.setdefault("agent", {}).setdefault("dock", "left")
-current.setdefault("agent_servers", {})["omp"] = defaults["agent_servers"]["omp"]
+current.setdefault("agent_servers", {}).setdefault("omp", defaults["agent_servers"]["omp"])
 destination.write_text(json.dumps(current, indent=2) + "\n")
 PY
 

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example v0.2.0)"
+        description: "Release tag (for example v0.3.5)"
         required: true
 
 permissions:
@@ -44,7 +44,7 @@ jobs:
       - name: Resolve release version
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          [[ "${{ github.event_name }}" == "pull_request" ]] && TAG=v0.2.0
+          [[ "${{ github.event_name }}" == "pull_request" ]] && TAG="v$(cat VERSION)"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
           echo "RELEASE_ARCH=${{ matrix.release_arch }}" >> "$GITHUB_ENV"
       - name: Check out pinned Zed and apply Katalyst patches
@@ -56,7 +56,7 @@ jobs:
         run: brew install cmake protobuf
       - name: Build macOS application bundle
         working-directory: zed
-        run: script/bundle-mac "${{ matrix.target }}"
+        run: TERM=ansi script/bundle-mac "${{ matrix.target }}"
       - name: Brand, sign, and package Katalyst
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -75,6 +75,7 @@ jobs:
           plutil -replace CFBundleName -string Katalyst "$PLIST"
           plutil -replace CFBundleIdentifier -string dev.katalyst.Katalyst "$PLIST"
           plutil -replace CFBundleIconFile -string Katalyst.icns "$PLIST"
+          plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
           cp assets/Katalyst.icns package/Katalyst.app/Contents/Resources/Katalyst.icns
           rm -f package/Katalyst.app/Contents/embedded.provisionprofile
           cp zed/crates/zed/resources/zed.entitlements package/Katalyst.entitlements
