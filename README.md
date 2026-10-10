@@ -77,6 +77,8 @@ katalyst-session-sync status --json
 
 The installer runs the first import and registers a macOS LaunchAgent that watches Cursor and Codex session directories, with a five-minute fallback interval. Import state and provenance live at `~/.katalyst/imports/session-sync.json`.
 
+To resume an imported chat containing assistant replies, configure a default model in Katalyst's OMP agent server options. The configured model is used only for continuing the chat; historical Cursor/Codex attribution remains unchanged. Without that model, OMP can list a chat but may reject `session/load` because `cursor/imported` is not a runnable model. Imported files retain the source conversation's last-activity time for chronological ordering in the OMP sidebar. Sync does not overwrite chats continued in OMP.
+
 ### v0.3.x Desktop UI & Autonomous Superpowers
 
 Katalyst v0.3.0 introduces developer superpower workflow parity with Cursor and Codex, combined with native GPU-accelerated Rust performance:

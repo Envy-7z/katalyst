@@ -5,7 +5,7 @@ import sys
 script = Path(__file__).resolve()
 repository_lib = script.parents[1] / "lib"
 installed_lib = script.parent
-module_dir = repository_lib if (repository_lib / "katalyst_session_sync.py").is_file() else installed_lib
+module_dir = installed_lib if (installed_lib / "katalyst_session_sync.py").is_file() else repository_lib
 sys.path.insert(0, str(module_dir))
 from katalyst_session_sync import main
 

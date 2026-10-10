@@ -1,0 +1,193 @@
+From 6881d3eccb7f3307e9dfbf0589b1fccbbdd55151 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Mon, 28 Sep 2026 13:24:52 +0000
+Subject: [PATCH] editor: Fix panic when showing pending input in a read-only
+ buffer (#64730)
+
+# Objective
+
+Fixes ZED-BTA, ZED-8MC, ZED-875 and ZED-80K. Fixes FR-489.
+
+When you have a binding like `j k`, Zed shows the `j` underlined while
+it waits for the next key. We figured out where that `j` went by
+assuming it was always inserted. In a read-only buffer it isn't, so with
+the cursor at the end of the file we ended up pointing one character
+past the end and crashed.
+
+## Solution
+
+We now take anchors at each cursor before inserting and read the
+positions back from them afterwards, so we only highlight text that
+actually made it into the buffer. This also covers other cases where the
+insert gets dropped, like a read-only file inside project search. Also
+removed the editor's own read-only check there, since it's no longer
+needed.
+
+## Testing
+
+- `test_jk_pending_input_at_end_of_read_only_buffer` covers this and
+panics without the fix.
+- To reproduce on `main`: bind `"j k": "editor::Cancel"` in the `Editor`
+context, put the cursor at the end of a file, run *workspace: toggle
+read only file*, and press `j`.
+
+## Self-Review Checklist:
+
+- [x] I've reviewed my own diff for quality, security, and reliability
+- [x] Unsafe blocks (if any) have justifying comments
+- [x] The content adheres to Zed's UI standards
+([UX/UI](https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#uiux-checklist)
+and
+[icon](https://github.com/zed-industries/zed/blob/main/crates/icons/README.md)
+guidelines)
+- [x] Tests cover the new/changed behavior
+- [x] Performance impact has been considered and is acceptable
+
+Release Notes:
+
+- Fixed a crash when typing the start of a multi-key binding at the end
+of a read-only file.
+
+(cherry picked from commit 5becf8b5910fd538ccc5489e8edd3fde32917fad)
+---
+ crates/editor/src/input.rs | 73 +++++++++++++++++++++-----------------
+ crates/vim/src/test.rs     | 26 ++++++++++++++
+ 2 files changed, 66 insertions(+), 33 deletions(-)
+
+diff --git a/crates/editor/src/input.rs b/crates/editor/src/input.rs
+index 9524382b..70030379 100644
+--- a/crates/editor/src/input.rs
++++ b/crates/editor/src/input.rs
+@@ -1804,7 +1804,7 @@ impl Editor {
+             .filter_map(|keystroke| keystroke.key_char.clone())
+             .collect();
+ 
+-        if !self.input_enabled || self.read_only || !self.focus_handle.is_focused(window) {
++        if !self.input_enabled || !self.focus_handle.is_focused(window) {
+             pending = "".to_string();
+         }
+ 
+@@ -1814,45 +1814,52 @@ impl Editor {
+         if existing_pending.is_none() && pending.is_empty() {
+             return;
+         }
+-        let transaction =
+-            self.transact(window, cx, |this, window, cx| {
+-                let selections = this
+-                    .selections
+-                    .all::<MultiBufferOffset>(&this.display_snapshot(cx));
+-                let edits = selections
+-                    .iter()
+-                    .map(|selection| (selection.end..selection.end, pending.clone()));
+-                this.edit(edits, cx);
+-                this.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+-                    s.select_ranges(selections.into_iter().enumerate().map(|(ix, sel)| {
+-                        sel.start + ix * pending.len()..sel.end + ix * pending.len()
+-                    }));
+-                });
+-                if let Some(existing_ranges) = existing_pending {
+-                    let edits = existing_ranges.iter().map(|range| (range.clone(), ""));
+-                    this.edit(edits, cx);
+-                }
+-            });
++        let mut inserted_ranges = Vec::new();
++        let transaction = self.transact(window, cx, |this, window, cx| {
++            let selections = this
++                .selections
++                .all::<MultiBufferOffset>(&this.display_snapshot(cx));
++            let buffer = this.buffer.read(cx).snapshot(cx);
++            let selection_ranges = selections
++                .iter()
++                .map(|selection| {
++                    buffer.anchor_before(selection.start)..buffer.anchor_before(selection.end)
++                })
++                .collect::<Vec<_>>();
++            inserted_ranges = selections
++                .iter()
++                .map(|selection| {
++                    buffer.anchor_before(selection.end)..buffer.anchor_after(selection.end)
++                })
++                .collect();
+ 
+-        let snapshot = self.snapshot(window, cx);
+-        let ranges = self
+-            .selections
+-            .all::<MultiBufferOffset>(&snapshot.display_snapshot)
+-            .into_iter()
+-            .map(|selection| {
+-                snapshot.buffer_snapshot().anchor_after(selection.end)
+-                    ..snapshot
+-                        .buffer_snapshot()
+-                        .anchor_before(selection.end + pending.len())
+-            })
+-            .collect();
++            let edits = selections
++                .iter()
++                .map(|selection| (selection.end..selection.end, pending.clone()));
++            this.edit(edits, cx);
++            this.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
++                s.select_anchor_ranges(selection_ranges);
++            });
++            if let Some(existing_ranges) = existing_pending {
++                let edits = existing_ranges.iter().map(|range| (range.clone(), ""));
++                this.edit(edits, cx);
++            }
++        });
+ 
+         if pending.is_empty() {
+             self.clear_highlights(HighlightKey::PendingInput, cx);
+         } else {
++            let buffer = self.buffer.read(cx).snapshot(cx);
++            let pending_ranges = inserted_ranges
++                .iter()
++                .map(|range| {
++                    let range = range.to_offset(&buffer);
++                    buffer.anchor_after(range.start)..buffer.anchor_before(range.end)
++                })
++                .collect();
+             self.highlight_text(
+                 HighlightKey::PendingInput,
+-                ranges,
++                pending_ranges,
+                 HighlightStyle {
+                     underline: Some(UnderlineStyle {
+                         thickness: px(1.),
+diff --git a/crates/vim/src/test.rs b/crates/vim/src/test.rs
+index f1b2a75d..811c50f4 100644
+--- a/crates/vim/src/test.rs
++++ b/crates/vim/src/test.rs
+@@ -1200,6 +1200,32 @@ async fn test_jk_multi(cx: &mut gpui::TestAppContext) {
+     cx.assert_state("jkˇoone jkˇoone jkˇoone", Mode::Normal);
+ }
+ 
++#[gpui::test]
++async fn test_jk_pending_input_at_end_of_read_only_buffer(cx: &mut gpui::TestAppContext) {
++    let mut cx = VimTestContext::new(cx, true).await;
++
++    cx.update(|_, cx| {
++        cx.bind_keys([KeyBinding::new(
++            "j k",
++            NormalBefore,
++            Some("vim_mode == insert"),
++        )])
++    });
++
++    cx.set_state("helˇloˇ", Mode::Insert);
++    cx.update_editor(|editor, _window, cx| {
++        let buffer = editor.buffer().read(cx).as_singleton().unwrap();
++        buffer.update(cx, |buffer, cx| {
++            buffer.set_capability(language::Capability::Read, cx)
++        });
++    });
++    cx.run_until_parked();
++    cx.update_editor(|editor, _window, cx| assert!(editor.read_only(cx)));
++
++    cx.simulate_keystrokes("j");
++    cx.assert_state("helˇloˇ", Mode::Insert);
++}
++
+ #[perf]
+ #[gpui::test]
+ async fn test_jk_delay(cx: &mut gpui::TestAppContext) {
+-- 
+2.50.1 (Apple Git-155)

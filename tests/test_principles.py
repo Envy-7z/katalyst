@@ -65,8 +65,7 @@ class ProductPrinciplesTests(unittest.TestCase):
         for idx, patch in enumerate(patches, start=1):
             self.assertTrue(patch.name.startswith(f"{idx:04d}-"), f"Patch sequence broken: {patch.name}")
             content = patch.read_text(encoding="utf-8")
-            self.assertNotIn("<<<<<<<", content)
-            self.assertNotIn(">>>>>>>", content)
+            self.assertNotRegex(content, r"(?m)^(?:<<<<<<<|=======|>>>>>>>)")
             self.assertTrue("From: Katalyst" in content and "@katalyst.dev" in content, f"Non-generic author in patch {patch.name}")
 
 

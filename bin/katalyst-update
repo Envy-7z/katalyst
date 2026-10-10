@@ -4,17 +4,44 @@ set -euo pipefail
 REPOSITORY="${KATALYST_REPOSITORY:-Envy-7z/katalyst}"
 DATA_HOME="${KATALYST_DATA_HOME:-$HOME/.local/share/katalyst}"
 CURRENT_VERSION="$(cat "$DATA_HOME/VERSION" 2>/dev/null || echo 0.1.0)"
+APP_HOME="${KATALYST_APPLICATIONS_HOME:-/Applications}"
+APP_BINARY="$APP_HOME/Katalyst.app/Contents/MacOS/zed"
+APP_VERSION=""
+APP_INSTALLED=0
+if [[ -d "$APP_HOME/Katalyst.app" ]]; then
+  APP_INSTALLED=1
+  APP_VERSION="$(cat "$DATA_HOME/APP_VERSION" 2>/dev/null || true)"
+fi
 LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPOSITORY}/releases/latest" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')"
 
-NEWER="$(python3 -c "
-def parse(v):
-    return tuple(int(x) if x.isdigit() else 0 for x in v.split('-')[0].split('+')[0].split('.'))
-print('true' if parse('$LATEST_VERSION') > parse('$CURRENT_VERSION') else 'false')
-" 2>/dev/null || echo "false")"
+VERSION_ORDER="$(python3 - "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_VERSION" "$APP_INSTALLED" <<'PY'
+import sys
 
-if [[ "$NEWER" == "true" ]]; then
-  echo "Updating Katalyst ${CURRENT_VERSION} to ${LATEST_VERSION}..."
-  curl -fsSL "https://raw.githubusercontent.com/${REPOSITORY}/main/install.sh" | KATALYST_VERSION="$LATEST_VERSION" bash
+def parts(version):
+    return tuple(int(part) for part in version.split("-")[0].split("+")[0].split("."))
+
+current, latest = (parts(value) for value in sys.argv[1:3])
+app = parts(sys.argv[3]) if sys.argv[3] else None
+print("unknown_app" if sys.argv[4] == "1" and app is None else
+      "app_ahead" if app and app > latest else
+      "upgrade" if latest > current else
+      "ahead" if current > latest else "current")
+PY
+)"
+
+if [[ "$VERSION_ORDER" == "unknown_app" ]]; then
+  echo "Katalyst app release version unknown (Zed bundle version is not Katalyst's release); leaving the app intact. Verify the installed app before reinstalling manually."
+elif [[ "$VERSION_ORDER" == "app_ahead" ]]; then
+  echo "Katalyst installed app ${APP_VERSION} is newer than latest release (${LATEST_VERSION}); leaving it installed."
+elif [[ "$VERSION_ORDER" == "upgrade" ]]; then
+  if pgrep -f "^${APP_BINARY}([[:space:]]|$)" >/dev/null 2>&1; then
+    echo "Katalyst is running; quit it before installing ${LATEST_VERSION}. Existing app and runtime left intact."
+  else
+    echo "Updating Katalyst runtime ${CURRENT_VERSION} to ${LATEST_VERSION}..."
+    curl -fsSL "https://raw.githubusercontent.com/${REPOSITORY}/main/install.sh" | KATALYST_VERSION="$LATEST_VERSION" bash
+  fi
+elif [[ "$VERSION_ORDER" == "ahead" ]]; then
+  echo "Katalyst runtime ${CURRENT_VERSION} is newer than latest release (${LATEST_VERSION}); leaving it installed."
 else
   echo "Katalyst ${CURRENT_VERSION} is up to date (latest release: ${LATEST_VERSION})."
 fi

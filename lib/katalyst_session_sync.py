@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 SESSION_NAMESPACE = uuid.UUID("b82684c4-41de-4bc0-a9ec-66bd09f55454")
 PROVENANCE_TYPE = "dev.katalyst.foreign-session"
+RENDER_VERSION = 5
 
 
 @dataclasses.dataclass
@@ -64,6 +65,22 @@ def iso_timestamp(value: Any, fallback: float | None = None) -> str:
         except ValueError:
             pass
     return dt.datetime.fromtimestamp(fallback or 0, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def cursor_embedded_timestamp(text: str) -> str | None:
+    match = re.match(r"<timestamp>(.+?) \(UTC([+-])(\d{1,2})(?::(\d{2}))?\)</timestamp>", text)
+    if not match:
+        return None
+    try:
+        date = dt.datetime.strptime(match[1], "%A, %b %d, %Y, %I:%M %p")
+        hours, minutes = int(match[3]), int(match[4] or 0)
+        if hours > 23 or minutes > 59:
+            return None
+        offset = dt.timedelta(hours=hours, minutes=minutes)
+        timezone = dt.timezone(offset if match[2] == "+" else -offset)
+        return date.replace(tzinfo=timezone).astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return None
 
 
 def file_hash(path: Path) -> str:
@@ -150,7 +167,7 @@ def scan_cursor(root: Path, home: Path) -> list[ImportedSession]:
                 message = row.get("message")
                 if role not in {"user", "assistant"} or not isinstance(message, dict):
                     continue
-                timestamp = iso_timestamp(row.get("timestamp") or message.get("timestamp"), fallback_time)
+                explicit_timestamp = row.get("timestamp") or message.get("timestamp")
                 parts: list[str] = []
                 content = message.get("content", [])
                 if isinstance(content, str):
@@ -182,14 +199,19 @@ def scan_cursor(root: Path, home: Path) -> list[ImportedSession]:
                             parts.append(f"[Historical Cursor tool result]\n{output}")
                 text = "\n\n".join(part for part in parts if part).strip()
                 if text:
+                    timestamp = iso_timestamp(explicit_timestamp or cursor_embedded_timestamp(text), fallback_time)
                     messages.append(ImportedMessage(role, text, timestamp))
         if not messages:
             continue
         info = metadata.get(source_id, {})
         project_key = path.parents[2].name
-        title = str(info.get("title") or messages[0].text.splitlines()[0][:120] or "Cursor session")
+        first_text = messages[0].text
+        if cursor_embedded_timestamp(first_text):
+            first_text = first_text.partition("</timestamp>")[2].strip()
+        first_line = first_text.splitlines()[0][:120] if first_text else ""
+        title = str(info.get("title") or first_line or "Cursor session")
         timestamp = messages[0].timestamp
-        updated = iso_timestamp(info.get("updated_at"), fallback_time)
+        updated = iso_timestamp(info.get("updated_at") or messages[-1].timestamp, fallback_time)
         digest = hashlib.sha256(path.read_bytes())
         digest.update(json.dumps(info, ensure_ascii=False, sort_keys=True).encode())
         for external_path in sorted(external_files):
@@ -380,7 +402,8 @@ def omp_bucket(cwd: str, home: Path) -> str:
 
 
 def render_omp_session(
-    session: ImportedSession, target_id: str, runtime_cwd: str | None = None
+    session: ImportedSession, target_id: str, runtime_cwd: str | None = None,
+    resume_model: str | None = None,
 ) -> bytes:
     runtime_cwd = runtime_cwd or session.cwd
     rows: list[dict[str, Any]] = [
@@ -408,6 +431,7 @@ def render_omp_session(
             }
         )
         parent_id = entry_id
+    has_assistant = False
     for index, message in enumerate(session.messages):
         entry_id = uuid.uuid5(SESSION_NAMESPACE, f"{target_id}:message:{index}").hex[:8]
         timestamp_ms = int(
@@ -447,6 +471,7 @@ def render_omp_session(
                 "timestamp": timestamp_ms,
             }
         if message.role == "assistant":
+            has_assistant = True
             provider = "cursor" if session.source == "cursor" else "openai-codex"
             rendered_message.update(
                 {
@@ -477,6 +502,19 @@ def render_omp_session(
                 "parentId": parent_id,
                 "timestamp": message.timestamp,
                 "message": rendered_message,
+            }
+        )
+        parent_id = entry_id
+    if resume_model and has_assistant:
+        entry_id = uuid.uuid5(SESSION_NAMESPACE, f"{target_id}:resume-model").hex[:8]
+        rows.append(
+            {
+                "type": "model_change",
+                "id": entry_id,
+                "parentId": parent_id,
+                "timestamp": session.updated_at,
+                "model": resume_model,
+                "resolvedModelIsFallback": True,
             }
         )
         parent_id = entry_id
@@ -518,12 +556,14 @@ def load_state(path: Path) -> dict[str, Any]:
     return {"version": 1, "sessions": {}}
 
 
-def atomic_write(path: Path, content: bytes) -> None:
+def atomic_write(path: Path, content: bytes, mtime: float | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
+        if mtime is not None:
+            os.utime(temp_name, (mtime, mtime))
         os.replace(temp_name, path)
     finally:
         if os.path.exists(temp_name):
@@ -609,6 +649,12 @@ def _run_sync(
     dry_run: bool,
 ) -> dict[str, Any]:
     state = load_state(state_path)
+    try:
+        settings = json.loads((home / ".config/zed/settings.json").read_text(encoding="utf-8"))
+        configured_model = settings["agent_servers"]["omp"]["default_config_options"]["model"]
+    except (OSError, ValueError, KeyError, TypeError):
+        configured_model = None
+    resume_model = configured_model if isinstance(configured_model, str) and "/" in configured_model else None
     counters = {
         "detected": 0,
         "imported": 0,
@@ -620,6 +666,7 @@ def _run_sync(
         "would_import": 0,
         "would_update": 0,
         "failures": [],
+        "skipped": [],
     }
     sessions = discover_sessions(sources, home, cursor_root, codex_root)
     detected_by_source = {source: 0 for source in sources}
@@ -664,18 +711,35 @@ def _run_sync(
                     try:
                         projection = render_history_projection(recorded_target, runtime_cwd)
                         projection_hash = hashlib.sha256(projection).hexdigest()
-                        if record.get("historyProjectionHash") == projection_hash and canonical_target.is_file():
+                        if canonical_target.is_file() and record.get("historyProjectionHash") != file_hash(canonical_target):
+                            counters["warnings"] += 1
+                            counters["skipped"].append(
+                                {"source": session.source, "sourceId": session.source_id,
+                                 "reason": "history projection continued in OMP"}
+                            )
+                            continue
+                        if (
+                            record.get("historyProjectionHash") == projection_hash
+                            and record.get("historyProjectionMtimeVersion") == 1
+                            and canonical_target.is_file()
+                        ):
                             counters["unchanged"] += 1
                         elif dry_run:
                             counters["would_update"] += 1
                         else:
-                            atomic_write(canonical_target, projection)
+                            atomic_write(canonical_target, projection, mtime=recorded_target.stat().st_mtime)
                             record["historyProjectionPath"] = str(canonical_target)
                             record["historyProjectionHash"] = projection_hash
                             record["historyProjectionRuntimeCwd"] = runtime_cwd
+                            record["historyProjectionMtimeVersion"] = 1
                             state["sessions"][key] = record
                             counters["updated"] += 1
-                    except (OSError, ValueError) as error:
+                    except ValueError as error:
+                        counters["warnings"] += 1
+                        counters["skipped"].append(
+                            {"source": session.source, "sourceId": session.source_id, "reason": str(error)}
+                        )
+                    except OSError as error:
                         counters["failed"] += 1
                         counters["failures"].append(
                             {"source": session.source, "sourceId": session.source_id, "error": str(error)}
@@ -684,10 +748,12 @@ def _run_sync(
                 # A clean legacy import is migrated to the canonical history
                 # location. Its original file remains untouched as a backup.
                 target = canonical_target
+                needs_metadata_refresh = record.get("renderVersion") != RENDER_VERSION
                 if (
                     target == recorded_target
                     and record.get("sourceHash") == session.source_hash
                     and record.get("runtimeCwd") == runtime_cwd
+                    and not needs_metadata_refresh
                 ):
                     counters["unchanged"] += 1
                     continue
@@ -712,12 +778,15 @@ def _run_sync(
             # Preserve it instead of assuming ownership after state loss.
             counters["owned_by_omp"] += 1
             continue
-        content = render_omp_session(session, target_id, runtime_cwd)
+        content = render_omp_session(session, target_id, runtime_cwd, resume_model)
         if dry_run:
             counters["would_update" if record else "would_import"] += 1
             continue
         try:
-            atomic_write(target, content)
+            atomic_write(
+                target, content,
+                mtime=dt.datetime.fromisoformat(session.updated_at.replace("Z", "+00:00")).timestamp(),
+            )
             state["sessions"][key] = {
                 "source": session.source,
                 "sourceId": session.source_id,
@@ -729,6 +798,7 @@ def _run_sync(
                 "runtimeCwd": runtime_cwd,
                 "ownedByOmp": False,
                 "updatedAt": session.updated_at,
+                "renderVersion": RENDER_VERSION,
             }
             counters["updated" if previous_record else "imported"] += 1
         except OSError as error:
@@ -802,25 +872,33 @@ def main(argv: list[str] | None = None) -> int:
         counts = payload["detected"]
         cursor_status = "data detected" if counts.get("cursor", 0) else "not detected"
         codex_status = "data detected" if counts.get("codex", 0) else "not detected"
-        failures = payload["lastResult"].get("failures", [])
+        last_result = payload["lastResult"]
+        failures = last_result.get("failures", [])
         failure_suffix = ""
         if failures:
             failed_ids = ", ".join(str(item.get("sourceId", "unknown")) for item in failures[:3])
             failure_suffix = f" · Failed sessions: {failed_ids}"
+        skipped_suffix = ""
+        skipped = last_result.get("skipped", [])
+        if skipped:
+            skipped_ids = ", ".join(str(item.get("sourceId", "unknown")) for item in skipped[:3])
+            skipped_suffix = f" · Skipped invalid history: {skipped_ids}"
         print(
             f"Cursor {cursor_status}: {counts.get('cursor', 0)} chats · "
             f"Codex {codex_status}: {counts.get('codex', 0)} chats · {payload['imported']} imported · "
-            f"{payload['lastResult'].get('failed', 0)} failed{failure_suffix}"
+            f"{last_result.get('failed', 0)} failed{failure_suffix}{skipped_suffix}"
         )
     else:
-        print(
-            " · ".join(
-                f"{key.replace('_', ' ')}: {value}"
-                for key, value in payload.items()
-                if value and isinstance(value, (int, float))
-            )
-            or "No session changes"
+        summary = " · ".join(
+            f"{key.replace('_', ' ')}: {value}"
+            for key, value in payload.items()
+            if value and isinstance(value, (int, float))
         )
+        skipped = payload.get("skipped", [])
+        if isinstance(skipped, list) and skipped:
+            skipped_ids = ", ".join(str(item.get("sourceId", "unknown")) for item in skipped[:3])
+            summary += f" · Skipped invalid history: {skipped_ids}"
+        print(summary or "No session changes")
     return 1 if payload.get("failed", 0) else 0
 
 
