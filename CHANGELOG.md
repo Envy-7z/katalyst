@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The installer preserves existing OMP ACP settings, including its server command, model, and credential environment. Sync wrappers load their installed importer module, and the updater leaves running or newer applications untouched.
 - Backported Zed's fixes for pending Vim input on read-only buffers and empty-sided merge-conflict row highlights.
 - The About window and macOS bundle report the Katalyst release version rather than the pinned Zed source version.
+- macOS release packaging strips debug information without removing indirect symbols required by the linked Zed binary.
 
 ---
 
