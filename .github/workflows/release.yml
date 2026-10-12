@@ -101,7 +101,7 @@ jobs:
             rm package/notarization.zip package/AuthKey.p8 package/katalyst-certificate.p12
           else
             rm -rf package/Katalyst.app/Contents/_CodeSignature
-            for bin in package/Katalyst.app/Contents/MacOS/*; do
+            for bin in package/Katalyst.app/Contents/MacOS/cli package/Katalyst.app/Contents/MacOS/git; do
               [[ -f "$bin" ]] && codesign --force --sign - "$bin"
             done
             codesign --force --sign - package/Katalyst.app
