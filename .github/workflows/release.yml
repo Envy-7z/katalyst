@@ -100,14 +100,9 @@ jobs:
             xcrun stapler staple package/Katalyst.app
             rm package/notarization.zip package/AuthKey.p8 package/katalyst-certificate.p12
           else
-            codesign --remove-signature package/Katalyst.app 2>/dev/null || true
-            for bin in package/Katalyst.app/Contents/MacOS/*; do
-              [[ -f "$bin" ]] && codesign --remove-signature "$bin" 2>/dev/null || true
-            done
             for bin in package/Katalyst.app/Contents/MacOS/cli package/Katalyst.app/Contents/MacOS/git; do
               [[ -f "$bin" ]] && codesign --force --sign - "$bin"
             done
-            [[ -f package/Katalyst.app/Contents/MacOS/zed ]] && codesign --force --entitlements package/Katalyst.entitlements --sign - package/Katalyst.app/Contents/MacOS/zed
             codesign --force --entitlements package/Katalyst.entitlements --sign - package/Katalyst.app
           fi
 
