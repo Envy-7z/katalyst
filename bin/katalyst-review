@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-review: Batch Diff Review Annotator (Orca diff-comments pattern)
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-review <command> [arguments]
+
+Batch review comments across multiple diff lines into a single agent prompt turn,
+eliminating line-by-line thrashing and multi-turn context switching.
+
+Commands:
+  diff                     Show current uncommitted git diff with line numbers
+  note <file> <lines> <msg> Add a review note to a file and line range (e.g. 40-45)
+  list                     Show all pending review notes
+  bundle                   Bundle all review notes into a formatted AI revision prompt
+  clear                    Clear all pending review notes
+  help                     Show this help message
+
+Examples:
+  katalyst-review diff
+  katalyst-review note src/auth.ts 42-45 "Add null check before accessing token"
+  katalyst-review note src/api.ts 110 "Handle HTTP 429 exponential backoff"
+  katalyst-review bundle
+EOF
+  exit 0
+}
+
+command="${1:-help}"
+shift || true
+
+NOTES_FILE=".katalyst/reviews/active.json"
+
+case "$command" in
+  diff)
+    echo "=== Uncommitted Git Diff ==="
+    git diff -U3 2>/dev/null || true
+    ;;
+
+  note)
+    file="${1:-}"
+    lines="${2:-}"
+    msg="${3:-}"
+    [[ -n "$file" && -n "$lines" && -n "$msg" ]] || {
+      echo "Error: file, line range, and comment required." >&2
+      echo "Example: katalyst-review note src/auth.ts 40-45 \"Null check needed\"" >&2
+      exit 1
+    }
+    mkdir -p "$(dirname "$NOTES_FILE")"
+    python3 - "$NOTES_FILE" "$file" "$lines" "$msg" <<'PY'
+import sys, json, os
+
+path, file_path, lines_range, message = sys.argv[1:5]
+notes = []
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            notes = json.load(f)
+    except Exception:
+        notes = []
+
+notes.append({
+    "file": file_path,
+    "lines": lines_range,
+    "comment": message
+})
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(notes, f, indent=2)
+
+print(f"✔ Recorded review note on {file_path}:{lines_range} (Total pending: {len(notes)})")
+PY
+    ;;
+
+  list)
+    if [[ ! -f "$NOTES_FILE" ]]; then
+      echo "No pending review notes. Add one with: katalyst-review note <file> <lines> <msg>"
+      exit 0
+    fi
+    echo "=== Pending Diff Review Notes ==="
+    python3 - "$NOTES_FILE" <<'PY'
+import sys, json
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        notes = json.load(f)
+except Exception:
+    notes = []
+
+if not notes:
+    print("No pending review notes.")
+    sys.exit(0)
+
+for i, n in enumerate(notes, 1):
+    print(f"  {i}. {n['file']}:{n['lines']} — \"{n['comment']}\"")
+PY
+    ;;
+
+  bundle)
+    if [[ ! -f "$NOTES_FILE" ]]; then
+      echo "Error: No pending review notes to bundle. Add notes first." >&2
+      exit 1
+    fi
+    python3 - "$NOTES_FILE" <<'PY'
+import sys, json
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    notes = json.load(f)
+
+print("=" * 70)
+print("📝  Batch Diff Review Feedback (Orca Annotate Diff Pattern)")
+print("=" * 70)
+print("\nPlease address the following batched review feedback on the current diff:")
+print("Implement all listed changes cleanly in one cohesive turn.\n")
+
+by_file = {}
+for n in notes:
+    by_file.setdefault(n["file"], []).append(n)
+
+for fpath, items in by_file.items():
+    print(f"### File: `{fpath}`")
+    for it in items:
+        print(f"• Lines {it['lines']}: {it['comment']}")
+    print()
+
+print("Instructions for AI Agent:")
+print("1. Review each indicated file and line range.")
+print("2. Make the requested corrections while preserving existing architectural patterns.")
+print("3. Validate the fixes with appropriate tests before completing.")
+PY
+    ;;
+
+  clear)
+    rm -f "$NOTES_FILE"
+    echo "✔ Cleared all pending review notes."
+    ;;
+
+  help|--help|-h)
+    usage
+    ;;
+
+  *)
+    echo "Unknown command: $command" >&2
+    usage
+    ;;
+esac

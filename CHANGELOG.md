@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.8] - 2026-10-15
+
+### Added
+- **One-Click Broken CI Fixer (`bin/katalyst-fix-ci` & `/fix-ci`)**:
+  - Directly queries GitHub Actions via `gh api`, extracts failing jobs, steps, and last 150 lines (max 256KB) of failure log.
+  - Assembles untrusted investigation prompts (Orca `buildFixBrokenChecksPrompt` pattern) to diagnose and fix CI breaks autonomously.
+- **Native Jira Plan & Task Generator (`bin/katalyst-jira` & `/jira`)**:
+  - Resolves Jira credentials from `~/.omp/agent/mcp.json` or environment.
+  - Fetches Jira issues (Summary, Description, Acceptance Criteria) and formats them into native Katalyst `.plan.md` files for `PlanReviewView`.
+- **Composer Action Chips & Quick Slash Commands (`config/omp/hooks/pre/composer-chips.ts`)**:
+  - Adds `/fix-ci`, `/jira`, and `/mobile` commands directly accessible from the prompt composer.
+- **Live Terminal Error Trapper (`config/omp/hooks/pre/terminal-error-trap.ts`)**:
+  - Detects non-zero shell command exits and injects concise error traces into agent context, preventing hallucinations that broken builds passed.
+- **Batch Diff Annotator (`bin/katalyst-review` & `skills/annotate-diff/SKILL.md`)**:
+  - Allows developers to record multi-file line-anchored review notes on diffs and bundle them into a single cohesive revision turn.
+
+### Fixed
+- Updated in-app About modal version to Katalyst v0.3.8.
+
+---
 ## [0.3.7] - 2026-10-15
 
 ### Added

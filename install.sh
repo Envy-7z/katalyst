@@ -244,6 +244,9 @@ install -m 755 "$KATALYST_DATA_HOME/bin/notify-updates.sh" "$HOME/.local/bin/kat
 [[ -f "$KATALYST_DATA_HOME/bin/katalyst-search" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-search" "$HOME/.local/bin/katalyst-search"
 [[ -f "$KATALYST_DATA_HOME/bin/katalyst-recipe" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-recipe" "$HOME/.local/bin/katalyst-recipe"
 [[ -f "$KATALYST_DATA_HOME/bin/katalyst-rtk" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-rtk" "$HOME/.local/bin/katalyst-rtk"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-fix-ci" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-fix-ci" "$HOME/.local/bin/katalyst-fix-ci"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-jira" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-jira" "$HOME/.local/bin/katalyst-jira"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-review" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-review" "$HOME/.local/bin/katalyst-review"
 
 SETTINGS_CURRENT="$HOME/.config/zed/settings.json"
 [[ -f "$TEMP_DIR/config-snapshot/zed-settings.json" ]] && SETTINGS_CURRENT="$TEMP_DIR/config-snapshot/zed-settings.json"
