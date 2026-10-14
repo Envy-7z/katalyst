@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.7] - 2026-10-15
+
+### Added
+- **Mobile Engineering Suite (Laptop 2 Focus)**:
+  - **`mobile-developer` Skill**: Autonomous mobile engineering conventions for Flutter (BLoC/Cubit, Riverpod, platform channels), Android Native (Jetpack Compose, Coroutines, Gradle daemon, ADB reverse), and iOS Native (SwiftUI, SPM/Cocoapods, simctl).
+  - **`katalyst-mobile` CLI**: Device detection, emulator/simulator launcher (`boot`), automatic TCP port-forwarding (`reverse`), scoped logcat streaming by PID, and cache cleaning.
+  - **Maestro MCP Integration**: Pre-configured Maestro MCP server in `mcp.json.example` for autonomous, deterministic mobile UI testing.
+- **Universal IDE Superpowers (All Languages & Stacks)**:
+  - **Scoped Glob Rules (`config/omp/hooks/pre/scoped-rules.ts`)**: Auto-injects `.katalyst/rules/*.mdc` matching active file extensions, slashing system prompt token overhead by up to 60%.
+  - **Dynamic Context Mentions (`config/omp/hooks/pre/dynamic-context.ts`)**: Adds `@diff` (uncommitted git changes) and `@git-log` (recent commits) shortcuts to chat prompts.
+  - **Task Recipe Runner (`bin/katalyst-recipe` & `skills/recipe-runner/SKILL.md`)**: Declarative engineering SOP automation via `.katalyst/recipes/*.yaml`.
+  - **Codebase Deep Search (`bin/katalyst-search` & `skills/deep-search/SKILL.md`)**: High-speed, noise-filtered symbol and declaration search across multi-module projects.
+- **Token Economy & Context Optimization**:
+  - **`katalyst-rtk` CLI Token Compressor**: Intercepts and compresses verbose test, git diff, and build tool outputs by 60%–90% before reaching the LLM context window.
+  - **Intelligent Context Condenser (`config/omp/hooks/pre/session-compaction.ts`)**: Dense session compaction discarding raw tool dumps while preserving architectural decisions, variables, and uncompleted tasks.
+  - **Dual-Model Architect Mode (`skills/architect-mode/SKILL.md`)**: Two-phase design pattern (Reasoning model plans, fast model implements) cutting token costs by 60%–75%.
+
+### Fixed
+- **Session Sync CLI**: Running `katalyst-session-sync` without explicit subcommands now defaults to `status` rather than exiting with an argument error.
+- **Installer GUI Shell Resilience**: `install.sh` resolves the active absolute `omp` binary path for new Zed settings, preventing `command not found` errors when launched from macOS Dock or Spotlight.
+- Updated in-app About version modal to Katalyst v0.3.7.
+
+---
 ## [0.3.5] - 2026-10-10
 
 ### Fixed

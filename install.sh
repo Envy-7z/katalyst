@@ -34,7 +34,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-[[ "$(uname -s)" == "Darwin" ]] || { echo "Katalyst v0.2.4 currently supports macOS only." >&2; exit 1; }
+[[ "$(uname -s)" == "Darwin" ]] || { echo "Katalyst v${KATALYST_VERSION} currently supports macOS only." >&2; exit 1; }
 for command in curl ditto python3 shasum tar; do
   command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
@@ -42,7 +42,7 @@ if ! command -v omp >/dev/null 2>&1; then
   command -v brew >/dev/null || { echo "Homebrew is required to install OMP: https://brew.sh" >&2; exit 1; }
   brew install can1357/tap/omp
 fi
-
+OMP_BIN="$(command -v omp || echo "/opt/homebrew/bin/omp")"
 TEMP_DIR="$(mktemp -d)"
 INSTALL_COMPLETE=0
 APP_ACTIVATED=0
@@ -240,13 +240,18 @@ install -m 644 "$KATALYST_DATA_HOME/lib/katalyst_session_sync.py" "$HOME/.local/
 install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-update" "$HOME/.local/bin/katalyst-update"
 install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-migrate-profile" "$HOME/.local/bin/katalyst-migrate-profile"
 install -m 755 "$KATALYST_DATA_HOME/bin/notify-updates.sh" "$HOME/.local/bin/katalyst-notify"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-mobile" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-mobile" "$HOME/.local/bin/katalyst-mobile"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-search" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-search" "$HOME/.local/bin/katalyst-search"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-recipe" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-recipe" "$HOME/.local/bin/katalyst-recipe"
+[[ -f "$KATALYST_DATA_HOME/bin/katalyst-rtk" ]] && install -m 755 "$KATALYST_DATA_HOME/bin/katalyst-rtk" "$HOME/.local/bin/katalyst-rtk"
 
 SETTINGS_CURRENT="$HOME/.config/zed/settings.json"
 [[ -f "$TEMP_DIR/config-snapshot/zed-settings.json" ]] && SETTINGS_CURRENT="$TEMP_DIR/config-snapshot/zed-settings.json"
-python3 - "$KATALYST_DATA_HOME/config/zed/settings.json" "$SETTINGS_CURRENT" "$HOME/.config/zed/settings.json" <<'PY'
+python3 - "$KATALYST_DATA_HOME/config/zed/settings.json" "$SETTINGS_CURRENT" "$HOME/.config/zed/settings.json" "$OMP_BIN" <<'PY'
 import json, sys
 from pathlib import Path
-source, current_path, destination = map(Path, sys.argv[1:])
+source, current_path, destination = map(Path, sys.argv[1:4])
+omp_bin = sys.argv[4] if len(sys.argv) > 4 else "omp"
 defaults = json.loads(source.read_text())
 if current_path.exists():
     current = json.loads(current_path.read_text())
@@ -256,7 +261,10 @@ if destination.is_symlink() or destination.exists():
     destination.unlink()
 destination.parent.mkdir(parents=True, exist_ok=True)
 current.setdefault("agent", {}).setdefault("dock", "left")
-current.setdefault("agent_servers", {}).setdefault("omp", defaults["agent_servers"]["omp"])
+omp_default = defaults["agent_servers"]["omp"].copy()
+if omp_bin != "omp":
+    omp_default["command"] = omp_bin
+current.setdefault("agent_servers", {}).setdefault("omp", omp_default)
 destination.write_text(json.dumps(current, indent=2) + "\n")
 PY
 

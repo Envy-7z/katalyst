@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-recipe: Automated Task & SOP Recipe Runner for Katalyst
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-recipe <command> [recipe-name]
+
+Commands:
+  list             List all available recipes in .katalyst/recipes or global recipes
+  run <name>       Execute an automated recipe workflow
+  create <name>    Generate a starter recipe template in .katalyst/recipes/<name>.yaml
+  help             Show this help message
+
+Examples:
+  katalyst-recipe list
+  katalyst-recipe run pre-pr-check
+  katalyst-recipe create audit-mobile
+EOF
+  exit 0
+}
+
+command="${1:-help}"
+shift || true
+
+find_recipes() {
+  local dirs=(".katalyst/recipes" "$HOME/.katalyst/recipes")
+  for d in "${dirs[@]}"; do
+    if [[ -d "$d" ]]; then
+      find "$d" -name "*.yaml" -o -name "*.yml" 2>/dev/null || true
+    fi
+  done
+}
+
+case "$command" in
+  list)
+    echo "=== Available Katalyst Task Recipes ==="
+    found=0
+    while IFS= read -r recipe; do
+      [[ -n "$recipe" ]] || continue
+      name="$(basename "$recipe" | sed 's/\.ya\?ml$//')"
+      desc="$(grep -m 1 "^description:" "$recipe" 2>/dev/null | sed 's/description:[[:space:]]*//' | tr -d '"' || echo "Custom task recipe")"
+      echo "  • $name ($recipe) — $desc"
+      found=1
+    done < <(find_recipes)
+    if [[ "$found" -eq 0 ]]; then
+      echo "No recipes found. Create one with: katalyst-recipe create <name>"
+    fi
+    ;;
+
+  create)
+    name="${1:-}"
+    [[ -n "$name" ]] || { echo "Error: specify recipe name. Example: katalyst-recipe create pre-pr-check" >&2; exit 1; }
+    mkdir -p .katalyst/recipes
+    target=".katalyst/recipes/${name}.yaml"
+    if [[ -f "$target" ]]; then
+      echo "Recipe $target already exists."
+      exit 0
+    fi
+    cat > "$target" <<EOF
+name: $name
+description: "Automated workflow recipe for $name"
+steps:
+  - run: "git status --short"
+    description: "Check working tree status"
+  - run: "python3 -m unittest discover -s tests -q"
+    description: "Run unit test suite"
+  - prompt: "Inspect git status and test results, review diff, and prepare a concise summary."
+EOF
+    echo "Created recipe template: $target"
+    ;;
+
+  run)
+    name="${1:-}"
+    [[ -n "$name" ]] || { echo "Error: specify recipe name to run. Run: katalyst-recipe list" >&2; exit 1; }
+    target=""
+    while IFS= read -r recipe; do
+      rname="$(basename "$recipe" | sed 's/\.ya\?ml$//')"
+      if [[ "$rname" == "$name" ]]; then
+        target="$recipe"
+        break
+      fi
+    done < <(find_recipes)
+
+    [[ -n "$target" && -f "$target" ]] || { echo "Error: recipe '$name' not found. Run: katalyst-recipe list" >&2; exit 1; }
+    echo "=== Running Recipe: $name ($target) ==="
+
+    # Execute bash steps via python YAML parser
+    python3 - "$target" <<'PY'
+import sys, os, subprocess
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+steps = []
+current_step = {}
+for line in lines:
+    trimmed = line.strip()
+    if trimmed.startswith("- run:"):
+        cmd = trimmed.split("- run:", 1)[1].strip().strip('"').strip("'")
+        steps.append({"type": "run", "cmd": cmd})
+    elif trimmed.startswith("- prompt:"):
+        prompt = trimmed.split("- prompt:", 1)[1].strip().strip('"').strip("'")
+        steps.append({"type": "prompt", "prompt": prompt})
+
+for i, step in enumerate(steps, 1):
+    if step["type"] == "run":
+        print(f"\n▶ Step {i}: Running `{step['cmd']}`...")
+        res = subprocess.run(step["cmd"], shell=True)
+        if res.returncode != 0:
+            print(f"✖ Step {i} failed with exit code {res.returncode}")
+            sys.exit(res.returncode)
+        print(f"✔ Step {i} completed.")
+    elif step["type"] == "prompt":
+        print(f"\n💬 Step {i}: Agent Prompt Directive:")
+        print(f"   \"{step['prompt']}\"")
+
+print("\n🎉 Recipe execution finished successfully!")
+PY
+    ;;
+
+  help|--help|-h)
+    usage
+    ;;
+
+  *)
+    echo "Unknown command: $command" >&2
+    usage
+    ;;
+esac
