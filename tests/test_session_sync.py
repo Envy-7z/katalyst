@@ -560,6 +560,13 @@ class SessionSyncTests(unittest.TestCase):
         self.assertEqual(sum(result["unchanged"] for result in results), 1)
         self.assertEqual(len(list(self.omp_root.rglob("*.jsonl"))), 1)
         self.assertEqual(len(sync.load_state(self.state_path)["sessions"]), 1)
+    def test_bare_invocation_defaults_to_status(self) -> None:
+        command = [sys.executable, str(MODULE_PATH)]
+        environment = {**os.environ, "HOME": str(self.home)}
+        result = subprocess.run(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Cursor not detected", result.stdout)
+        self.assertIn("Codex not detected", result.stdout)
 
 
 if __name__ == "__main__":

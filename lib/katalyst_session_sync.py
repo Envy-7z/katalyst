@@ -13,6 +13,7 @@ import os
 import re
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 import uuid
 from typing import Any, Iterable
@@ -841,7 +842,7 @@ def parse_sources(value: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="katalyst-session-sync")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
     sync_parser = subparsers.add_parser("sync", help="Import new or changed foreign sessions")
     sync_parser.add_argument("--sources", type=parse_sources, default=["cursor", "codex"])
     sync_parser.add_argument("--all", action="store_true", help="Import every detected session")
@@ -851,7 +852,8 @@ def main(argv: list[str] | None = None) -> int:
     status_parser = subparsers.add_parser("status", help="Show detected and imported session counts")
     status_parser.add_argument("--sources", type=parse_sources, default=["cursor", "codex"])
     status_parser.add_argument("--json", action="store_true")
-    args = parser.parse_args(argv)
+    effective_argv = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(effective_argv or ["status"])
     home = Path.home()
     cursor_root = home / ".cursor" / "projects"
     codex_root = home / ".codex"

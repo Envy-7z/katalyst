@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-mobile: Native mobile development helper for Flutter, Android & iOS
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  echo "Usage: katalyst-mobile <command> [arguments]"
+  echo ""
+  echo "Commands:"
+  echo "  devices        List all connected Android devices, running iOS simulators, and Flutter targets"
+  echo "  emulators      List available Android AVDs and iOS Simulators"
+  echo "  boot <target>  Boot an iOS Simulator (UUID/name) or Android AVD"
+  echo "  reverse <port> Reverse a local TCP port to connected Android device (adb reverse tcp:N tcp:N)"
+  echo "  clean          Clean build caches for Flutter and Gradle projects in current directory"
+  echo "  logcat [tag]   Stream Android logcat filtered by tag or package"
+  echo "  help           Show this help message"
+  exit 0
+}
+
+command="${1:-help}"
+shift || true
+
+case "$command" in
+  devices)
+    echo "=== Mobile Target Devices ==="
+    if command -v flutter >/dev/null 2>&1; then
+      echo "--- Flutter Targets ---"
+      flutter devices 2>/dev/null || echo "(flutter not configured or no devices)"
+      echo ""
+    fi
+    if command -v adb >/dev/null 2>&1; then
+      echo "--- Android ADB Devices ---"
+      adb devices -l 2>/dev/null || echo "(adb failed)"
+      echo ""
+    fi
+    if command -v xcrun >/dev/null 2>&1; then
+      echo "--- Running iOS Simulators ---"
+      xcrun simctl list devices booted 2>/dev/null || echo "(simctl failed)"
+      echo ""
+    fi
+    ;;
+
+  emulators)
+    echo "=== Available Emulators & Simulators ==="
+    if command -v emulator >/dev/null 2>&1; then
+      echo "--- Android AVDs ---"
+      emulator -list-avds 2>/dev/null || echo "(no AVDs found)"
+      echo ""
+    fi
+    if command -v xcrun >/dev/null 2>&1; then
+      echo "--- Available iOS Simulators ---"
+      xcrun simctl list devices available 2>/dev/null | grep -E "iPhone|iPad" || echo "(no iOS simulators found)"
+      echo ""
+    fi
+    ;;
+
+  boot)
+    target="${1:-}"
+    [[ -n "$target" ]] || { echo "Error: specify an emulator name or simulator UUID. Run: katalyst-mobile emulators" >&2; exit 1; }
+    if command -v xcrun >/dev/null 2>&1 && xcrun simctl boot "$target" 2>/dev/null; then
+      echo "Booted iOS simulator: $target"
+      open -a Simulator 2>/dev/null || true
+    elif command -v emulator >/dev/null 2>&1; then
+      echo "Launching Android AVD: $target..."
+      nohup emulator -avd "$target" >/dev/null 2>&1 &
+      echo "Android emulator launched in background."
+    else
+      echo "Error: could not boot '$target' via simctl or emulator CLI." >&2
+      exit 1
+    fi
+    ;;
+
+  reverse)
+    port="${1:-}"
+    [[ -n "$port" ]] || { echo "Error: specify a port number (e.g. katalyst-mobile reverse 3000)" >&2; exit 1; }
+    command -v adb >/dev/null 2>&1 || { echo "Error: adb is not installed or not in PATH." >&2; exit 1; }
+    adb reverse "tcp:$port" "tcp:$port"
+    echo "Successfully forwarded local tcp:$port to Android device tcp:$port"
+    ;;
+
+  clean)
+    echo "=== Cleaning Mobile Build Artifacts ==="
+    cleaned=0
+    if [[ -f "pubspec.yaml" ]] && command -v flutter >/dev/null 2>&1; then
+      echo "Running flutter clean..."
+      flutter clean
+      cleaned=1
+    fi
+    if [[ -f "gradlew" ]]; then
+      echo "Running ./gradlew clean..."
+      ./gradlew clean --no-daemon
+      cleaned=1
+    fi
+    if [[ -d "ios" && -f "ios/Podfile" ]]; then
+      echo "Cleaning iOS Pods cache..."
+      rm -rf ios/Pods ios/Podfile.lock
+      cleaned=1
+    fi
+    if [[ "$cleaned" -eq 0 ]]; then
+      echo "No Flutter, Gradle, or iOS project detected in current directory."
+    else
+      echo "Build clean complete."
+    fi
+    ;;
+
+  logcat)
+    tag="${1:-}"
+    command -v adb >/dev/null 2>&1 || { echo "Error: adb is not installed or not in PATH." >&2; exit 1; }
+    if [[ -n "$tag" ]]; then
+      exec adb logcat -v time -s "$tag:V"
+    else
+      exec adb logcat -v time
+    fi
+    ;;
+
+  help|--help|-h)
+    usage
+    ;;
+
+  *)
+    echo "Unknown command: $command" >&2
+    usage
+    ;;
+esac

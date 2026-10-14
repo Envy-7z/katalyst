@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.6] - 2026-10-14
+
+### Added
+- **Mobile Developer Skill (`mobile-developer`)**: First-class mobile engineering guidelines, command references, and anti-leak rules for Flutter, Android native (Kotlin/Compose/Gradle), and iOS native (Swift/SwiftUI/simctl).
+- **Katalyst Mobile Helper CLI (`katalyst-mobile`)**: Lightweight command-line utility to inspect connected Android devices, running iOS simulators, available emulators, reverse port tunnels (`adb reverse`), and clean mobile build artifacts.
+- **Deep Search Helper CLI & Skill (`katalyst-search` & `deep-search`)**: Multi-phase codebase exploration and symbol-declaration discovery with automatic build artifact and dependency noise pruning.
+
+### Fixed
+- **Session Sync CLI**: Invoking `katalyst-session-sync` without explicit subcommands now defaults to `status` rather than exiting with an argument error.
+- **Installer GUI Shell Resilience**: `install.sh` resolves the active absolute `omp` binary path for new Zed settings, preventing `command not found` errors when Katalyst is launched from macOS Dock or Spotlight.
+- Updated in-app About version modal to Katalyst v0.3.6.
+
+---
 ## [0.3.5] - 2026-10-10
 
 ### Fixed
