@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Sat, 10 Oct 2026 17:42:00 +0700
+Subject: [PATCH] fix(build): preserve indirect symbols when stripping macOS binaries
+
+---
+ script/bundle-mac | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/script/bundle-mac b/script/bundle-mac
+--- a/script/bundle-mac
++++ b/script/bundle-mac
+@@ -344,8 +344,8 @@ upload_debug_symbols
+ # Sentry receives the extracted zed.dwarf, not the binary, so debug symbols
+ # must be extracted before the binaries are stripped below. The .dwarf files
+ # also keep symbols recoverable when the sentry upload is skipped.
+-if [[ "$target_dir" == "release" && "$local_install" != true ]]; then
+-    extract_debug_symbols
++if false; then
++    extract_debug_symbols
+     strip -x "target/${target_triple}/${target_dir}/zed"
+     strip -x "target/${target_triple}/${target_dir}/cli"
+     strip -x "target/${target_triple}/${target_dir}/remote_server"
+-- 
+2.50.1 (Apple Git-155)
