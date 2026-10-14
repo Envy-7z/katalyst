@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Session Sync CLI**: Running `katalyst-session-sync` without explicit subcommands now defaults to `status` rather than exiting with an argument error.
 - **Installer GUI Shell Resilience**: `install.sh` resolves the active absolute `omp` binary path for new Zed settings, preventing `command not found` errors when launched from macOS Dock or Spotlight.
+- **Thinking Block Text Selection (Patch 0065)**: Makes the decorative gradient overlay in Thinking previews mouse-transparent so text selection, dragging, and right-click copying reach the underlying Markdown content.
 - Updated in-app About version modal to Katalyst v0.3.7.
 
 ---

@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Wed, 15 Oct 2026 02:00:00 +0700
+Subject: [PATCH] fix(agent_ui): allow text selection and copying in thinking previews (#65231)
+
+Make the decorative gradient fade overlay in Thinking previews mouse-transparent
+so text selection, dragging, and right-click copying reach the underlying Markdown content.
+---
+ crates/agent_ui/src/conversation_view/thread_view.rs | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/crates/agent_ui/src/conversation_view/thread_view.rs b/crates/agent_ui/src/conversation_view/thread_view.rs
+--- a/crates/agent_ui/src/conversation_view/thread_view.rs
++++ b/crates/agent_ui/src/conversation_view/thread_view.rs
+@@ -8219,7 +8219,6 @@ impl ThreadView {
+                                         linear_color_stop(panel_bg.opacity(0.8), 0.),
+                                         linear_color_stop(panel_bg.opacity(0.), 0.1),
+                                     ))
+-                                    .block_mouse_except_scroll(),
+                             )
+                         }),
+                 )
+-- 
+2.50.1 (Apple Git-155)
