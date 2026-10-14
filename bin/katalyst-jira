@@ -104,14 +104,11 @@ if not jira_configs:
 
 # Pick matching config based on issue key prefix
 matched_config = None
+prefix = issue_key.split("-")[0].lower() if "-" in issue_key else issue_key.lower()
 for cfg in jira_configs:
-    if issue_key.startswith("GBS-") and "geniebook" in cfg["url"]:
+    if prefix in cfg.get("url", "").lower() or prefix in cfg.get("name", "").lower():
         matched_config = cfg
         break
-    elif issue_key.startswith("MAH-") and "mahara" in cfg["url"]:
-        matched_config = cfg
-        break
-
 if not matched_config:
     matched_config = jira_configs[0]
 
