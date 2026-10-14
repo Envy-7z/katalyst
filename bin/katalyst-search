@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-search: Fast, Noise-Filtered Deep Search Across Multi-Module Codebases
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  echo "Usage: katalyst-search [options] <query> [path]"
+  echo ""
+  echo "Options:"
+  echo "  -s, --symbol       Search only symbol declarations (class, interface, struct, enum, fn)"
+  echo "  -e, --ext <exts>   Comma-separated file extensions to include (e.g. dart,kt,swift,ts)"
+  echo "  -i, --ignore-case  Perform case-insensitive search (default: smart-case)"
+  echo "  -h, --help         Show this help message"
+  echo ""
+  echo "Examples:"
+  echo "  katalyst-search \"MethodChannel\""
+  echo "  katalyst-search --symbol \"AuthRepository\""
+  echo "  katalyst-search --ext \"dart,kt\" \"notification_action\" ./app"
+  exit 0
+}
+
+symbol_only=0
+extensions=""
+case_sensitive=1
+query=""
+search_path="."
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--symbol)
+      symbol_only=1
+      shift
+      ;;
+    -e|--ext)
+      extensions="${2:-}"
+      shift 2
+      ;;
+    -i|--ignore-case)
+      case_sensitive=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      if [[ -z "$query" ]]; then
+        query="$1"
+      else
+        search_path="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$query" ]] || { echo "Error: search query required." >&2; usage; }
+
+# Build Python search runner for fast and exact filtering
+python3 - "$query" "$search_path" "$symbol_only" "$extensions" "$case_sensitive" <<'PY'
+import os, sys, re
+from pathlib import Path
+
+query, root_path, symbol_str, exts_str, case_str = sys.argv[1:6]
+symbol_only = symbol_str == "1"
+case_sensitive = case_str == "1"
+root = Path(root_path).resolve()
+
+ext_filter = None
+if exts_str.strip():
+    ext_filter = set(f".{e.strip().lstrip('.')}" for e in exts_str.split(",") if e.strip())
+
+EXCLUDE_DIRS = {
+    "node_modules", ".git", "Pods", ".dart_tool", "build", "target",
+    ".gradle", "DerivedData", ".cache", "coverage", ".next", "__pycache__",
+    ".idea", ".vscode"
+}
+
+EXCLUDE_EXTS = {
+    ".lock", ".log", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico",
+    ".svg", ".pdf", ".jar", ".aar", ".a", ".dylib", ".so", ".zip", ".tar",
+    ".gz", ".db", ".sqlite", ".sqlite3"
+}
+
+if symbol_only:
+    # Match declaration patterns
+    pattern_str = rf"\b(class|interface|struct|enum|type|def|fn|func|function|val|var|const)\s+{re.escape(query)}\b"
+else:
+    pattern_str = rf"\b{re.escape(query)}\b" if query.isalnum() else re.escape(query)
+
+flags = 0 if case_sensitive else re.IGNORECASE
+regex = re.compile(pattern_str, flags)
+
+matches = []
+scanned_files = 0
+
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS and not d.startswith(".")]
+    for fname in filenames:
+        ext = os.path.splitext(fname)[1].lower()
+        if ext in EXCLUDE_EXTS:
+            continue
+        if ext_filter and ext not in ext_filter:
+            continue
+        filepath = os.path.join(dirpath, fname)
+        scanned_files += 1
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                for line_no, line in enumerate(f, start=1):
+                    if regex.search(line):
+                        rel_path = os.path.relpath(filepath, root)
+                        matches.append((rel_path, line_no, line.strip()))
+        except Exception:
+            continue
+
+if not matches:
+    print(f"No matches found for '{query}' across {scanned_files} files.")
+    sys.exit(0)
+
+print(f"=== Found {len(matches)} match(es) across {scanned_files} scanned files ===")
+current_file = None
+for path, line_no, content in matches[:100]:
+    if path != current_file:
+        current_file = path
+        print(f"\n📄 {path}")
+    truncated = content if len(content) <= 120 else content[:117] + "..."
+    print(f"  Line {line_no:4d}: {truncated}")
+
+if len(matches) > 100:
+    print(f"\n... and {len(matches) - 100} more matches.")
+PY

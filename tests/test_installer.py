@@ -230,6 +230,8 @@ class InstallerTests(unittest.TestCase):
             installed_settings = json.loads(settings.read_text())
             self.assertEqual(installed_settings["agent_servers"]["omp"], existing_omp)
             self.assertEqual(installed_settings["theme"], "custom")
+            self.assertTrue((home / ".local/bin/katalyst-mobile").is_file())
+            self.assertTrue((home / ".local/bin/katalyst-search").is_file())
 
     @unittest.skipUnless(sys.platform == "darwin", "installer integration requires macOS ditto")
     def test_v01_late_upgrade_failure_restores_all_user_state(self) -> None:
