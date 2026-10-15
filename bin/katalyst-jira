@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-jira: Autonomous Jira Issue Fetcher & Plan Generator
+# Inspired by Orca's JiraIssueWorkspace architecture
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-jira <ISSUE_KEY> [options]
+
+Fetches a Jira issue (e.g. GBS-5164, MAH-123) and formats it into an implementation
+plan or agent prompt using credentials from ~/.omp/agent/mcp.json or environment.
+
+Options:
+  --plan             Save directly as a native Katalyst plan in .katalyst/plans/
+  --json             Output raw issue JSON
+  -h, --help         Show this help message
+
+Examples:
+  katalyst-jira GBS-5164
+  katalyst-jira GBS-5164 --plan
+EOF
+  exit 0
+}
+
+[[ $# -gt 0 ]] || usage
+
+issue_key=""
+save_plan=0
+output_json=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --plan)
+      save_plan=1
+      shift
+      ;;
+    --json)
+      output_json=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      issue_key="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$issue_key" ]] || { echo "Error: Jira issue key required (e.g. GBS-5164)" >&2; exit 1; }
+
+# Python helper to query Jira REST API using discovered MCP credentials
+python3 - "$issue_key" "$save_plan" "$output_json" <<'PY'
+import sys, os, json, urllib.request, urllib.parse, base64
+from pathlib import Path
+
+issue_key = sys.argv[1].strip().upper()
+save_plan = sys.argv[2] == "1"
+output_json = sys.argv[3] == "1"
+
+# 1. Discover Jira credentials from ~/.omp/agent/mcp.json
+home = Path.home()
+mcp_files = [
+    home / ".omp" / "agent" / "mcp.json",
+    home / ".cursor" / "mcp.json"
+]
+
+jira_configs = []
+for f in mcp_files:
+    if f.is_file():
+        try:
+            data = json.loads(f.read_text())
+            servers = data.get("mcpServers", {})
+            for name, s in servers.items():
+                if "jira" in name.lower():
+                    env = s.get("env", {})
+                    url = env.get("JIRA_URL") or env.get("JIRA_BASE_URL")
+                    user = env.get("JIRA_USERNAME") or env.get("JIRA_USER_EMAIL")
+                    token = env.get("JIRA_API_TOKEN")
+                    if url and user and token:
+                        jira_configs.append({"name": name, "url": url.rstrip("/"), "user": user, "token": token})
+        except Exception:
+            pass
+
+# Add environment fallback
+if os.environ.get("JIRA_URL") and os.environ.get("JIRA_USERNAME") and os.environ.get("JIRA_API_TOKEN"):
+    jira_configs.insert(0, {
+        "name": "env",
+        "url": os.environ["JIRA_URL"].rstrip("/"),
+        "user": os.environ["JIRA_USERNAME"],
+        "token": os.environ["JIRA_API_TOKEN"]
+    })
+
+if not jira_configs:
+    print("Error: No Jira configuration found in ~/.omp/agent/mcp.json or environment variables (JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN).", file=sys.stderr)
+    sys.exit(1)
+
+# Pick matching config based on issue key prefix
+matched_config = None
+prefix = issue_key.split("-")[0].lower() if "-" in issue_key else issue_key.lower()
+for cfg in jira_configs:
+    if prefix in cfg.get("url", "").lower() or prefix in cfg.get("name", "").lower():
+        matched_config = cfg
+        break
+if not matched_config:
+    matched_config = jira_configs[0]
+
+# 2. Fetch issue from Jira REST API v3
+api_url = f"{matched_config['url']}/rest/api/3/issue/{issue_key}"
+auth_str = f"{matched_config['user']}:{matched_config['token']}"
+b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+
+req = urllib.request.Request(
+    api_url,
+    headers={
+        "Authorization": f"Basic {b64_auth}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        issue_data = json.loads(resp.read().decode("utf-8"))
+except urllib.error.HTTPError as e:
+    err_body = e.read().decode("utf-8", errors="ignore")
+    print(f"Error fetching {issue_key} (HTTP {e.code}): {err_body[:200]}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"Connection error to Jira: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if output_json:
+    print(json.dumps(issue_data, indent=2))
+    sys.exit(0)
+
+# Extract fields
+fields = issue_data.get("fields", {})
+summary = fields.get("summary", "")
+status = fields.get("status", {}).get("name", "Unknown")
+issue_type = fields.get("issuetype", {}).get("name", "Task")
+assignee = fields.get("assignee", {}) or {}
+assignee_name = assignee.get("displayName", "Unassigned")
+
+# Parse description (ADF or plain text)
+def extract_text(node):
+    if isinstance(node, str):
+        return node
+    if not isinstance(node, dict):
+        return ""
+    if node.get("type") == "text":
+        return node.get("text", "")
+    content = node.get("content", [])
+    return "".join(extract_text(c) for c in content)
+
+desc_raw = fields.get("description")
+description_text = extract_text(desc_raw) if desc_raw else "No description provided."
+
+# 3. Output as formatted plan or prompt
+if save_plan:
+    plans_dir = Path(".katalyst/plans")
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    plan_file = plans_dir / f"{issue_key.lower()}-{summary.lower()[:30].replace(' ', '-')}.plan.md"
+    
+    plan_content = f"""---
+name: "{issue_key}: {summary}"
+overview: "Implementation plan for Jira ticket {issue_key} ({summary})."
+todos:
+  - id: analyze-scope
+    content: "Analyze requirements and acceptance criteria for {issue_key}"
+    status: in_progress
+  - id: implement-changes
+    content: "Implement core logic and tests for {issue_key}"
+    status: pending
+  - id: verify-acceptance
+    content: "Verify all acceptance criteria and run test suite"
+    status: pending
+isProject: false
+---
+
+# {issue_key}: {summary} Implementation Plan
+
+## Context
+- **Issue**: [{issue_key}]({matched_config['url']}/browse/{issue_key})
+- **Type**: {issue_type} | **Status**: {status} | **Assignee**: {assignee_name}
+- **Summary**: {summary}
+
+## Requirements & Description
+{description_text}
+
+## Approach
+
+### Phase 1: Analysis & Scoping
+- [ ] Review codebase call-sites and affected components for {issue_key}
+- [ ] Identify touched files and dependencies
+
+### Phase 2: Implementation & Tests
+- [ ] Implement requested behavior according to ticket specification
+- [ ] Add unit / widget / integration regression tests
+
+### Phase 3: Verification & Handoff
+- [ ] Run full project test suite
+- [ ] Verify acceptance criteria
+"""
+    plan_file.write_text(plan_content, encoding="utf-8")
+    print(f"✔ Saved native Katalyst plan: {plan_file}")
+    print(f"Open in Katalyst PlanReviewView or execute with agent.")
+    sys.exit(0)
+
+# Default terminal output
+print("=" * 70)
+print(f"🎯 Jira Task: {issue_key} — {summary}")
+print("=" * 70)
+print(f"URL: {matched_config['url']}/browse/{issue_key}")
+print(f"Type: {issue_type} | Status: {status} | Assignee: {assignee_name}\n")
+print("### Description & Acceptance Criteria:")
+print(description_text[:1200] + ("\n... [truncated]" if len(description_text) > 1200 else ""))
+print("\n" + "=" * 70)
+print(f"Prompt Directive for AI Agent:")
+print(f"\"Implement Jira issue {issue_key} ({summary}). Verify acceptance criteria, follow project patterns, and add regression tests.\"")
+PY

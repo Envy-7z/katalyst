@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-fix-ci: One-click failed CI check extractor & prompt builder
+# Inspired by Orca's pr-checks-fix-prompt architecture
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-fix-ci [PR_NUMBER|BRANCH] [options]
+
+Options:
+  --repo <owner/repo>   Override repository (default: detected from git remote)
+  --lines <count>       Number of tail log lines to capture (default: 150)
+  --json                Output structured JSON instead of formatted agent prompt
+  -h, --help            Show this help message
+
+Examples:
+  katalyst-fix-ci
+  katalyst-fix-ci 9
+  katalyst-fix-ci release/katalyst-v0.3.7
+EOF
+  exit 0
+}
+
+target=""
+repo=""
+max_lines=150
+output_json=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)
+      repo="${2:-}"
+      shift 2
+      ;;
+    --lines)
+      max_lines="${2:-150}"
+      shift 2
+      ;;
+    --json)
+      output_json=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      target="$1"
+      shift
+      ;;
+  esac
+done
+
+command -v gh >/dev/null 2>&1 || { echo "Error: GitHub CLI (gh) is required. Install via: brew install gh" >&2; exit 1; }
+
+# Resolve repo if not provided
+if [[ -z "$repo" ]]; then
+  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+fi
+[[ -n "$repo" ]] || { echo "Error: could not determine GitHub repository. Specify with --repo <owner/repo>" >&2; exit 1; }
+
+# Resolve target branch / PR
+if [[ -z "$target" ]]; then
+  target="$(git branch --show-current 2>/dev/null || true)"
+fi
+[[ -n "$target" ]] || { echo "Error: could not determine active branch or PR number." >&2; exit 1; }
+
+# Python helper to query gh API and extract broken checks
+python3 - "$repo" "$target" "$max_lines" "$output_json" <<'PY'
+import sys, json, subprocess
+
+repo, target, max_lines_str, output_json_str = sys.argv[1:5]
+max_lines = int(max_lines_str)
+output_json = output_json_str == "1"
+
+# 1. Resolve PR or run for branch
+pr_number = None
+branch_name = target
+
+if target.isdigit():
+    pr_number = int(target)
+    # Get branch for PR
+    try:
+        out = subprocess.check_output(["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "headRefName,title,url"], text=True)
+        data = json.loads(out)
+        branch_name = data.get("headRefName", target)
+        pr_title = data.get("title", "")
+        pr_url = data.get("url", "")
+    except Exception as e:
+        print(f"Error fetching PR #{pr_number}: {e}", file=sys.stderr)
+        sys.exit(1)
+else:
+    # Try finding PR for branch
+    try:
+        out = subprocess.check_output(["gh", "pr", "list", "--repo", repo, "--head", branch_name, "--json", "number,title,url"], text=True)
+        prs = json.loads(out)
+        if prs:
+            pr_number = prs[0]["number"]
+            pr_title = prs[0]["title"]
+            pr_url = prs[0]["url"]
+        else:
+            pr_title = f"Branch {branch_name}"
+            pr_url = f"https://github.com/{repo}/tree/{branch_name}"
+    except Exception:
+        pr_title = f"Branch {branch_name}"
+        pr_url = f"https://github.com/{repo}/tree/{branch_name}"
+
+# 2. Get latest workflow run for branch
+try:
+    runs_out = subprocess.check_output(
+        ["gh", "run", "list", "--repo", repo, "--branch", branch_name, "--limit", "5", "--json", "databaseId,conclusion,status,name,url"],
+        text=True
+    )
+    runs = json.loads(runs_out)
+except Exception as e:
+    print(f"Error listing runs: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if not runs:
+    print(f"No GitHub Actions workflow runs found for branch {branch_name}.", file=sys.stderr)
+    sys.exit(1)
+
+# Find latest failure run or latest run
+failed_run = next((r for r in runs if r.get("conclusion") == "failure"), runs[0])
+run_id = failed_run["databaseId"]
+
+# 3. Get failed jobs within this run
+try:
+    jobs_out = subprocess.check_output(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs", "--jq", ".jobs[] | {id, name, conclusion, status, steps: [.steps[] | {name, conclusion, status}]}"],
+        text=True
+    )
+    job_lines = [json.loads(line) for line in jobs_out.strip().splitlines() if line.strip()]
+except Exception as e:
+    print(f"Error fetching jobs for run {run_id}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+failed_jobs = [j for j in job_lines if j.get("conclusion") == "failure"]
+
+if not failed_jobs and failed_run.get("conclusion") != "failure":
+    print(f"✔ All checks are passing for {branch_name} in latest run #{run_id}.")
+    sys.exit(0)
+
+# 4. Extract log tail for failed job
+results = []
+for job in failed_jobs:
+    job_id = job["id"]
+    job_name = job["name"]
+    failed_step = next((s["name"] for s in job.get("steps", []) if s.get("conclusion") == "failure"), "Unknown step")
+    
+    # Download log tail via gh api
+    log_tail = ""
+    try:
+        log_full = subprocess.check_output(
+            ["gh", "api", f"repos/{repo}/actions/jobs/{job_id}/logs"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            errors="ignore"
+        )
+        lines = log_full.splitlines()
+        log_tail = "\n".join(lines[-max_lines:])
+    except Exception:
+        log_tail = "(Log unavailable or job still executing)"
+
+    results.append({
+        "jobName": job_name,
+        "failedStep": failed_step,
+        "jobId": job_id,
+        "logTail": log_tail
+    })
+
+if output_json:
+    print(json.dumps({"repo": repo, "branch": branch_name, "prNumber": pr_number, "runId": run_id, "failedJobs": results}, indent=2))
+    sys.exit(0)
+
+# Build formatted prompt inspired by Orca's buildFixBrokenChecksPrompt
+print("=" * 70)
+print(f"🛠️  Katalyst CI Fix Prompt — PR #{pr_number or branch_name} ({repo})")
+print("=" * 70)
+print(f"\nInvestigate the broken CI checks for {repo} on branch `{branch_name}` (Run ID: {run_id}) and fix only failures caused by this branch.\n")
+print(f"Repository: {repo}")
+print(f"Branch / PR: {branch_name} (PR URL: {pr_url})")
+print(f"Workflow Run: https://github.com/{repo}/actions/runs/{run_id}\n")
+
+for r in results:
+    print(f"### Failing Job: {r['jobName']}")
+    print(f"• Failed Step: {r['failedStep']}")
+    print(f"• Job ID: {r['jobId']}")
+    print("• Log Output (tail):")
+    print("```text")
+    print(r['logTail'])
+    print("```\n")
+
+print("Instructions for AI Agent:")
+print("1. Analyze the exact failure step and log trace above.")
+print("2. Classify if the failure was caused by the branch's code or an environmental/runner issue.")
+print("3. Implement the smallest correct code or test changes and validate the fix.")
+PY

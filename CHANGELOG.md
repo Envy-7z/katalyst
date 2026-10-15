@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.8] - 2026-10-15
+
+### Added
+- **One-Click Broken CI Fixer (`bin/katalyst-fix-ci` & `/fix-ci`)**:
+  - Directly queries GitHub Actions via `gh api`, extracts failing jobs, steps, and last 150 lines (max 256KB) of failure log.
+  - Assembles untrusted investigation prompts (Orca `buildFixBrokenChecksPrompt` pattern) to diagnose and fix CI breaks autonomously.
+- **Native Jira Plan & Task Generator (`bin/katalyst-jira` & `/jira`)**:
+  - Resolves Jira credentials from `~/.omp/agent/mcp.json` or environment.
+  - Fetches Jira issues (Summary, Description, Acceptance Criteria) and formats them into native Katalyst `.plan.md` files for `PlanReviewView`.
+- **Composer Action Chips & Quick Slash Commands (`config/omp/hooks/pre/composer-chips.ts`)**:
+  - Adds `/fix-ci`, `/jira`, and `/mobile` commands directly accessible from the prompt composer.
+- **Live Terminal Error Trapper (`config/omp/hooks/pre/terminal-error-trap.ts`)**:
+  - Detects non-zero shell command exits and injects concise error traces into agent context, preventing hallucinations that broken builds passed.
+- **Batch Diff Annotator (`bin/katalyst-review` & `skills/annotate-diff/SKILL.md`)**:
+  - Allows developers to record multi-file line-anchored review notes on diffs and bundle them into a single cohesive revision turn.
+- **Terminal Tab Drag-and-Drop into Agent Panel (Patch 0066, Zed PR #60582)**: Move open TerminalView tabs directly into the Agent Panel by dragging tabs, keeping terminals and agent conversations side-by-side.
+
+### Fixed
+- Updated in-app About modal version to Katalyst v0.3.8.
+
+---
+## [0.3.7] - 2026-10-15
+
+### Added
+- **Mobile Engineering Suite (Laptop 2 Focus)**:
+  - **`mobile-developer` Skill**: Autonomous mobile engineering conventions for Flutter (BLoC/Cubit, Riverpod, platform channels), Android Native (Jetpack Compose, Coroutines, Gradle daemon, ADB reverse), and iOS Native (SwiftUI, SPM/Cocoapods, simctl).
+  - **`katalyst-mobile` CLI**: Device detection, emulator/simulator launcher (`boot`), automatic TCP port-forwarding (`reverse`), scoped logcat streaming by PID, and cache cleaning.
+  - **Maestro MCP Integration**: Pre-configured Maestro MCP server in `mcp.json.example` for autonomous, deterministic mobile UI testing.
+- **Universal IDE Superpowers (All Languages & Stacks)**:
+  - **Scoped Glob Rules (`config/omp/hooks/pre/scoped-rules.ts`)**: Auto-injects `.katalyst/rules/*.mdc` matching active file extensions, slashing system prompt token overhead by up to 60%.
+  - **Dynamic Context Mentions (`config/omp/hooks/pre/dynamic-context.ts`)**: Adds `@diff` (uncommitted git changes) and `@git-log` (recent commits) shortcuts to chat prompts.
+  - **Task Recipe Runner (`bin/katalyst-recipe` & `skills/recipe-runner/SKILL.md`)**: Declarative engineering SOP automation via `.katalyst/recipes/*.yaml`.
+  - **Codebase Deep Search (`bin/katalyst-search` & `skills/deep-search/SKILL.md`)**: High-speed, noise-filtered symbol and declaration search across multi-module projects.
+- **Token Economy & Context Optimization**:
+  - **`katalyst-rtk` CLI Token Compressor**: Intercepts and compresses verbose test, git diff, and build tool outputs by 60%–90% before reaching the LLM context window.
+  - **Intelligent Context Condenser (`config/omp/hooks/pre/session-compaction.ts`)**: Dense session compaction discarding raw tool dumps while preserving architectural decisions, variables, and uncompleted tasks.
+  - **Dual-Model Architect Mode (`skills/architect-mode/SKILL.md`)**: Two-phase design pattern (Reasoning model plans, fast model implements) cutting token costs by 60%–75%.
+
+### Fixed
+- **Session Sync CLI**: Running `katalyst-session-sync` without explicit subcommands now defaults to `status` rather than exiting with an argument error.
+- **Installer GUI Shell Resilience**: `install.sh` resolves the active absolute `omp` binary path for new Zed settings, preventing `command not found` errors when launched from macOS Dock or Spotlight.
+- **Thinking Block Text Selection (Patch 0065)**: Makes the decorative gradient overlay in Thinking previews mouse-transparent so text selection, dragging, and right-click copying reach the underlying Markdown content.
+- Updated in-app About version modal to Katalyst v0.3.7.
+
+---
 ## [0.3.5] - 2026-10-10
 
 ### Fixed

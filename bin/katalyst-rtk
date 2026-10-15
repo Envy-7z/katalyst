@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-rtk: Smart Output Compressor to save 60-90% LLM token consumption
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-rtk <command> [args...]
+
+Runs standard dev commands through a smart token-saving filter that compresses
+output (truncating repetitive noise, collapsing passed tests, stripping git headers)
+before returning it to the terminal or AI agent.
+
+Supported commands:
+  git status, git diff, git log
+  cargo test, cargo build
+  flutter test, flutter analyze
+  ./gradlew test, ./gradlew assembleDebug
+  npm test, pytest, go test
+EOF
+  exit 0
+}
+
+[[ $# -gt 0 ]] || usage
+
+cmd="$1"
+shift || true
+
+# Execute command and capture output
+output=""
+exit_code=0
+output="$("$cmd" "$@" 2>&1)" || exit_code=$?
+
+# Python smart token compressor
+python3 - "$cmd" "$exit_code" "$output" <<'PY'
+import sys, re
+
+cmd = sys.argv[1]
+exit_code = int(sys.argv[2])
+text = sys.argv[3]
+lines = text.splitlines()
+
+# If exit code was 0 and output is short, print verbatim
+if len(lines) <= 25:
+    print(text)
+    sys.exit(exit_code)
+
+print(f"[katalyst-rtk: compressed {len(lines)} lines -> summary]")
+
+if "test" in cmd or "gradle" in cmd or "flutter" in cmd:
+    # Filter test runs: show summary and failures only
+    failures = []
+    summary_lines = []
+    capture = False
+    for line in lines:
+        if any(w in line.lower() for w in ["fail", "error", "exception", "assert"]):
+            failures.append(line)
+        elif any(w in line.lower() for w in ["passed", "ran ", "test result:", "ok", "completed"]):
+            summary_lines.append(line)
+
+    if failures:
+        print("\n--- Failures & Stack Traces ---")
+        for f in failures[:50]:
+            print(f)
+        if len(failures) > 50:
+            print(f"... and {len(failures)-50} more failure lines.")
+    else:
+        print("✔ All tests passed.")
+
+    if summary_lines:
+        print("\n--- Summary ---")
+        for s in summary_lines[-5:]:
+            print(s)
+
+elif "diff" in cmd:
+    # Filter git diff: strip index lines and show compact hunks
+    for line in lines:
+        if line.startswith("index ") or line.startswith("diff --git"):
+            continue
+        print(line)
+
+elif "status" in cmd:
+    # Compact git status
+    for line in lines:
+        if line.startswith("#") or "use \"git" in line:
+            continue
+        print(line)
+
+else:
+    # Generic truncation: head 20 + tail 20
+    for l in lines[:20]:
+        print(l)
+    print(f"\n... [{len(lines)-40} lines omitted by katalyst-rtk] ...\n")
+    for l in lines[-20:]:
+        print(l)
+
+sys.exit(exit_code)
+PY

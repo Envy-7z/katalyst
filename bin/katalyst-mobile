@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# katalyst-mobile: Native mobile development powerhouse for Flutter, Android & iOS
+# ==============================================================================
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: katalyst-mobile <command> [arguments]
+
+Commands:
+  devices             List all connected Android devices, running iOS simulators, and Flutter targets
+  emulators           List available Android AVDs and iOS Simulators
+  boot <target>       Boot an iOS Simulator (UUID/name) or Android AVD
+  reverse [ports...]  Auto-reverse TCP ports to connected Android device (default: 3000, 8080, 5432, 8000)
+  reverse-watch       Run background watcher that automatically reverses ports when devices connect
+  clean               Clean build caches for Flutter, Gradle, and iOS Pods in current directory
+  logcat [tag|pkg]    Stream filtered Android logcat (scoping by app package PID or log tag)
+  flutter-run [args]  Launch Flutter app with machine JSON-RPC daemon (sub-second hot reload ready)
+  maestro-setup       Check or guide installation of Maestro MCP for autonomous mobile UI testing
+  help                Show this help message
+
+Examples:
+  katalyst-mobile devices
+  katalyst-mobile reverse 3000 8080
+  katalyst-mobile logcat com.example.app
+  katalyst-mobile clean
+EOF
+  exit 0
+}
+
+command="${1:-help}"
+shift || true
+
+case "$command" in
+  devices)
+    echo "=== Mobile Target Devices ==="
+    if command -v flutter >/dev/null 2>&1; then
+      echo "--- Flutter Targets ---"
+      flutter devices 2>/dev/null || echo "(flutter not configured or no devices)"
+      echo ""
+    fi
+    if command -v adb >/dev/null 2>&1; then
+      echo "--- Android ADB Devices ---"
+      adb devices -l 2>/dev/null || echo "(adb failed)"
+      echo ""
+    fi
+    if command -v xcrun >/dev/null 2>&1; then
+      echo "--- Running iOS Simulators ---"
+      xcrun simctl list devices booted 2>/dev/null || echo "(simctl failed)"
+      echo ""
+    fi
+    ;;
+
+  emulators)
+    echo "=== Available Emulators & Simulators ==="
+    if command -v emulator >/dev/null 2>&1; then
+      echo "--- Android AVDs ---"
+      emulator -list-avds 2>/dev/null || echo "(no AVDs found)"
+      echo ""
+    fi
+    if command -v xcrun >/dev/null 2>&1; then
+      echo "--- Available iOS Simulators ---"
+      xcrun simctl list devices available 2>/dev/null | grep -E "iPhone|iPad" || echo "(no iOS simulators found)"
+      echo ""
+    fi
+    ;;
+
+  boot)
+    target="${1:-}"
+    [[ -n "$target" ]] || { echo "Error: specify an emulator name or simulator UUID. Run: katalyst-mobile emulators" >&2; exit 1; }
+    if command -v xcrun >/dev/null 2>&1 && xcrun simctl boot "$target" 2>/dev/null; then
+      echo "Booted iOS simulator: $target"
+      open -a Simulator 2>/dev/null || true
+    elif command -v emulator >/dev/null 2>&1; then
+      echo "Launching Android AVD: $target..."
+      nohup emulator -avd "$target" >/dev/null 2>&1 &
+      echo "Android emulator launched in background."
+    else
+      echo "Error: could not boot '$target' via simctl or emulator CLI." >&2
+      exit 1
+    fi
+    ;;
+
+  reverse)
+    command -v adb >/dev/null 2>&1 || { echo "Error: adb is not installed or not in PATH." >&2; exit 1; }
+    ports=("$@")
+    if [[ ${#ports[@]} -eq 0 ]]; then
+      ports=(3000 8080 5432 8000)
+    fi
+    existing_reverses="$(adb reverse --list 2>/dev/null || true)"
+    for port in "${ports[@]}"; do
+      if echo "$existing_reverses" | grep -q "tcp:$port"; then
+        echo "Port $port already reversed."
+      else
+        adb reverse "tcp:$port" "tcp:$port" 2>/dev/null && echo "✔ Reversed local tcp:$port -> device tcp:$port" || echo "⚠ Failed to reverse port $port (no device connected?)"
+      fi
+    done
+    ;;
+
+  reverse-watch)
+    command -v adb >/dev/null 2>&1 || { echo "Error: adb is not installed or not in PATH." >&2; exit 1; }
+    echo "Starting katalyst-mobile adb reverse watcher (Ctrl+C to quit)..."
+    ports=(3000 8080 5432 8000)
+    while true; do
+      devices="$(adb devices 2>/dev/null | grep -w "device" | awk '{print $1}')"
+      if [[ -n "$devices" ]]; then
+        for port in "${ports[@]}"; do
+          adb reverse "tcp:$port" "tcp:$port" >/dev/null 2>&1 || true
+        done
+      fi
+      sleep 5
+    done
+    ;;
+
+  clean)
+    echo "=== Cleaning Mobile Build Artifacts ==="
+    cleaned=0
+    if [[ -f "pubspec.yaml" ]] && command -v flutter >/dev/null 2>&1; then
+      echo "Running flutter clean..."
+      flutter clean
+      cleaned=1
+    fi
+    if [[ -f "gradlew" ]]; then
+      echo "Running ./gradlew clean..."
+      ./gradlew clean --no-daemon
+      cleaned=1
+    fi
+    if [[ -d "ios" && -f "ios/Podfile" ]]; then
+      echo "Cleaning iOS Pods cache..."
+      rm -rf ios/Pods ios/Podfile.lock
+      cleaned=1
+    fi
+    if [[ "$cleaned" -eq 0 ]]; then
+      echo "No Flutter, Gradle, or iOS project detected in current directory."
+    else
+      echo "Build clean complete."
+    fi
+    ;;
+
+  logcat)
+    target="${1:-}"
+    command -v adb >/dev/null 2>&1 || { echo "Error: adb is not installed or not in PATH." >&2; exit 1; }
+    if [[ -z "$target" ]]; then
+      echo "Streaming general Android logcat (time formatted):"
+      exec adb logcat -v time
+    fi
+    # Check if target is a running package name
+    pid="$(adb shell pidof -s "$target" 2>/dev/null || true)"
+    if [[ -n "$pid" ]]; then
+      echo "Scoped logcat to package $target (PID: $pid):"
+      exec adb logcat --pid="$pid" -v time
+    else
+      echo "Streaming logcat filtered by tag: $target"
+      exec adb logcat -v time -s "$target:V"
+    fi
+    ;;
+
+  flutter-run)
+    command -v flutter >/dev/null 2>&1 || { echo "Error: flutter is not installed or not in PATH." >&2; exit 1; }
+    echo "Launching Flutter with machine daemon protocol..."
+    exec flutter run --machine "$@"
+    ;;
+
+  maestro-setup)
+    echo "=== Maestro Mobile UI Testing Setup ==="
+    if command -v maestro >/dev/null 2>&1; then
+      echo "✔ Maestro CLI installed: $(maestro --version 2>/dev/null || echo "active")"
+    else
+      echo "Maestro CLI is not installed."
+      echo "Install via:"
+      echo "  curl -fsSL https://get.maestro.mobile.dev | bash"
+      exit 0
+    fi
+    echo ""
+    echo "To connect Maestro to Katalyst / OMP agent:"
+    echo "1. Verify Java 17+ is installed (java -version)"
+    echo "2. Add Maestro MCP to ~/.omp/agent/mcp.json:"
+    echo '   "maestro": { "command": "maestro", "args": ["mcp"] }'
+    echo "3. Restart Katalyst or OMP ACP."
+    ;;
+
+  help|--help|-h)
+    usage
+    ;;
+
+  *)
+    echo "Unknown command: $command" >&2
+    usage
+    ;;
+esac

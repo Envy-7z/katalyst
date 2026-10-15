@@ -23,6 +23,13 @@
     "figma-remote": {
       "type": "http",
       "url": "https://mcp.figma.com/mcp"
+    },
+    "maestro": {
+      "type": "stdio",
+      "command": "maestro",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }
