@@ -23,13 +23,30 @@ export default function dynamicContextHook(pi: HookAPI): void {
         .map((c: any) => c.text)
         .join("\n");
     }
-
+    const isFirstTurn = messages.filter((m: any) => m.role === "user").length <= 1;
     const hasMentions = userText.includes("@diff") || userText.includes("@terminal") || userText.includes("@git-log") || userText.includes("@mb") || userText.includes("@context");
-    if (!hasMentions) {
+
+    // If not first turn and no mentions, nothing to inject
+    if (!isFirstTurn && !hasMentions) {
       return {};
     }
 
     const contextAdditions: string[] = [];
+
+    // 0. Auto-Restore Memory Bank on Session Start (Turn 1):
+    // If project has .memory-bank/status.md, inject it automatically without user typing anything!
+    if (isFirstTurn && !userText.includes("@mb") && !userText.includes("@context")) {
+      try {
+        const statusCmd = "source ~/.katalyst/lib/skill-memory-bank/scripts/_lib.sh && BANK=$(mb_resolve_path) && [ -d \"$BANK\" ] && cat \"$BANK/status.md\" 2>/dev/null";
+        const mbStatus = execSync(statusCmd, { cwd, shell: "/bin/bash", timeout: 3000, encoding: "utf-8" }).trim();
+        if (mbStatus) {
+          const truncated = mbStatus.length > 2500 ? mbStatus.slice(0, 2400) + "\n... [truncated]" : mbStatus;
+          contextAdditions.push("### 🧠 Auto-Loaded Project Memory (.memory-bank/status.md):\n" + truncated + "\n*(Note: This is automatically restored from the project's memory bank. Pick up directly from here without asking the user to re-explain.)*");
+        }
+      } catch {
+        // Silent ignore if no memory bank exists
+      }
+    }
 
     // 1. @diff: Inject unstaged and staged git changes
     if (userText.includes("@diff")) {
