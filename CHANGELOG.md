@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Batch Diff Annotator (`bin/katalyst-review` & `skills/annotate-diff/SKILL.md`)**:
   - Allows developers to record multi-file line-anchored review notes on diffs and bundle them into a single cohesive revision turn.
 - **Terminal Tab Drag-and-Drop into Agent Panel (Patch 0066, Zed PR #60582)**: Move open TerminalView tabs directly into the Agent Panel by dragging tabs, keeping terminals and agent conversations side-by-side.
+- **Memory Bank & Zero-Amnesia Handoff (`memory-bank`, `/start`, `/done`, `/mb`, `@mb`)**: Persistent cross-session project memory bank (fockus/skill-memory-bank v5.3.1). Eliminates context rot and session amnesia with lightweight (<500 token) status restoration, allowing fast single-task thread resets without losing state.
 
 ### Fixed
 - Updated in-app About modal version to Katalyst v0.3.8.

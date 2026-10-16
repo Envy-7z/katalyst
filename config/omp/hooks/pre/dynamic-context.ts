@@ -24,7 +24,8 @@ export default function dynamicContextHook(pi: HookAPI): void {
         .join("\n");
     }
 
-    if (!userText.includes("@diff") && !userText.includes("@terminal") && !userText.includes("@git-log")) {
+    const hasMentions = userText.includes("@diff") || userText.includes("@terminal") || userText.includes("@git-log") || userText.includes("@mb") || userText.includes("@context");
+    if (!hasMentions) {
       return {};
     }
 
@@ -62,6 +63,22 @@ export default function dynamicContextHook(pi: HookAPI): void {
         }
       } catch {
         contextAdditions.push("### Recent @git-log Context:\n*(No git history available)*");
+      }
+    }
+
+    // 3. @mb or @context: Inject active project status from .memory-bank/
+    if (userText.includes("@mb") || userText.includes("@context")) {
+      try {
+        const statusCmd = "source ~/.katalyst/lib/skill-memory-bank/scripts/_lib.sh && BANK=$(mb_resolve_path) && [ -d \"$BANK\" ] && cat \"$BANK/status.md\" 2>/dev/null";
+        const mbStatus = execSync(statusCmd, { cwd, shell: "/bin/bash", timeout: 4000, encoding: "utf-8" }).trim();
+        if (mbStatus) {
+          const truncated = mbStatus.length > 3000 ? mbStatus.slice(0, 2900) + "\n... [memory-bank truncated]" : mbStatus;
+          contextAdditions.push("### Active @mb Project Status:\n" + truncated);
+        } else {
+          contextAdditions.push("### Active @mb Context:\n*(No active .memory-bank found for this project)*");
+        }
+      } catch {
+        contextAdditions.push("### Active @mb Context:\n*(Could not resolve memory bank)*");
       }
     }
 
