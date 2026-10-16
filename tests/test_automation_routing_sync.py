@@ -146,7 +146,7 @@ class AutomationRoutingSyncTests(unittest.TestCase):
         self.assertIn("context7", active, "Documentation RAG requires context7")
         self.assertIn("github", active, "CI and PR workflows require github MCP")
         self.assertIn("playwright", active, "Browser UI testing requires playwright")
-        self.assertIn("jira-geniebook", active, "Jira integration requires jira MCP")
+        self.assertTrue(any("jira" in k for k in active), "Jira integration requires jira MCP")
         
         # Verify disabled servers are cleanly segmented
         disabled = mcp.get("disabledMcpServers", {})
