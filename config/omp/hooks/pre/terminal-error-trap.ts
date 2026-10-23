@@ -1,50 +1,41 @@
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 /**
- * Terminal Error Trap Hook (Windsurf Cascade pattern):
- * Captures non-zero shell tool exits and injects diagnostic guardrails so agents
- * never hallucinate that a broken build or failed command succeeded.
+ * Terminal Error Trap Hook:
+ * On a failed bash tool result, appends a diagnostic instruction to the tool result
+ * content so the model cannot treat a broken command as success.
+ *
+ * `tool_result` handlers may return `{ content }`; a `systemPrompt` field is ignored.
  */
-export default function terminalErrorTrapHook(pi: HookAPI): void {
-  pi.on("tool_result", async (event: Record<string, unknown>) => {
-    const message = event.message as Record<string, unknown> | undefined;
-    if (!message || message.role !== "toolResult") return;
+type TextBlock = { type: "text"; text: string };
 
-    const toolName = message.toolName;
+function isTextBlock(block: unknown): block is TextBlock {
+  return block !== null && typeof block === "object" && "type" in block && block.type === "text"
+    && "text" in block && typeof block.text === "string";
+}
+
+export default function terminalErrorTrapHook(pi: HookAPI): void {
+  pi.on("tool_result", async (event) => {
+    if (!event || typeof event !== "object") return;
+    const toolName = "toolName" in event ? event.toolName : undefined;
     if (toolName !== "bash") return;
 
-    let contentStr = "";
-    if (typeof message.content === "string") {
-      contentStr = message.content;
-    } else if (Array.isArray(message.content)) {
-      contentStr = message.content
-        .filter((c: any) => c.type === "text" && typeof c.text === "string")
-        .map((c: any) => c.text)
-        .join("\n");
-    }
+    const content = "content" in event && Array.isArray(event.content) ? event.content : [];
+    const text = content.filter(isTextBlock).map((b) => b.text).join("\n");
+    const exitMatch = text.match(/Command exited with code (\d+)/i) || text.match(/exit status (\d+)/i);
+    const isError = "isError" in event && event.isError === true;
+    if (!isError && !(exitMatch && exitMatch[1] !== "0")) return;
 
-    // Detect non-zero exit code or explicit fatal error
-    const exitMatch = contentStr.match(/Command exited with code (\d+)/i) || contentStr.match(/exit status (\d+)/i);
-    const hasError = message.isError === true || (exitMatch && exitMatch[1] !== "0");
-
-    if (hasError) {
-      const exitCode = exitMatch ? exitMatch[1] : "unknown";
-      // Extract tail of error for concise diagnostic
-      const lines = contentStr.split("\n");
-      const errorTail = lines.slice(-25).join("\n");
-
-      return {
-        systemPrompt: [
-          "## ⚠️ Terminal Error Trap (Windsurf Cascade Guard)",
-          `The last executed shell command failed (exit code: ${exitCode}).`,
-          "Recent error trace:",
-          "```text",
-          errorTail,
-          "```",
-          "MANDATORY INSTRUCTION: You must diagnose the root cause of this error before running additional commands.",
-          "Do not assume the build succeeded or ignore the failure.",
-        ].join("\n"),
-      };
-    }
+    const exitCode = exitMatch ? exitMatch[1] : "unknown";
+    const trap: TextBlock = {
+      type: "text",
+      text: [
+        "",
+        `[terminal-error-trap] This command FAILED (exit code: ${exitCode}).`,
+        "Diagnose the root cause from the output above before running more commands.",
+        "Do not report this step as successful.",
+      ].join("\n"),
+    };
+    return { content: [...content, trap] };
   });
 }

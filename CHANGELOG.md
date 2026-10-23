@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [0.3.9] - 2026-10-23
+
+### Fixed
+- **Agent replies rendered cut off mid-sentence (Patch 0067)**: the streamed message is now remeasured after every reveal tick and after the final flush, so the full reply shows as soon as the turn ends. Includes a regression test.
+- **OMP hooks that never took effect**: `dynamic-context.ts` and `scoped-rules.ts` returned `systemPrompt` from the `context` event, which OMP ignores. They now inject through `before_agent_start`. `terminal-error-trap.ts` now appends its warning to the failed tool result instead of returning an ignored field.
+- Updated in-app About modal version to Katalyst v0.3.9.
+
+### Added
+- **Scope guard hook (`config/omp/hooks/pre/scope-guard.ts`)**: blocks off-task exploration (process inspection, other sessions' transcripts, parent/sibling directories, shell history, account enumeration, decoding secret files) unless the user's prompt asks for it, and stops fast models (Flash, Haiku, mini) from editing during multi-file refactors until the user confirms.
+- **Deterministic skill routing in `dynamic-context.ts`**: keyword routes (word-boundary matched) inject skill bodies for UI, copywriting, debugging, git, refactor, security, tests, and fixes; only skills whose bodies were loaded are reported as active. Personal routes can be added in `~/.katalyst/skill-routes.json`.
+
+---
 ## [0.3.8] - 2026-10-15
 
 ### Added
