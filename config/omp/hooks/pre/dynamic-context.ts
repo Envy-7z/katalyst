@@ -16,30 +16,35 @@ import { join } from "path";
  * ignored by omp, which is why this lives on `before_agent_start` instead.
  */
 
-type SkillRoute = { pattern: RegExp; skills: string[] };
+type SkillRoute = { pattern: RegExp; skills: string[]; codeOnly?: boolean };
 
 // Generic routes. Project/company-specific routes live in ~/.katalyst/skill-routes.json
 // ([{ "pattern": "regex", "skills": ["name"] }]) and are checked first, so domain skills
 // win when more than MAX_SKILLS match.
+// `codeOnly` routes are skipped when the prompt is a writing task: pasted interview
+// questions or emails mention "error handling", "implement", etc. without being a bug fix.
 const GENERIC_ROUTES: SkillRoute[] = [
-  { pattern: /\b(security|keamanan|xss|csrf|sql\s*injection|vulnerab\w*|celah\s+keamanan)\b/, skills: ["security-best-practices", "security-and-hardening"] },
-  { pattern: /\b(unit\s*tests?|bikin\s+test|tambah\s+test|tdd)\b/, skills: ["unit-test-craft", "test-driven-development"] },
   {
-    pattern: /\b(ui|ux|tampilan|desain|design|frontend|css|layout|warna|landing\s?page|thumbnail|figma|tailwind)\b/,
-    skills: ["antislop-ui", "boutique-ui-design"],
-  },
-  {
-    pattern: /\b(fiverr|gig|upwork|proposal|copywriting|caption|cover\s?letter|linkedin|bio)\b/,
+    pattern: /\b(fiverr|gig|upwork|proposal|copywriting|caption|cover\s?letter|linkedin|bio|jawab(in|an)?|bales(in|an)?|balas(an)?|email|surat|lamaran|screening|interview|recruiter|rekruter)\b/,
     skills: ["human-voice", "antislop-copywriting"],
   },
+  { pattern: /\b(security|keamanan|xss|csrf|sql\s*injection|vulnerab\w*|celah\s+keamanan)\b/, skills: ["security-best-practices", "security-and-hardening"] },
+  { pattern: /\b(unit\s*tests?|bikin\s+test|tambah\s+test|tdd)\b/, skills: ["unit-test-craft", "test-driven-development"], codeOnly: true },
+  {
+    pattern: /\b(tampilan|desain|css|layout|warna|landing\s?page|thumbnail|figma|tailwind)\b/,
+    skills: ["antislop-ui", "boutique-ui-design"],
+  },
+  { pattern: /\b(ui|ux|frontend)\b/, skills: ["antislop-ui", "boutique-ui-design"], codeOnly: true },
   {
     pattern: /\b(bug|error|exception|crash|force\s?close|gagal|failed|failing|stack\s?trace|timeout)\b/,
     skills: ["fault-localization", "systematic-debugging"],
+    codeOnly: true,
   },
-  { pattern: /\b(push|commit|pull\s?request|merge|rebase|cherry-pick)\b/, skills: ["git-safe-change-control"] },
-  { pattern: /\b(refactor|refaktor|simplify|cleanup)\b/, skills: ["code-simplification", "safe-refactor-guard"] },
-  { pattern: /\b(fix|benerin|perbaiki|implement\w*|bikin\s+fitur|tambah\s+fitur)\b/, skills: ["verification-before-completion"] },
+  { pattern: /\b(push|commit|pull\s?request|merge|rebase|cherry-pick)\b/, skills: ["git-safe-change-control"], codeOnly: true },
+  { pattern: /\b(refactor|refaktor|simplify|cleanup)\b/, skills: ["code-simplification", "safe-refactor-guard"], codeOnly: true },
+  { pattern: /\b(fix|benerin|perbaiki|implement\w*|bikin\s+fitur|tambah\s+fitur)\b/, skills: ["verification-before-completion"], codeOnly: true },
 ];
+const WRITING_ROUTE = GENERIC_ROUTES[0];
 
 const SKILL_CHAR_LIMIT = 2500;
 const MAX_SKILLS = 5;
@@ -67,8 +72,9 @@ export function routeSkills(prompt: string): { names: string[]; bodies: string[]
   const lower = prompt.toLowerCase();
   const names: string[] = [];
   const bodies: string[] = [];
+  const writing = WRITING_ROUTE.pattern.test(lower);
   for (const route of [...loadUserRoutes(), ...GENERIC_ROUTES]) {
-    if (!route.pattern.test(lower)) continue;
+    if (!route.pattern.test(lower) || (writing && route.codeOnly)) continue;
     for (const name of route.skills) {
       if (names.includes(name) || names.length >= MAX_SKILLS) continue;
       const skillPath = join(homedir(), ".katalyst", "skills", name, "SKILL.md");
@@ -128,17 +134,19 @@ export default function dynamicContextHook(pi: HookAPI): void {
 
     // 1. Skill routing
     const { names, bodies } = routeSkills(prompt);
-    if (names.length > 0) {
-      const activeLine = ["token-saving", "caveman-lite", ...names].join(", ");
-      sections.push(
-        [
-          "### Auto-routed skills",
-          `These skill bodies are loaded for this turn: ${names.join(", ")}.`,
-          `Start your reply with exactly: \`Active skills: ${activeLine}\` and apply these skills.`,
-          ...bodies,
-        ].join("\n\n"),
-      );
-    }
+    // Always state the active set: without a reset the model copies the previous
+    // turn's skills line and claims skills that were not loaded this turn.
+    const activeLine = ["token-saving", "caveman-lite", ...names].join(", ");
+    sections.push(
+      names.length > 0
+        ? [
+            "### Auto-routed skills",
+            `These skill bodies are loaded for this turn: ${names.join(", ")}.`,
+            `Start your reply with exactly: \`Active skills: ${activeLine}\` and apply these skills.`,
+            ...bodies,
+          ].join("\n\n")
+        : `### Active skills\nNo skills were auto-routed this turn. Start your reply with \`Active skills: ${activeLine}\` plus only skills you load with \`read skill://…\` this turn; do not repeat earlier turns' skills.`,
+    );
 
     // 2. Memory bank on first turn (or explicit @mb / @context)
     const wantsMb = /@mb\b|@context\b/.test(prompt);

@@ -29,6 +29,12 @@ const BASH_RULES: Array<{ cmd: RegExp; unlock: RegExp; reason: string }> = [
     unlock: /\b(history|riwayat\s+(command|terminal|shell))\b/i,
     reason: "Shell history is private and off-task unless the user asks for it.",
   },
+  {
+    // Seen live: dozens of curl calls pulling a site's JS bundle and probing its private API.
+    cmd: /\b(curl|wget)\b[^\n]*(-A\s|--user-agent|user-agent:|\/assets\/[^\s"']+\.js|\/api\/v\d)/i,
+    unlock: /\b(scrape|scraping|scraper|api|endpoint|curl|reverse.?engineer)\b/i,
+    reason: "Scraping JS bundles/private APIs or spoofing User-Agent is off-task. Read the URL once (or open it once in the browser) and answer with what you have.",
+  },
 ];
 
 function bashVerdict(command: string, prompt: string): Verdict {
