@@ -1,100 +1,19 @@
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 import { execSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 
 /**
  * Dynamic Context Hook.
  *
  * Runs on `before_agent_start` and injects one hidden custom message with:
- * 1. Deterministic skill routing (word-boundary keyword match → SKILL.md body).
- * 2. Memory-bank status on the first user turn of a session.
- * 3. @diff / @git-log / @mb / @context expansion.
+ * 1. Memory-bank status on the first user turn of a session.
+ * 2. @diff / @git-log / @mb / @context expansion.
  *
  * `context` handlers may only return `{ messages }`; a `systemPrompt` field there is
  * ignored by omp, which is why this lives on `before_agent_start` instead.
  */
 
-type SkillRoute = { pattern: RegExp; skills: string[]; codeOnly?: boolean };
-
-// Generic routes. Project/company-specific routes live in ~/.katalyst/skill-routes.json
-// ([{ "pattern": "regex", "skills": ["name"] }]) and are checked first, so domain skills
-// win when more than MAX_SKILLS match.
-// `codeOnly` routes are skipped when the prompt is a writing task: pasted interview
-// questions or emails mention "error handling", "implement", etc. without being a bug fix.
-const GENERIC_ROUTES: SkillRoute[] = [
-  {
-    pattern: /\b(fiverr|gig|upwork|proposal|copywriting|caption|cover\s?letter|linkedin|bio|jawab(in|an)?|bales(in|an)?|balas(an)?|email|surat|lamaran|screening|interview|recruiter|rekruter)\b/,
-    skills: ["human-voice", "antislop-copywriting"],
-  },
-  { pattern: /\b(security|keamanan|xss|csrf|sql\s*injection|vulnerab\w*|celah\s+keamanan)\b/, skills: ["security-best-practices", "security-and-hardening"] },
-  { pattern: /\b(unit\s*tests?|bikin\s+test|tambah\s+test|tdd)\b/, skills: ["unit-test-craft", "test-driven-development"], codeOnly: true },
-  {
-    pattern: /\b(tampilan|desain|css|layout|warna|landing\s?page|thumbnail|figma|tailwind)\b/,
-    skills: ["antislop-ui", "boutique-ui-design"],
-  },
-  { pattern: /\b(ui|ux|frontend)\b/, skills: ["antislop-ui", "boutique-ui-design"], codeOnly: true },
-  {
-    pattern: /\b(bug|error|exception|crash|force\s?close|gagal|failed|failing|stack\s?trace|timeout)\b/,
-    skills: ["fault-localization", "systematic-debugging"],
-    codeOnly: true,
-  },
-  { pattern: /\b(push|commit|pull\s?request|merge|rebase|cherry-pick)\b/, skills: ["git-safe-change-control"], codeOnly: true },
-  { pattern: /\b(refactor|refaktor|simplify|cleanup)\b/, skills: ["code-simplification", "safe-refactor-guard"], codeOnly: true },
-  { pattern: /\b(fix|benerin|perbaiki|implement\w*|bikin\s+fitur|tambah\s+fitur)\b/, skills: ["verification-before-completion"], codeOnly: true },
-];
-const WRITING_ROUTE = GENERIC_ROUTES[0];
-
-const SKILL_CHAR_LIMIT = 2500;
-const MAX_SKILLS = 5;
-const USER_ROUTES_FILE = join(homedir(), ".katalyst", "skill-routes.json");
 const MB_STATUS_CMD =
   'source ~/.katalyst/lib/skill-memory-bank/scripts/_lib.sh && BANK=$(mb_resolve_path) && [ -d "$BANK" ] && cat "$BANK/status.md" 2>/dev/null';
-
-function loadUserRoutes(): SkillRoute[] {
-  if (!existsSync(USER_ROUTES_FILE)) return [];
-  try {
-    const raw: unknown = JSON.parse(readFileSync(USER_ROUTES_FILE, "utf-8"));
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((r): SkillRoute[] => {
-      if (!r || typeof r !== "object" || !("pattern" in r) || !("skills" in r)) return [];
-      const { pattern, skills } = r;
-      if (typeof pattern !== "string" || !Array.isArray(skills)) return [];
-      return [{ pattern: new RegExp(pattern, "i"), skills: skills.filter((s): s is string => typeof s === "string") }];
-    });
-  } catch {
-    return []; // a broken routes file must not break prompting
-  }
-}
-
-export function routeSkills(prompt: string): { names: string[]; bodies: string[] } {
-  const lower = prompt.toLowerCase();
-  const names: string[] = [];
-  const bodies: string[] = [];
-  const writing = WRITING_ROUTE.pattern.test(lower);
-  for (const route of [...loadUserRoutes(), ...GENERIC_ROUTES]) {
-    if (!route.pattern.test(lower) || (writing && route.codeOnly)) continue;
-    for (const name of route.skills) {
-      if (names.includes(name) || names.length >= MAX_SKILLS) continue;
-      const skillPath = join(homedir(), ".katalyst", "skills", name, "SKILL.md");
-      if (!existsSync(skillPath)) continue;
-      let raw: string;
-      try {
-        raw = readFileSync(skillPath, "utf-8");
-      } catch {
-        continue;
-      }
-      // A skill is claimed active only when its body was actually injected.
-      names.push(name);
-      const body = raw.length > SKILL_CHAR_LIMIT
-        ? `${raw.slice(0, SKILL_CHAR_LIMIT)}\n[truncated; read skill://${name} for the rest]`
-        : raw;
-      bodies.push(`#### Skill [${name}]\n${body}`);
-    }
-  }
-  return { names, bodies };
-}
 
 function run(cmd: string, cwd: string, timeout: number): string {
   try {
@@ -132,23 +51,7 @@ export default function dynamicContextHook(pi: HookAPI): void {
     const cwd = typeof rawCwd === "string" && rawCwd ? rawCwd : process.cwd();
     const sections: string[] = [];
 
-    // 1. Skill routing
-    const { names, bodies } = routeSkills(prompt);
-    // Always state the active set: without a reset the model copies the previous
-    // turn's skills line and claims skills that were not loaded this turn.
-    const activeLine = ["token-saving", "caveman-lite", ...names].join(", ");
-    sections.push(
-      names.length > 0
-        ? [
-            "### Auto-routed skills",
-            `These skill bodies are loaded for this turn: ${names.join(", ")}.`,
-            `Start your reply with exactly: \`Active skills: ${activeLine}\` and apply these skills.`,
-            ...bodies,
-          ].join("\n\n")
-        : `### Active skills\nNo skills were auto-routed this turn. Start your reply with \`Active skills: ${activeLine}\` plus only skills you load with \`read skill://…\` this turn; do not repeat earlier turns' skills.`,
-    );
-
-    // 2. Memory bank on first turn (or explicit @mb / @context)
+    // 1. Memory bank on first turn (or explicit @mb / @context)
     const wantsMb = /@mb\b|@context\b/.test(prompt);
     if (wantsMb || isFirstUserTurn(ctx)) {
       const status = run(MB_STATUS_CMD, cwd, 3000);
@@ -160,7 +63,7 @@ export default function dynamicContextHook(pi: HookAPI): void {
       }
     }
 
-    // 3. @diff / @git-log
+    // 2. @diff / @git-log
     if (/@diff\b/.test(prompt)) {
       const diff = run("git diff HEAD 2>/dev/null || git diff 2>/dev/null", cwd, 5000);
       const body = !diff ? "(Clean working tree.)" : diff.length > 8000 ? `${diff.slice(0, 7900)}\n[diff truncated]` : diff;
@@ -177,7 +80,7 @@ export default function dynamicContextHook(pi: HookAPI): void {
         customType: "katalyst.dynamic-context",
         content: sections.join("\n\n"),
         display: false,
-        details: { skills: names },
+        details: {},
       },
     };
   });
