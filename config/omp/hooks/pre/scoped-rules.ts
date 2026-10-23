@@ -44,8 +44,10 @@ function matchesGlob(filename: string, globPattern: string): boolean {
  * Dynamically loads `.katalyst/rules/*.mdc` only when matching files are present in the current turn.
  */
 export default function scopedRulesHook(pi: HookAPI): void {
-  pi.on("context", async (event: Record<string, unknown>) => {
-    const cwd = typeof event.cwd === "string" ? event.cwd : process.cwd();
+  // `context` cannot inject system text (only `{ messages }`), so rules ride on before_agent_start.
+  pi.on("before_agent_start", async (event, ctx) => {
+    const rawCwd = ctx && typeof ctx === "object" && "cwd" in ctx ? ctx.cwd : undefined;
+    const cwd = typeof rawCwd === "string" && rawCwd ? rawCwd : process.cwd();
     const rulesDir = join(cwd, ".katalyst", "rules");
     if (!existsSync(rulesDir)) {
       return {};
@@ -62,8 +64,9 @@ export default function scopedRulesHook(pi: HookAPI): void {
       return {};
     }
 
-    // Inspect recent turns to detect active files
-    const activeText = JSON.stringify(event.messages || "");
+    // Match globs against the submitted prompt text
+    const rawPrompt = event && typeof event === "object" && "prompt" in event ? event.prompt : "";
+    const activeText = typeof rawPrompt === "string" ? rawPrompt : "";
     const activeRules: string[] = [];
 
     for (const file of files) {
@@ -89,15 +92,20 @@ export default function scopedRulesHook(pi: HookAPI): void {
     }
 
     if (activeRules.length === 0) {
-      return {};
+      return;
     }
 
     return {
-      systemPrompt: [
-        "## Active Scoped Rules (.katalyst/rules)",
-        "The following context-sensitive rules apply to the matching files in this task:",
-        ...activeRules,
-      ].join("\n\n"),
+      message: {
+        customType: "katalyst.scoped-rules",
+        content: [
+          "## Active Scoped Rules (.katalyst/rules)",
+          "The following context-sensitive rules apply to the matching files in this task:",
+          ...activeRules,
+        ].join("\n\n"),
+        display: false,
+        details: {},
+      },
     };
   });
 }

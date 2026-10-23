@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Katalyst Contributors <noreply@katalyst.dev>
+Date: Fri, 23 Oct 2026 16:00:00 +0700
+Subject: [PATCH] fix(acp_thread): remeasure streamed message after reveal and
+ flush
+
+Streaming text is revealed by a timer after EntryUpdated has already fired
+for the chunk, and the final flush on end_turn appended text without any
+event. The list kept the height measured before the last text landed, so
+agent replies rendered cut off mid-sentence until the next layout change.
+
+Emit EntryUpdated for the streamed entry after every reveal tick and after
+each flush that appended text. Adds a regression test asserting the last
+remeasure sees the fully revealed text.
+---
+ crates/acp_thread/src/acp_thread.rs | 82 ++++++++++++++++++++++++-----
+ 1 file changed, 69 insertions(+), 13 deletions(-)
+
+diff --git a/crates/acp_thread/src/acp_thread.rs b/crates/acp_thread/src/acp_thread.rs
+index 102ca6a910..5ba39dc6a2 100644
+--- a/crates/acp_thread/src/acp_thread.rs
++++ b/crates/acp_thread/src/acp_thread.rs
+@@ -3072,7 +3072,7 @@ impl AcpThread {
+                     .ceil() as usize;
+                 return;
+             }
+-            Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
++            self.flush_streaming_text_and_remeasure(cx);
+         }
+ 
+         let target = markdown.clone();
+@@ -3090,16 +3090,30 @@ impl AcpThread {
+     }
+ 
+     /// Flush all buffered streaming text into the Markdown entity immediately.
++    /// Returns whether any text was appended.
+     fn flush_streaming_text(
+         streaming_text_buffer: &mut Option<StreamingTextBuffer>,
+         cx: &mut Context<Self>,
+-    ) {
+-        if let Some(buffer) = streaming_text_buffer.take() {
+-            if !buffer.pending.is_empty() {
+-                buffer
+-                    .target
+-                    .update(cx, |markdown, cx| markdown.append(&buffer.pending, cx));
+-            }
++    ) -> bool {
++        if let Some(buffer) = streaming_text_buffer.take()
++            && !buffer.pending.is_empty()
++        {
++            buffer
++                .target
++                .update(cx, |markdown, cx| markdown.append(&buffer.pending, cx));
++            return true;
++        }
++        false
++    }
++
++    /// Flush buffered text and remeasure the streamed entry. The streaming target is
++    /// always the last entry; without `EntryUpdated` the list keeps the height it
++    /// measured before the final text landed, and the message renders cut off.
++    fn flush_streaming_text_and_remeasure(&mut self, cx: &mut Context<Self>) {
++        if Self::flush_streaming_text(&mut self.streaming_text_buffer, cx)
++            && let Some(ix) = self.entries.len().checked_sub(1)
++        {
++            cx.emit(AcpThreadEvent::EntryUpdated(ix));
+         }
+     }
+ 
+@@ -3115,6 +3129,7 @@ impl AcpThread {
+ 
+                 let should_continue = this
+                     .update(cx, |this, cx| {
++                        let last_ix = this.entries.len().checked_sub(1);
+                         let Some(buffer) = &mut this.streaming_text_buffer else {
+                             return false;
+                         };
+@@ -3134,6 +3149,9 @@ impl AcpThread {
+                             markdown.append(&buffer.pending[..byte_boundary], cx);
+                             buffer.pending.drain(..byte_boundary);
+                         });
++                        if let Some(ix) = last_ix {
++                            cx.emit(AcpThreadEvent::EntryUpdated(ix));
++                        }
+ 
+                         true
+                     })
+@@ -3147,7 +3165,7 @@ impl AcpThread {
+     }
+ 
+     fn push_entry(&mut self, entry: AgentThreadEntry, cx: &mut Context<Self>) {
+-        Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
++        self.flush_streaming_text_and_remeasure(cx);
+         self.entries.push(entry);
+         cx.emit(AcpThreadEvent::NewEntry);
+     }
+@@ -3979,7 +3997,7 @@ impl AcpThread {
+ 
+                 match response {
+                     Ok(r) => {
+-                        Self::flush_streaming_text(&mut this.streaming_text_buffer, cx);
++                        this.flush_streaming_text_and_remeasure(cx);
+ 
+                         if r.stop_reason == acp::StopReason::MaxTokens {
+                             if is_same_turn {
+@@ -4073,7 +4091,7 @@ impl AcpThread {
+                         if is_same_turn {
+                             cx.emit(AcpThreadEvent::StatusChanged);
+                         }
+-                        Self::flush_streaming_text(&mut this.streaming_text_buffer, cx);
++                        this.flush_streaming_text_and_remeasure(cx);
+                         if is_same_turn {
+                             this.cancel_pending_turn_entries(cx);
+                         }
+@@ -4109,7 +4127,7 @@ impl AcpThread {
+         permission_outcome: RequestPermissionOutcome,
+         cx: &mut Context<Self>,
+     ) -> Task<()> {
+-        Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
++        self.flush_streaming_text_and_remeasure(cx);
+         self.cancel_outstanding_elicitations(cx);
+ 
+         let Some(turn) = self.running_turn.take() else {
+@@ -4279,7 +4297,7 @@ impl AcpThread {
+             return Task::ready(Err(anyhow!("not supported")));
+         };
+ 
+-        Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
++        self.flush_streaming_text_and_remeasure(cx);
+         let telemetry = ActionLogTelemetry::from(&*self);
+         cx.spawn(async move |this, cx| {
+             cx.update(|cx| truncate.run(client_id.clone(), cx)).await?;
+@@ -10506,6 +10524,44 @@ mod tests {
+         );
+     }
+ 
++    #[gpui::test]
++    async fn test_streamed_text_reveal_emits_entry_updated_with_final_text(
++        cx: &mut TestAppContext,
++    ) {
++        init_test(cx);
++        let thread = new_test_thread(cx).await;
++        // Markdown snapshot taken at each EntryUpdated: the list remeasures from it.
++        let measured = Rc::new(RefCell::new(Vec::<String>::new()));
++        let _subscription = cx.update(|cx| {
++            cx.subscribe(&thread, {
++                let measured = measured.clone();
++                move |thread, event, cx| {
++                    if matches!(event, AcpThreadEvent::EntryUpdated(_)) {
++                        measured.borrow_mut().push(thread.read(cx).to_markdown(cx));
++                    }
++                }
++            })
++        });
++        thread.update(cx, |thread, cx| {
++            thread.push_assistant_content_block("1. Klik judul gig.".into(), false, cx);
++            thread.push_assistant_content_block(
++                "\n2. Kalau tadi gambar dan video udah ke-save, langsung publish.".into(),
++                false,
++                cx,
++            );
++        });
++        cx.executor().advance_clock(Duration::from_secs(1));
++        cx.run_until_parked();
++
++        let final_markdown = thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
++        assert!(final_markdown.contains("langsung publish."));
++        assert_eq!(
++            measured.borrow().last(),
++            Some(&final_markdown),
++            "the last remeasure must see the fully revealed text"
++        );
++    }
++
+     #[gpui::test]
+     async fn test_dropped_completion_waiter_does_not_leave_thread_generating(
+         cx: &mut TestAppContext,
+-- 
+2.50.1 (Apple Git-155)
+
